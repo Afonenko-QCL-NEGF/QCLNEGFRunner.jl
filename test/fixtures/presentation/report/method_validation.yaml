@@ -1,0 +1,13 @@
+id: method_validation
+label: Отчёт о сравнении и валидации методов
+sections:
+  - configuration
+  - method_classification
+  - physical_equivalence
+  - discretization_convergence
+  - current_and_gain
+  - matrix_diagnostics
+  - performance
+  - incomplete_points
+image_policy: links
+output: method_validation.md

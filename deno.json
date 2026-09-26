@@ -1,0 +1,15 @@
+{
+  "tasks": {
+    "check": "deno check tools/ci.ts tools/bootstrap.ts",
+    "test": "deno run --allow-run --allow-env --allow-read tools/ci.ts test",
+    "docs": "deno run --allow-run --allow-env --allow-read tools/ci.ts docs",
+    "prepare-depot": "deno run --allow-run --allow-env --allow-read --allow-write tools/ci.ts prepare-depot",
+    "bootstrap": "deno run --allow-read --allow-write=.build --allow-run=tar --allow-net=julialang-s3.julialang.org tools/bootstrap.ts"
+  },
+  "fmt": {
+    "lineWidth": 100
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}

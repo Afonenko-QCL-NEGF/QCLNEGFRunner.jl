@@ -1,0 +1,6 @@
+#!/usr/bin/env julia
+# Set QCL_NEGF_PROJECT for a prepared integration environment; no packages install here.
+using Pkg
+Pkg.activate(get(ENV, "QCL_NEGF_PROJECT", joinpath(@__DIR__, "..")); io=devnull)
+using QCLNEGFRunner
+exit(QCLNEGFRunner.main(ARGS))

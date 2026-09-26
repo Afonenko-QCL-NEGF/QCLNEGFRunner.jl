@@ -1,0 +1,2218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qcl-negf.invalid/schema/run.schema.json",
+  "title": "QCL-NEGF resolved run configuration",
+  "description": "Sole declarative contract for the fully merged YAML configuration. This schema is intentionally unversioned: the installed package supports only this contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run",
+    "physical",
+    "numerical",
+    "scales",
+    "scattering",
+    "solver",
+    "production",
+    "kernel_construction",
+    "algorithms",
+    "execution",
+    "output",
+    "study"
+  ],
+  "properties": {
+    "run": {
+      "$ref": "#/$defs/run"
+    },
+    "physical": {
+      "$ref": "#/$defs/physical"
+    },
+    "numerical": {
+      "$ref": "#/$defs/numerical"
+    },
+    "scales": {
+      "$ref": "#/$defs/scales"
+    },
+    "scattering": {
+      "$ref": "#/$defs/scattering"
+    },
+    "solver": {
+      "$ref": "#/$defs/solver"
+    },
+    "production": {
+      "$ref": "#/$defs/production"
+    },
+    "kernel_construction": {
+      "$ref": "#/$defs/kernelConstruction"
+    },
+    "algorithms": {
+      "$ref": "#/$defs/algorithms"
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    },
+    "output": {
+      "$ref": "#/$defs/output"
+    },
+    "study": {
+      "$ref": "#/$defs/study"
+    },
+    "physical_models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "screening_temperature_K": {
+          "type": "number",
+          "minimum": 0
+        },
+        "screening_mass_ratio": {
+          "type": "number",
+          "minimum": 0
+        },
+        "nonparabolicity_per_eV": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lo_fixed_occupation": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lo_decay_ps": {
+          "type": "number",
+          "minimum": 0
+        },
+        "lo_mode_density_per_m3": {
+          "type": "number",
+          "minimum": 0
+        },
+        "screening": {
+          "enum": [
+            "fixed",
+            "density_temperature"
+          ]
+        },
+        "dispersion": {
+          "enum": [
+            "parabolic",
+            "kane_inplane"
+          ]
+        },
+        "lo_population": {
+          "enum": [
+            "thermal",
+            "fixed_occupation",
+            "rate_balance"
+          ]
+        },
+        "electron_electron": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none",
+                "sppa_single_q"
+              ]
+            },
+            "screening_dimension": {
+              "enum": [
+                2,
+                3
+              ]
+            },
+            "include_exchange": {
+              "type": "boolean"
+            },
+            "transfer_wavenumber_per_nm": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "electron_temperature_K": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "effective_mass_ratio": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "carrier_density_per_m2": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "carrier_density_per_m3": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      }
+    },
+    "domain_adaptation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "none",
+            "expand_energy_window"
+          ]
+        },
+        "maximum_expansions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maximum_energy_nodes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "growth_fraction": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "tail_threshold": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "run": {
+            "properties": {
+              "classification": {
+                "enum": [
+                  "reference",
+                  "computationally_equivalent"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "algorithms": {
+            "properties": {
+              "kernel_build": {
+                "const": "direct"
+              },
+              "contraction": {
+                "enum": [
+                  "literal",
+                  "dense_blas",
+                  "low_rank"
+                ]
+              },
+              "localization": {
+                "enum": [
+                  "pzp"
+                ]
+              },
+              "retarded_real_part": {
+                "const": "kramers_kronig"
+              },
+              "self_energy_structure": {
+                "const": "full"
+              },
+              "transverse_momentum": {
+                "const": "resolved"
+              }
+            },
+            "if": {
+              "properties": {
+                "contraction": {
+                  "const": "low_rank"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "low_rank": {
+                  "properties": {
+                    "relative_tolerance": {
+                      "const": 0
+                    },
+                    "maximum_rank": {
+                      "const": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run": {
+            "properties": {
+              "classification": {
+                "const": "controlled_numerical"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "algorithms": {
+            "properties": {
+              "retarded_real_part": {
+                "const": "kramers_kronig"
+              },
+              "self_energy_structure": {
+                "const": "full"
+              },
+              "transverse_momentum": {
+                "const": "resolved"
+              }
+            },
+            "anyOf": [
+              {
+                "properties": {
+                  "kernel_build": {
+                    "const": "tabulated"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "localization": {
+                    "enum": [
+                      "none",
+                      "real_space"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "contraction": {
+                    "const": "low_rank"
+                  },
+                  "low_rank": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "relative_tolerance": {
+                            "exclusiveMinimum": 0
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "maximum_rank": {
+                            "exclusiveMinimum": 0
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "hilbert": {
+                    "const": "product_integration"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "energy_shift": {
+                    "const": "conservative_pair"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "kernel_build": {
+                    "const": "adaptive_direct"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run": {
+            "properties": {
+              "classification": {
+                "const": "physics_changing"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "run": {
+            "properties": {
+              "description": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "execution": {
+            "properties": {
+              "solver_backend": {
+                "const": "educational"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "algorithms": {
+            "properties": {
+              "energy_shift": {
+                "const": "dense"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "scattering": {
+            "properties": {
+              "alloy_disorder": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "physical": {
+            "required": [
+              "alloy_potential",
+              "primitive_cell_volume"
+            ],
+            "properties": {
+              "alloy_potential": {
+                "$ref": "#/$defs/energyQuantity"
+              },
+              "primitive_cell_volume": {
+                "$ref": "#/$defs/volumeQuantity"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonemptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "quantity": {
+      "description": "A finite magnitude with an explicit Unitful-compatible unit.",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+\\S(?:.*\\S)?\\s*$"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "unit"
+          ],
+          "properties": {
+            "value": {
+              "type": "number"
+            },
+            "unit": {
+              "$ref": "#/$defs/nonemptyString"
+            }
+          }
+        }
+      ]
+    },
+    "nullableQuantity": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/quantity"
+        }
+      ]
+    },
+    "energyQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:J|eV|meV|ueV|μeV|keV)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:J|eV|meV|ueV|μeV|keV)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "lengthQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:m|cm|mm|um|μm|nm|Å)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:m|cm|mm|um|μm|nm|Å)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "temperatureQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+K\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "const": "K"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "voltageQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:V|mV|uV|μV|kV)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:V|mV|uV|μV|kV)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fieldQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:V/m|V/cm|kV/m|kV/cm)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:V/m|V/cm|kV/m|kV/cm)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "waveNumberQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:m\\^-1|cm\\^-1|mm\\^-1|um\\^-1|μm\\^-1|nm\\^-1)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:m\\^-1|cm\\^-1|mm\\^-1|um\\^-1|μm\\^-1|nm\\^-1)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "sheetDensityQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:m\\^-2|cm\\^-2|nm\\^-2)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:m\\^-2|cm\\^-2|nm\\^-2)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "massDensityQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:kg/m\\^3|g/cm\\^3)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:kg/m\\^3|g/cm\\^3)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "speedQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:m/s|cm/s)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:m/s|cm/s)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "volumeQuantity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/quantity"
+        },
+        {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?\\s+(?:m\\^3|cm\\^3|nm\\^3|Å\\^3)\\s*$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "pattern": "^(?:m\\^3|cm\\^3|nm\\^3|Å\\^3)$"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "nullableEnergyQuantity": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/energyQuantity"
+        }
+      ]
+    },
+    "nullableVolumeQuantity": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/volumeQuantity"
+        }
+      ]
+    },
+    "nullableVoltageQuantity": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/voltageQuantity"
+        }
+      ]
+    },
+    "nullableFieldQuantity": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/fieldQuantity"
+        }
+      ]
+    },
+    "relativeChildPath": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "nullableRelativePath": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/relativeChildPath"
+        }
+      ]
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "classification"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "description": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "classification": {
+          "enum": [
+            "reference",
+            "computationally_equivalent",
+            "controlled_numerical",
+            "physics_changing",
+            "study"
+          ]
+        }
+      }
+    },
+    "layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "thickness",
+        "material",
+        "aluminium_fraction",
+        "conduction_band_edge",
+        "longitudinal_relative_mass",
+        "transverse_relative_mass",
+        "relative_permittivity",
+        "doped"
+      ],
+      "properties": {
+        "thickness": {
+          "$ref": "#/$defs/lengthQuantity"
+        },
+        "material": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "aluminium_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "conduction_band_edge": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "longitudinal_relative_mass": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "transverse_relative_mass": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "relative_permittivity": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "doped": {
+          "type": "boolean"
+        }
+      }
+    },
+    "physical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layers",
+        "interfaces",
+        "donor_sheet_density",
+        "ionization_fraction",
+        "position_origin",
+        "reference_energy",
+        "lattice_temperature",
+        "lo_temperature",
+        "static_relative_permittivity",
+        "high_frequency_relative_permittivity",
+        "lo_phonon_energy",
+        "impurity_screening_wavenumber",
+        "lo_screening_wavenumber",
+        "interface_roughness_height",
+        "interface_correlation_length",
+        "acoustic_deformation_potential",
+        "mass_density",
+        "sound_velocity",
+        "spin_degeneracy"
+      ],
+      "properties": {
+        "layers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/layer"
+          }
+        },
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lengthQuantity"
+          }
+        },
+        "donor_sheet_density": {
+          "$ref": "#/$defs/sheetDensityQuantity"
+        },
+        "ionization_fraction": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "voltage_per_period": {
+          "$ref": "#/$defs/nullableVoltageQuantity"
+        },
+        "field_bias": {
+          "$ref": "#/$defs/nullableFieldQuantity"
+        },
+        "position_origin": {
+          "$ref": "#/$defs/lengthQuantity"
+        },
+        "reference_energy": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "lattice_temperature": {
+          "$ref": "#/$defs/temperatureQuantity"
+        },
+        "lo_temperature": {
+          "$ref": "#/$defs/temperatureQuantity"
+        },
+        "static_relative_permittivity": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "high_frequency_relative_permittivity": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "lo_phonon_energy": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "impurity_screening_wavenumber": {
+          "$ref": "#/$defs/waveNumberQuantity"
+        },
+        "lo_screening_wavenumber": {
+          "$ref": "#/$defs/waveNumberQuantity"
+        },
+        "interface_roughness_height": {
+          "$ref": "#/$defs/lengthQuantity"
+        },
+        "interface_correlation_length": {
+          "$ref": "#/$defs/lengthQuantity"
+        },
+        "acoustic_deformation_potential": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "mass_density": {
+          "$ref": "#/$defs/massDensityQuantity"
+        },
+        "sound_velocity": {
+          "$ref": "#/$defs/speedQuantity"
+        },
+        "alloy_potential": {
+          "$ref": "#/$defs/nullableEnergyQuantity"
+        },
+        "primitive_cell_volume": {
+          "$ref": "#/$defs/nullableVolumeQuantity"
+        },
+        "spin_degeneracy": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "voltage_per_period"
+              ],
+              "properties": {
+                "voltage_per_period": {
+                  "$ref": "#/$defs/voltageQuantity"
+                },
+                "field_bias": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "required": [
+                "field_bias"
+              ],
+              "properties": {
+                "voltage_per_period": {
+                  "type": "null"
+                },
+                "field_bias": {
+                  "$ref": "#/$defs/fieldQuantity"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "alloy_potential": {
+                  "type": "null"
+                },
+                "primitive_cell_volume": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "required": [
+                "alloy_potential",
+                "primitive_cell_volume"
+              ],
+              "properties": {
+                "alloy_potential": {
+                  "$ref": "#/$defs/energyQuantity"
+                },
+                "primitive_cell_volume": {
+                  "$ref": "#/$defs/volumeQuantity"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "numerical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "spatial_nodes",
+        "basis_states",
+        "basis_periods",
+        "energy_min",
+        "energy_max",
+        "energy_nodes",
+        "energy_trust_margin",
+        "momentum_max",
+        "momentum_nodes",
+        "angular_nodes",
+        "longitudinal_momentum_max",
+        "longitudinal_momentum_nodes",
+        "seed_broadening"
+      ],
+      "properties": {
+        "spatial_nodes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "basis_states": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "basis_periods": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "energy_min": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "energy_max": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "energy_nodes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "energy_trust_margin": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "momentum_max": {
+          "$ref": "#/$defs/waveNumberQuantity"
+        },
+        "momentum_nodes": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "angular_nodes": {
+          "type": "integer",
+          "minimum": 4
+        },
+        "longitudinal_momentum_max": {
+          "$ref": "#/$defs/waveNumberQuantity"
+        },
+        "longitudinal_momentum_nodes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "seed_broadening": {
+          "$ref": "#/$defs/energyQuantity"
+        }
+      }
+    },
+    "scales": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "energy",
+        "length",
+        "reference_mass_ratio"
+      ],
+      "properties": {
+        "energy": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "length": {
+          "$ref": "#/$defs/lengthQuantity"
+        },
+        "reference_mass_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "scattering": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lo_phonon",
+        "acoustic_phonon",
+        "ionized_impurity",
+        "interface_roughness",
+        "alloy_disorder"
+      ],
+      "properties": {
+        "lo_phonon": {
+          "type": "boolean"
+        },
+        "acoustic_phonon": {
+          "type": "boolean"
+        },
+        "ionized_impurity": {
+          "type": "boolean"
+        },
+        "interface_roughness": {
+          "type": "boolean"
+        },
+        "alloy_disorder": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tolerances": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dyson",
+        "spectral_identity",
+        "keldysh",
+        "self_energy",
+        "normalization",
+        "poisson",
+        "hartree",
+        "density",
+        "neutrality",
+        "current_continuity",
+        "collision",
+        "power",
+        "positivity",
+        "causality",
+        "sum_rule",
+        "observables",
+        "poisson_gauge",
+        "imaginary_part",
+        "tail",
+        "energy_edge",
+        "fft_roundoff"
+      ],
+      "properties": {
+        "dyson": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "spectral_identity": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "keldysh": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "self_energy": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "normalization": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "poisson": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "hartree": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "density": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "neutrality": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "current_continuity": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "collision": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "power": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "positivity": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "causality": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "sum_rule": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "observables": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "poisson_gauge": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "imaginary_part": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "tail": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "energy_edge": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        },
+        "fft_roundoff": {
+          "$ref": "#/$defs/nonnegativeNumber"
+        }
+      }
+    },
+    "nonnegativeNumber": {
+      "type": "number",
+      "minimum": 0
+    },
+    "solver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "self_energy_mixing",
+        "poisson_mixing",
+        "maximum_scba_iterations",
+        "maximum_poisson_iterations",
+        "convergence",
+        "tolerances",
+        "validation_windows"
+      ],
+      "properties": {
+        "self_energy_mixing": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "poisson_mixing": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "maximum_scba_iterations": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maximum_poisson_iterations": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "convergence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minimum_scba_iterations",
+            "required_consecutive_scba_passes",
+            "minimum_poisson_iterations",
+            "required_consecutive_poisson_passes",
+            "stagnation_window",
+            "stagnation_relative_improvement",
+            "diagnostic_quality"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "stagnation_window"
+                ],
+                "properties": {
+                  "stagnation_window": {
+                    "const": 0
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "stagnation_relative_improvement": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "minimum_scba_iterations": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required_consecutive_scba_passes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minimum_poisson_iterations": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required_consecutive_poisson_passes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "stagnation_window": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "const": 0
+                },
+                {
+                  "type": "integer",
+                  "minimum": 4
+                }
+              ]
+            },
+            "stagnation_relative_improvement": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "diagnostic_quality": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "keldysh",
+                "self_energy",
+                "normalization",
+                "required_consecutive_passes"
+              ],
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "keldysh": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "self_energy": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "normalization": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "required_consecutive_passes": {
+                  "type": "integer",
+                  "minimum": 3
+                },
+                "target_fixed_point": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "coarse_wait_iterations": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "strict_attempt_iterations": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "observables": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "positivity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "causality": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "outer_threshold": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              }
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "research_continue",
+                "strict_fail_fast",
+                "adaptive_working"
+              ]
+            },
+            "trend": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "window": {
+                  "type": "integer",
+                  "minimum": 4
+                },
+                "minimum_reduction": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 1
+                },
+                "promising_threshold": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "max_regression": {
+                  "type": "number",
+                  "minimum": 1
+                },
+                "max_oscillation": {
+                  "type": "number",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "tolerances": {
+          "$ref": "#/$defs/tolerances"
+        },
+        "validation_windows": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "energy_tail_fraction",
+            "momentum_tail_fraction"
+          ],
+          "properties": {
+            "energy_tail_fraction": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "momentum_tail_fraction": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            }
+          }
+        }
+      }
+    },
+    "production": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "energy_chunk",
+        "hilbert_columns",
+        "parallel_backend",
+        "worker_count",
+        "residual_chunk",
+        "phase_timing",
+        "verify_fft_roundoff",
+        "checkpoint_every_outer",
+        "checkpoint_every_scba",
+        "progress_every_scba",
+        "progress_every_outer"
+      ],
+      "properties": {
+        "energy_chunk": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "hilbert_columns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parallel_backend": {
+          "enum": [
+            "threads",
+            "blas"
+          ]
+        },
+        "worker_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "residual_chunk": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "phase_timing": {
+          "type": "boolean"
+        },
+        "verify_fft_roundoff": {
+          "type": "boolean"
+        },
+        "checkpoint_every_outer": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checkpoint_every_scba": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "progress_every_scba": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "progress_every_outer": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "physics_markers": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Diagnostic sampling only; does not relax scientific acceptance or change the solver equations.",
+          "properties": {
+            "cadence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_spectral_blocks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "relative_mode_weight_floor": {
+              "type": "number",
+              "exclusiveMaximum": 1,
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "kernelConstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initial_lookup_nodes",
+        "maximum_lookup_nodes",
+        "relative_tolerance",
+        "lookup_power",
+        "validation_fractions",
+        "angular_validation_pairs",
+        "strict"
+      ],
+      "properties": {
+        "initial_lookup_nodes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "maximum_lookup_nodes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "relative_tolerance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "lookup_power": {
+          "type": "number",
+          "minimum": 1
+        },
+        "validation_fractions": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "exclusiveMaximum": 1
+          }
+        },
+        "angular_validation_pairs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "strict": {
+          "type": "boolean"
+        },
+        "impurity_angular_tolerance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        }
+      }
+    },
+    "algorithms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "energy_shift",
+        "hilbert",
+        "contraction",
+        "kernel_build",
+        "mixing",
+        "localization",
+        "retarded_real_part",
+        "self_energy_structure",
+        "transverse_momentum",
+        "low_rank",
+        "anderson"
+      ],
+      "properties": {
+        "energy_shift": {
+          "enum": [
+            "dense",
+            "sparse_plan",
+            "conservative_pair"
+          ]
+        },
+        "hilbert": {
+          "enum": [
+            "direct",
+            "fft",
+            "product_integration"
+          ]
+        },
+        "contraction": {
+          "enum": [
+            "literal",
+            "dense_blas",
+            "low_rank"
+          ]
+        },
+        "kernel_build": {
+          "enum": [
+            "direct",
+            "tabulated",
+            "adaptive_direct"
+          ]
+        },
+        "mixing": {
+          "enum": [
+            "linear",
+            "anderson"
+          ]
+        },
+        "localization": {
+          "enum": [
+            "pzp",
+            "none",
+            "real_space"
+          ]
+        },
+        "retarded_real_part": {
+          "enum": [
+            "kramers_kronig",
+            "drop"
+          ]
+        },
+        "self_energy_structure": {
+          "enum": [
+            "full",
+            "diagonal"
+          ]
+        },
+        "transverse_momentum": {
+          "enum": [
+            "resolved",
+            "averaged"
+          ]
+        },
+        "low_rank": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relative_tolerance",
+            "maximum_rank"
+          ],
+          "properties": {
+            "relative_tolerance": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "maximum_rank": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "anderson": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "history_depth",
+            "damping",
+            "regularization"
+          ],
+          "properties": {
+            "history_depth": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "damping": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            },
+            "regularization": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "embedding": {
+          "enum": [
+            "full_cell_resolvent",
+            "finite_chain"
+          ]
+        },
+        "embedding_periods": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occupation_normalization": {
+          "enum": [
+            "paired_convex",
+            "scalar_lesser"
+          ],
+          "default": "paired_convex"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "solver_backend",
+        "julia_threads",
+        "blas_threads",
+        "fail_on_thread_mismatch",
+        "auto"
+      ],
+      "properties": {
+        "strategy": {
+          "enum": [
+            "manual",
+            "auto_exact"
+          ]
+        },
+        "solver_backend": {
+          "enum": [
+            "educational",
+            "production"
+          ]
+        },
+        "julia_threads": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blas_threads": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fail_on_thread_mismatch": {
+          "type": "boolean"
+        },
+        "auto": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "memory_reserve_fraction",
+            "minimum_memory_reserve_bytes",
+            "workspace_budget_fraction",
+            "workspace_complex_arrays_per_energy_block",
+            "minimum_outer_parallel_threads",
+            "large_basis_threshold",
+            "minimum_energy_chunk",
+            "energy_chunk_alignment",
+            "blocks_per_worker",
+            "hilbert_columns_per_worker",
+            "energy_jobs_per_worker"
+          ],
+          "properties": {
+            "memory_reserve_fraction": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "minimum_memory_reserve_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "workspace_budget_fraction": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "workspace_complex_arrays_per_energy_block": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minimum_outer_parallel_threads": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "large_basis_threshold": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minimum_energy_chunk": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "energy_chunk_alignment": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "blocks_per_worker": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "hilbert_columns_per_worker": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "energy_jobs_per_worker": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "terminal",
+        "significant_digits",
+        "human_every",
+        "event_log_file",
+        "latest_snapshot_file",
+        "dashboard_file"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "significant_digits": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 17
+        },
+        "human_every": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "event_log_file": {
+          "$ref": "#/$defs/nullableRelativePath"
+        },
+        "latest_snapshot_file": {
+          "$ref": "#/$defs/nullableRelativePath"
+        },
+        "dashboard_file": {
+          "$ref": "#/$defs/nullableRelativePath"
+        }
+      }
+    },
+    "deviceGeometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "periods",
+        "ridge_width",
+        "cavity_length"
+      ],
+      "properties": {
+        "periods": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ridge_width": {
+          "$ref": "#/$defs/lengthQuantity"
+        },
+        "cavity_length": {
+          "$ref": "#/$defs/lengthQuantity"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "directory",
+        "checkpoint_prefix",
+        "resume",
+        "fail_fast",
+        "save_full_state",
+        "save_csv",
+        "save_plots",
+        "live_visualization",
+        "snapshot_every_scba",
+        "snapshot_every_outer",
+        "progress",
+        "report_directory",
+        "save_expert_markdown",
+        "save_comparison_csv",
+        "save_comparison_plots",
+        "device_geometry"
+      ],
+      "properties": {
+        "directory": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "checkpoint_prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "resume": {
+          "type": "boolean"
+        },
+        "fail_fast": {
+          "type": "boolean"
+        },
+        "save_full_state": {
+          "type": "boolean"
+        },
+        "save_csv": {
+          "type": "boolean"
+        },
+        "save_plots": {
+          "type": "boolean"
+        },
+        "live_visualization": {
+          "type": "boolean"
+        },
+        "snapshot_every_scba": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "snapshot_every_outer": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "progress": {
+          "$ref": "#/$defs/progress"
+        },
+        "report_directory": {
+          "$ref": "#/$defs/relativeChildPath"
+        },
+        "save_expert_markdown": {
+          "type": "boolean"
+        },
+        "save_comparison_csv": {
+          "type": "boolean"
+        },
+        "save_comparison_plots": {
+          "type": "boolean"
+        },
+        "device_geometry": {
+          "$ref": "#/$defs/deviceGeometry"
+        },
+        "debug_hdf5": {
+          "type": "boolean",
+          "default": false
+        },
+        "light_max_space_points": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 16384,
+          "default": 2048
+        },
+        "light_max_energy_points": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 4096,
+          "default": 512
+        },
+        "light_max_momentum_points": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 256,
+          "default": 64
+        },
+        "light_max_snapshots": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 512,
+          "default": 64
+        }
+      }
+    },
+    "integerVector": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "studyMethod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "label",
+        "modifies_physics",
+        "algorithm_family",
+        "description",
+        "literature"
+      ],
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "label": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "modifies_physics": {
+          "type": "boolean"
+        },
+        "algorithm_family": {
+          "enum": [
+            "direct_reference",
+            "exact_optimized",
+            "controlled_approximation",
+            "reduced_model",
+            "surrogate"
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "literature": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonemptyString"
+          }
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "physical": {
+              "type": "object"
+            },
+            "numerical": {
+              "type": "object"
+            },
+            "scattering": {
+              "type": "object"
+            },
+            "solver": {
+              "type": "object"
+            },
+            "algorithms": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "study": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "voltages_per_period",
+        "temperatures",
+        "comparison_profiles",
+        "reference_profile",
+        "methods",
+        "repetitions",
+        "calculate_optical_response",
+        "photon_energy_min",
+        "photon_energy_max",
+        "photon_energy_points",
+        "optical_edge_tolerance",
+        "convergence"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "single",
+            "sweep",
+            "comparison"
+          ]
+        },
+        "voltages_per_period": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/voltageQuantity"
+          }
+        },
+        "temperatures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/temperatureQuantity"
+          }
+        },
+        "comparison_profiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonemptyString"
+          }
+        },
+        "reference_profile": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonemptyString"
+            }
+          ]
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/studyMethod"
+          }
+        },
+        "repetitions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "calculate_optical_response": {
+          "type": "boolean"
+        },
+        "photon_energy_min": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "photon_energy_max": {
+          "$ref": "#/$defs/energyQuantity"
+        },
+        "photon_energy_points": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "optical_edge_tolerance": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "convergence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "spatial_nodes",
+            "energy_nodes",
+            "momentum_nodes",
+            "angular_nodes"
+          ],
+          "properties": {
+            "spatial_nodes": {
+              "$ref": "#/$defs/integerVector"
+            },
+            "energy_nodes": {
+              "$ref": "#/$defs/integerVector"
+            },
+            "momentum_nodes": {
+              "$ref": "#/$defs/integerVector"
+            },
+            "angular_nodes": {
+              "$ref": "#/$defs/integerVector"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "comparison"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "comparison_profiles": {
+                "minItems": 1
+              },
+              "reference_profile": {
+                "$ref": "#/$defs/nonemptyString"
+              },
+              "methods": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "comparison_profiles": {
+                "maxItems": 0
+              },
+              "reference_profile": {
+                "type": "null"
+              },
+              "methods": {
+                "maxItems": 0
+              },
+              "repetitions": {
+                "const": 1
+              },
+              "convergence": {
+                "properties": {
+                  "spatial_nodes": {
+                    "maxItems": 0
+                  },
+                  "energy_nodes": {
+                    "maxItems": 0
+                  },
+                  "momentum_nodes": {
+                    "maxItems": 0
+                  },
+                  "angular_nodes": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "single"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "voltages_per_period": {
+                "maxItems": 1
+              },
+              "temperatures": {
+                "maxItems": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

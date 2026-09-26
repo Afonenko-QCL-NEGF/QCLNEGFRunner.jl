@@ -1,0 +1,8 @@
+{
+  "source": "https://github.com/AfonenkoA/qcl-negf-contracts",
+  "version": "0.2.0",
+  "sha256": {
+    "run.schema.json": "01ebc5aa635ae98d864fda23606d3228efc6020c68066496539227002ada6390",
+    "results-contract-set.json": "ac4ff1f6b339e124ba16307411d37655731dd4a6da339dd9e9fcc045606e94d9"
+  }
+}

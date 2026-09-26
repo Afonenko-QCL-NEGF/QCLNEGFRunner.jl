@@ -1,0 +1,4 @@
+method_id,label,structure_id,physics_signature,modifies_physics,algorithm_family,summary_path,description,literature
+direct,Direct formulas,reference2019-2019,reference2019-grid-a-full-kernels,false,direct_reference,direct/sweep_summary.csv,Literal dense reference,
+threaded,Threaded exact,reference2019-2019,reference2019-grid-a-full-kernels,false,exact_optimized,threaded/sweep_summary.csv,Exact scheduling and cached workspaces,
+local_sigma,Local self-energy,reference2019-2019,reference2019-grid-a-local-sigma,true,controlled_approximation,local_sigma/sweep_summary.csv,Physics-changing locality approximation,https://doi.org/10.1103/PhysRevB.83.195304

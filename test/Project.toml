@@ -1,0 +1,24 @@
+[deps]
+QCLNEGFRunner = "5a147728-d76f-4a23-a474-c91379216907"
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
+
+[sources]
+QCLNEGFRunner = {path = ".."}
+
+[compat]
+QCLNEGFRunner = "=0.2.0"
+FFTW = "~1.10"
+LinearAlgebra = "1.13"
+Random = "1.11"
+SHA = "1"
+Test = "1.11"
+Unitful = "~1.28"
+YAML = "~0.4"
+julia = "=1.13.0"

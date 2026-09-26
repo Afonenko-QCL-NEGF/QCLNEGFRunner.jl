@@ -1,0 +1,108 @@
+"""Scientific plan and saved-result workflow with explicit domain/adapter boundaries."""
+module QCLScientificWorkflow
+using LinearAlgebra
+using SHA
+using YAML
+using Unitful
+import ..QCLNEGFRunner:
+    ResolvedRunConfiguration,
+    ConfigurationProvenance,
+    load_run_configuration,
+    _resolve_configuration,
+    _deep_merge!,
+    _package_path,
+    estimate_production_memory,
+    _observability_atomic_text,
+    _light_json,
+    _light_svg_series,
+    ProgressReporter,
+    begin_progress_stage!,
+    end_progress_stage!,
+    _progress_event_sink,
+    _native_phase_request,
+    _NativePhasePressure,
+    load_resolved_configuration_envelope,
+    _software_version,
+    resolve_execution_strategy,
+    default_execution_envelope,
+    configure_execution!,
+    save_execution_plan,
+    build_configured_problem,
+    build_production_cache,
+    with_production_options,
+    load_production_restart,
+    bare_bubble_optical_response,
+    save_optical_response,
+    peak_gain,
+    retarget_problem,
+    retarget_production_cache,
+    solve_production,
+    solve_adaptive_production,
+    solve,
+    commit_point_artifacts,
+    commit_operator_artifacts,
+    verify_point_artifacts,
+    save_checkpoint,
+    solution_quality,
+    h5open,
+    read_attribute,
+    save_optical_physics,
+    _sheet_density_matrix_bar,
+    _read_array,
+    _read_complex,
+    _require_native_metadata,
+    _require_native_scba_tables,
+    _kelvin,
+    _volts_per_metre,
+    _metres,
+    period_length,
+    ScientificHistoryRecorder,
+    scientific_history_counts,
+    record_scientific_history!,
+    flush_scientific_history!,
+    CheckpointDeadline,
+    checkpoint_due,
+    checkpoint_completed!,
+    checkpoint_policy,
+    scientific_history_sources,
+    OuterIteration,
+    SCBAResult,
+    NEGFSolution,
+    ConvergenceReport,
+    solve_periodic_poisson,
+    _electron_density_bar,
+    _completed_restart_solution,
+    model_capabilities,
+    _configured_optical_response!,
+    psd_error_budget,
+    representation_coverage
+import ..QCLNumerics: effective_seed_parameters, solution_scientific_assessment
+import ..QCLApplicationRuntime: canonical_bytes
+include("../application/scientific/contracts.jl")
+include("../application/scientific/planning.jl")
+include("../application/scientific/postprocessing.jl")
+include("../infrastructure/scientific/definitions.jl")
+include("../infrastructure/scientific/snapshots.jl")
+include("operator_diagnostics.jl")
+include("scientific_execution.jl")
+include("../presentation/scientific/heatmap.jl")
+include("../infrastructure/scientific/postprocessing.jl")
+export ScientificPlan,
+    ScientificPoint,
+    ScientificExecution,
+    ScientificInclusion,
+    ScientificPointResult,
+    ScientificPolicies,
+    ScientificOutputs,
+    VoltageContinuation,
+    resolve_scientific_plan,
+    scientific_plan_dict,
+    load_scientific_plan,
+    is_scientific_definition,
+    execute_scientific_plan,
+    postprocess_series,
+    differential_conductance,
+    render_saved_snapshot,
+    write_scientific_plan,
+    write_scientific_result
+end

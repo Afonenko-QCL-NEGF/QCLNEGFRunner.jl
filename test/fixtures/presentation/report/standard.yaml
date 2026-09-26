@@ -1,0 +1,12 @@
+id: standard
+label: Стандартный отчёт о научном расчёте
+sections:
+  - configuration
+  - provenance
+  - convergence
+  - current_density
+  - hartree_potential
+  - wavefunctions
+  - performance
+image_policy: links
+output: report.md

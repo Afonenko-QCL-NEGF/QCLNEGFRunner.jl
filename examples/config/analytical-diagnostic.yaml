@@ -1,0 +1,35 @@
+run:
+  classification: study
+numerical:
+  spatial_nodes: 96
+  energy_nodes: 30721
+  momentum_nodes: 11
+  angular_nodes: 32
+  longitudinal_momentum_nodes: 81
+  energy_min: -0.30 eV
+  energy_max: 0.90 eV
+  seed_broadening: 1.25 meV
+algorithms:
+  hilbert: fft
+  energy_shift: sparse_plan
+  occupation_normalization: paired_convex
+  embedding: finite_chain
+  embedding_periods: 4
+production:
+  phase_timing: true
+execution:
+  strategy: auto_exact
+physical:
+  alloy_potential: 0.60 eV
+  primitive_cell_volume: 4.5168e-29 m^3
+scattering:
+  alloy_disorder: true
+solver:
+  convergence:
+    mode: adaptive_working
+    stagnation_window: 0
+    stagnation_relative_improvement: 0
+  maximum_scba_iterations: 64
+output:
+  snapshot_every_scba: 64
+  light_max_snapshots: 16

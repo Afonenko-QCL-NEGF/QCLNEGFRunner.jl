@@ -1,0 +1,79 @@
+{
+  "schema": "qcl-negf.result-contract-set.v1",
+  "contract_set": "qcl-negf.results.v1",
+  "native_schema_version": "4.0",
+  "commit": "qcl-negf.artifact-commit.v2",
+  "pointer": "qcl-negf.artifact-pointer.v2",
+  "export": "qcl-negf.science-export.v2",
+  "performance": "qcl-negf.performance.v2",
+  "series": "qcl-negf-series-result-v3",
+  "history_index": "qcl-negf-scientific-history-index-v2",
+  "performance_index": "qcl-negf.performance-index.v2",
+  "telemetry_catalog": "qcl-negf.telemetry-catalog.v2",
+  "presentation": "qcl-negf.presentation-index.v3",
+  "materialized_point": "qcl-negf.materialized-point.v3",
+  "marker": "qcl-negf-physical-markers-v3",
+  "psd_history": "qcl-negf-psd-history-v2",
+  "packed_witnesses": "qcl-negf-psd-selected-packed-v2",
+  "artifacts": [
+    {
+      "role": "model",
+      "media_type": "application/json",
+      "schemas": [
+        "qcl-negf-resolved-configuration-v3"
+      ]
+    },
+    {
+      "role": "recovery",
+      "media_type": "application/x-hdf5",
+      "schemas": [
+        "qcl-negf-checkpoint-v4"
+      ]
+    },
+    {
+      "role": "recovery",
+      "media_type": "application/json",
+      "schemas": [
+        "qcl-negf-recovery-reference-v1"
+      ]
+    },
+    {
+      "role": "physics.full",
+      "media_type": "application/x-hdf5",
+      "schemas": [
+        "qcl-negf-physics-v4"
+      ]
+    },
+    {
+      "role": "physics.analysis",
+      "media_type": "application/x-hdf5",
+      "schemas": [
+        "qcl-negf-optical-v4",
+        "qcl-negf-physics-analysis-v4"
+      ]
+    },
+    {
+      "role": "science.history",
+      "media_type": "application/x-hdf5",
+      "schemas": [
+        "qcl-negf-scientific-history-v4"
+      ]
+    },
+    {
+      "role": "science.comparison",
+      "media_type": "application/json",
+      "schemas": [
+        "qcl-negf-operator-diagnostics-v4"
+      ]
+    }
+  ],
+  "previous_contracts_supported": false,
+  "marker_channels": "qcl-negf-physical-marker-channels-v1",
+  "marker_collisions": "qcl-negf-physical-marker-collisions-v1",
+  "threshold_crossings": "qcl-negf-scba-threshold-crossings-v1",
+  "witness_selection_policy": "per-attempt-first-first-positive-ratio-worst-last-v1",
+  "telemetry_compaction_proof": "qcl-negf.telemetry-compaction-proof.v1",
+  "export_transport": "qcl-negf.export-parts.v1",
+  "export_part": "qcl-negf.export-part.v1",
+  "maximum_export_part_bytes": 200000000
+}

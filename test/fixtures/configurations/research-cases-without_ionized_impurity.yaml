@@ -1,0 +1,272 @@
+run:
+  name: without_ionized_impurity
+  description: 'Все каналы, кроме: ионизованные примеси'
+  classification: physics_changing
+physical:
+  layers:
+  - thickness: 3.26 nm
+    material: AlGaAs
+    aluminium_fraction: 0.25
+    conduction_band_edge: 0.20775 eV
+    longitudinal_relative_mass: 0.08775
+    transverse_relative_mass: 0.08775
+    relative_permittivity: 12.9
+    doped: false
+  - thickness: 7.99 nm
+    material: GaAs
+    aluminium_fraction: 0.0
+    conduction_band_edge: 0 eV
+    longitudinal_relative_mass: 0.067
+    transverse_relative_mass: 0.067
+    relative_permittivity: 12.9
+    doped: false
+  - thickness: 1.90 nm
+    material: AlGaAs
+    aluminium_fraction: 0.25
+    conduction_band_edge: 0.20775 eV
+    longitudinal_relative_mass: 0.08775
+    transverse_relative_mass: 0.08775
+    relative_permittivity: 12.9
+    doped: false
+  - thickness: 8.40 nm
+    material: GaAs
+    aluminium_fraction: 0.0
+    conduction_band_edge: 0 eV
+    longitudinal_relative_mass: 0.067
+    transverse_relative_mass: 0.067
+    relative_permittivity: 12.9
+    doped: false
+  - thickness: 2.90 nm
+    material: GaAs
+    aluminium_fraction: 0.0
+    conduction_band_edge: 0 eV
+    longitudinal_relative_mass: 0.067
+    transverse_relative_mass: 0.067
+    relative_permittivity: 12.9
+    doped: true
+  - thickness: 5.16 nm
+    material: GaAs
+    aluminium_fraction: 0.0
+    conduction_band_edge: 0 eV
+    longitudinal_relative_mass: 0.067
+    transverse_relative_mass: 0.067
+    relative_permittivity: 12.9
+    doped: false
+  interfaces:
+  - 0 nm
+  - 3.26 nm
+  - 11.25 nm
+  - 13.15 nm
+  donor_sheet_density: 4.5e14 m^-2
+  ionization_fraction: 1.0
+  voltage_per_period: 56 mV
+  field_bias: null
+  position_origin: 0 nm
+  reference_energy: 0 eV
+  lattice_temperature: 70 K
+  lo_temperature: 70 K
+  static_relative_permittivity: 12.9
+  high_frequency_relative_permittivity: 10.89
+  lo_phonon_energy: 36.7 meV
+  impurity_screening_wavenumber: 0.20 nm^-1
+  lo_screening_wavenumber: 0.20 nm^-1
+  interface_roughness_height: 0.10 nm
+  interface_correlation_length: 9.0 nm
+  acoustic_deformation_potential: 7.0 eV
+  mass_density: 5317 kg/m^3
+  sound_velocity: 5240 m/s
+  alloy_potential: 0.60 eV
+  primitive_cell_volume: 4.5168e-29 m^3
+  spin_degeneracy: 2
+scales:
+  energy: 0.1 eV
+  length: 10 nm
+  reference_mass_ratio: 0.067
+numerical:
+  spatial_nodes: 96
+  basis_states: 5
+  basis_periods: 3
+  energy_min: -0.15 eV
+  energy_max: 0.45 eV
+  energy_nodes: 481
+  energy_trust_margin: 80 meV
+  momentum_max: 0.60 nm^-1
+  momentum_nodes: 11
+  angular_nodes: 32
+  longitudinal_momentum_max: 10 nm^-1
+  longitudinal_momentum_nodes: 81
+  seed_broadening: 0.5 meV
+scattering:
+  lo_phonon: true
+  acoustic_phonon: true
+  ionized_impurity: false
+  interface_roughness: true
+  alloy_disorder: true
+solver:
+  self_energy_mixing: 0.1
+  poisson_mixing: 0.15
+  maximum_scba_iterations: 2000
+  maximum_poisson_iterations: 60
+  convergence:
+    mode: research_continue
+    trend:
+      window: 32
+      minimum_reduction: 0.5
+      promising_threshold: 0.0001
+      max_regression: 2.0
+      max_oscillation: 10.0
+    minimum_scba_iterations: 2
+    required_consecutive_scba_passes: 3
+    minimum_poisson_iterations: 2
+    required_consecutive_poisson_passes: 2
+    stagnation_window: 200
+    stagnation_relative_improvement: 0.005
+    diagnostic_quality:
+      enabled: true
+      keldysh: 0.001
+      self_energy: 0.001
+      normalization: 0.0001
+      required_consecutive_passes: 3
+      target_fixed_point: 0.0001
+      coarse_wait_iterations: 64
+      strict_attempt_iterations: 8
+      observables: 0.001
+      positivity: 1.0e-06
+      causality: 1.0e-10
+      outer_threshold: 0.0001
+  tolerances:
+    dyson: 1.0e-11
+    spectral_identity: 1.0e-09
+    keldysh: 1.0e-08
+    self_energy: 1.0e-08
+    normalization: 1.0e-08
+    poisson: 1.0e-11
+    hartree: 1.0e-07
+    density: 1.0e-07
+    neutrality: 1.0e-10
+    current_continuity: 1.0e-06
+    collision: 1.0e-08
+    power: 0.0001
+    positivity: 1.0e-10
+    causality: 1.0e-10
+    sum_rule: 0.001
+    observables: 0.0001
+    poisson_gauge: 1.0e-10
+    imaginary_part: 1.0e-10
+    tail: 1.0e-06
+    energy_edge: 1.0e-06
+    fft_roundoff: 1.0e-10
+  validation_windows:
+    energy_tail_fraction: 0.05
+    momentum_tail_fraction: 0.1
+production:
+  energy_chunk: 64
+  hilbert_columns: 32
+  parallel_backend: threads
+  worker_count: 0
+  residual_chunk: 256
+  phase_timing: true
+  verify_fft_roundoff: true
+  checkpoint_every_outer: 0
+  checkpoint_every_scba: 0
+  progress_every_scba: 5
+  progress_every_outer: 1
+kernel_construction:
+  impurity_angular_tolerance: 1.0e-05
+  initial_lookup_nodes: 65
+  maximum_lookup_nodes: 513
+  relative_tolerance: 0.0002
+  lookup_power: 2.0
+  validation_fractions:
+  - 0.25
+  - 0.5
+  - 0.75
+  angular_validation_pairs: 3
+  strict: true
+algorithms:
+  energy_shift: sparse_plan
+  hilbert: fft
+  contraction: dense_blas
+  kernel_build: direct
+  mixing: linear
+  localization: pzp
+  retarded_real_part: kramers_kronig
+  self_energy_structure: full
+  transverse_momentum: resolved
+  low_rank:
+    relative_tolerance: 0.0
+    maximum_rank: 0
+  anderson:
+    history_depth: 6
+    damping: 1.0
+    regularization: 1.0e-12
+execution:
+  strategy: manual
+  solver_backend: production
+  julia_threads: 0
+  blas_threads: 1
+  fail_on_thread_mismatch: false
+  auto:
+    memory_reserve_fraction: 0.125
+    minimum_memory_reserve_bytes: 2147483648
+    workspace_budget_fraction: 0.05
+    workspace_complex_arrays_per_energy_block: 12
+    minimum_outer_parallel_threads: 4
+    large_basis_threshold: 32
+    minimum_energy_chunk: 8
+    energy_chunk_alignment: 8
+    blocks_per_worker: 4
+    hilbert_columns_per_worker: 8
+    energy_jobs_per_worker: 2
+output:
+  directory: results/research
+  checkpoint_prefix: state
+  resume: false
+  fail_fast: false
+  save_full_state: false
+  debug_hdf5: false
+  light_max_space_points: 2048
+  light_max_energy_points: 512
+  light_max_momentum_points: 64
+  light_max_snapshots: 24
+  save_csv: true
+  save_plots: true
+  live_visualization: false
+  snapshot_every_scba: 50
+  snapshot_every_outer: 1
+  progress:
+    enabled: true
+    terminal: true
+    significant_digits: 4
+    human_every: 5
+    event_log_file: progress/events.csv
+    latest_snapshot_file: progress/latest.csv
+    dashboard_file: null
+  report_directory: expert_report
+  save_expert_markdown: true
+  save_comparison_csv: true
+  save_comparison_plots: true
+  device_geometry:
+    periods: 405
+    ridge_width: 150 μm
+    cavity_length: 1.8 mm
+study:
+  mode: single
+  voltages_per_period:
+  - 56 mV
+  temperatures:
+  - 70 K
+  comparison_profiles: []
+  reference_profile: null
+  methods: []
+  repetitions: 1
+  calculate_optical_response: false
+  photon_energy_min: 1 meV
+  photon_energy_max: 80 meV
+  photon_energy_points: 321
+  optical_edge_tolerance: 0.0001
+  convergence:
+    spatial_nodes: []
+    energy_nodes: []
+    momentum_nodes: []
+    angular_nodes: []

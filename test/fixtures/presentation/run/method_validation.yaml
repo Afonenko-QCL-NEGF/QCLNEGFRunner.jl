@@ -1,0 +1,11 @@
+id: method_validation
+label: Компактное пилотное сравнение методов
+description: Выполнить не более пяти явно выбранных расчётов решателя и подготовить сравнительный отчёт.
+entrypoint: run/qcl-negf.jl
+threads: auto
+report: test/fixtures/presentation/report/method_validation.yaml
+allowed_study_modes: [comparison]
+cardinality:
+  temperatures: {minimum: 1, maximum: null}
+  voltages_per_period: {minimum: 1, maximum: null}
+maximum_solver_runs: 5

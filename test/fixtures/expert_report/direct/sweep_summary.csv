@@ -1,0 +1,3 @@
+temperature_K,voltage_per_period_V,field_V_per_m,current_A_per_m2,converged,status,scba_quality,outer_iterations,final_scba_iterations,estimated_peak_bytes,checkpoint,wall_seconds,metric_current_continuity,metric_charge_neutrality
+200.0,0.05,1865671.6417910447,12000000.0,true,converged,strictly_converged,12,480,4800000000,direct_T1_V1.h5,120.0,2.0e-8,3.0e-10
+200.0,0.052,1940298.5074626866,13500000.0,true,converged,strictly_converged,14,510,4800000000,direct_T1_V2.h5,140.0,2.5e-8,3.5e-10

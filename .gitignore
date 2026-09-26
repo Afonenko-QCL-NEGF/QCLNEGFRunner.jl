@@ -1,0 +1,6 @@
+.build/
+docs/build/
+results/
+*.h5
+*.log
+.DS_Store

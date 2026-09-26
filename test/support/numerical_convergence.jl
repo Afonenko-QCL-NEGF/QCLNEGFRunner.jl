@@ -1,0 +1,35 @@
+function _scba_iteration(
+    ν;
+    r_D = 1e-12,
+    r_A = 1e-10,
+    r_K = 1e-9,
+    r_Σ = 1e-9,
+    r_λ = 1e-9,
+    r_PSD = 1e-11,
+    r_caus = 1e-11,
+    r_roundoff = 1e-11,
+    r_Jchange = 1e-5,
+    r_population = 1e-5,
+)
+    return SCBAIteration(
+        ν,
+        r_D,
+        r_A,
+        r_K,
+        r_Σ,
+        r_λ,
+        1 + r_λ,
+        r_PSD,
+        r_caus,
+        r_roundoff,
+        r_Jchange,
+        r_population,
+        1.0,
+        NaN,
+        NaN,
+        NaN,
+        NaN,
+        nothing,
+        nothing,
+    )
+end

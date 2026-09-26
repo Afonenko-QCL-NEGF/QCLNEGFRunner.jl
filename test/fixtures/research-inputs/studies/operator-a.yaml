@@ -1,0 +1,36 @@
+schema: qcl-negf-study-v2
+kind: study
+id: operator-a
+name: 'Производственный аналитический эталон: operator_algebra'
+tags:
+- research
+- analytical
+- 70k
+- reference2019
+purpose: diagnostic
+operation: operator_algebra
+configuration:
+  sources:
+  - ../model/reference-2019-70k.yaml
+  - ../policies/analytical-diagnostic.yaml
+  overrides: {}
+axes:
+  temperatures:
+    values:
+    - 70
+    unit: K
+  voltages:
+    values:
+    - 0
+    unit: mV
+policies:
+  scba_to_poisson: adaptive_working
+  voltage:
+    mode: independent
+    invalid_predecessor: stop_branch
+  on_child_failure: continue
+outputs:
+  full_state: false
+  projections: false
+  optical: false
+  intermediate_history: 64

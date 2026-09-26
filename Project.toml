@@ -1,0 +1,35 @@
+name = "QCLNEGFRunner"
+uuid = "5a147728-d76f-4a23-a474-c91379216907"
+authors = ["QCL-NEGF contributors"]
+version = "0.2.0"
+
+[sources]
+QCLNEGF = {url = "https://github.com/AfonenkoA/QCLNEGF.jl", rev = "v0.2.0"}
+
+[deps]
+QCLNEGF = "25d1ffa8-5cfa-41e3-b02e-8fca5bf51027"
+YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+
+[weakdeps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+
+[extensions]
+QCLNEGFRunnerPlotsExt = "CairoMakie"
+
+[compat]
+QCLNEGF = "=0.2.0"
+YAML = "~0.4"
+HDF5 = "~0.17"
+CairoMakie = "~0.15"
+FFTW = "~1.10"
+LinearAlgebra = "1.13"
+Logging = "1.11"
+SHA = "1"
+Unitful = "~1.28"
+julia = "=1.13.0"

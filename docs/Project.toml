@@ -1,0 +1,14 @@
+[deps]
+QCLNEGFRunner = "5a147728-d76f-4a23-a474-c91379216907"
+QCLNEGF = "25d1ffa8-5cfa-41e3-b02e-8fca5bf51027"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+
+[sources]
+QCLNEGFRunner = {path = ".."}
+QCLNEGF = {url = "https://github.com/AfonenkoA/QCLNEGF.jl", rev = "v0.2.0"}
+
+[compat]
+Documenter = "~1.17"
+Unitful = "~1.28"
+julia = "=1.13.0"
