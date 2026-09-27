@@ -470,59 +470,59 @@ export ConfiguredReportTemplate,
 """
 Plot the band/Hartree profile, density, and localized basis envelopes.
 
-See [Debug and final visualization](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md),
-[the reference design profile](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md), and
-[the localized basis](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/05_basis.md).
+See [Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md),
+[the reference design profile](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md), and
+[the localized basis](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/05_basis.md).
 """
 function plot_band_profile end
 """
 Plot the local spectral or occupied spectral map of a solution.
 
-See [Green functions and density](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md) and
-[Debug and final visualization](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
+See [Green functions and density](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md) and
+[Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
 """
 function plot_spectral_map end
 """
 Plot all stored inner and outer fixed-point residual histories.
 
-See [the inner SCBA loop](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/09_scba.md),
-[the outer Poisson loop](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md), and
-[Verification](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
+See [the inner SCBA loop](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/09_scba.md),
+[the outer Poisson loop](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md), and
+[Verification](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
 """
 function plot_convergence end
 """
 Plot the energy-resolved outgoing electron-flow current.
 
-See [Observables and balances](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md) and
-[Debug and final visualization](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
+See [Observables and balances](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md) and
+[Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
 """
 function plot_current_spectrum end
 """
 Plot `log10(cond(Dᴿ(E,k)))` to expose loss of Float64 digits.
 
-See [the retarded Dyson equation](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md) and
-[Debug and final visualization](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
+See [the retarded Dyson equation](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md) and
+[Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
 """
 function plot_conditioning end
 """
 Plot a field-periodic analogue of QCL Fig. 3(a) from a final solution.
 
-See [Production plotting](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
-[the reference design structure passport](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md).
+See [Production plotting](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
+[the reference design structure passport](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md).
 """
 function plot_reference_figure3a end
 """
 Plot current-density and derived active-region I--V sweep curves.
 
-See [Production plotting](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
-[Observables and balances](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md).
+See [Production plotting](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
+[Observables and balances](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md).
 """
 function plot_reference_iv end
 """
 Plot the trusted and edge-contaminated optical-response points.
 
-See [Optical response](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md) and
-[Production plotting](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+See [Optical response](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md) and
+[Production plotting](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function plot_reference_gain end
 """

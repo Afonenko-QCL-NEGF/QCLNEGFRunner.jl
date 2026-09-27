@@ -23,7 +23,7 @@ and configuration errors produce exit code 2.
 
 Resource discovery and admission are described in [resource limits](@ref resource-planning).
 Numerical meaning, units and convergence criteria are documented by
-[QCLNEGF.jl](https://github.com/AfonenkoA/QCLNEGF.jl/tree/main/docs/src).
+[QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/tree/main/docs/src).
 
 ## Node-local scratch
 

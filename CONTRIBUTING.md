@@ -12,4 +12,4 @@ qcl-negf-contracts, qcl-negf-results and qcl-negf-aiida. A successful process ex
 must not be promoted into scientific acceptance. Do not embed deployment hosts,
 credentials, scheduler queues or organization-specific study definitions in code.
 
-Integration CI is defined in the [qcl-negf superproject](https://github.com/AfonenkoA/qcl-negf) and uses its local runner. Update the component gitlink there to check a change with the complete selected source graph.
+Integration CI is defined in the [qcl-negf superproject](https://github.com/Afonenko-QCL-NEGF/qcl-negf) and uses its local runner. Update the component gitlink there to check a change with the complete selected source graph.

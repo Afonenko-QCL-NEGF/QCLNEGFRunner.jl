@@ -171,7 +171,7 @@ end
 
 Fully resolved, unit-checked run description.  Physical and numerical values
 are converted to the same strongly typed objects accepted by the educational
-and production APIs.  `algorithms` is a validated [`AlgorithmOptions`](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/api/public.md)
+and production APIs.  `algorithms` is a validated [`AlgorithmOptions`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md)
 object and is also embedded in `production.algorithms`.
 `raw` is retained only for reporting and reproducibility, never as a source of
 unchecked solver inputs.
@@ -242,5 +242,5 @@ solver_options(configuration::ResolvedRunConfiguration) = configuration.solver
 [YAML run configuration](@ref yaml-run-configurations)."""
 production_options(configuration::ResolvedRunConfiguration) = configuration.production
 """Return the selection described by the
-[Optimization decision tree](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md)."""
+[Optimization decision tree](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md)."""
 algorithm_options(configuration::ResolvedRunConfiguration) = configuration.algorithms

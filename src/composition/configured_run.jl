@@ -174,8 +174,8 @@ Build the reference design problem selected by YAML.  `kernel_build: direct` cal
 literal microscopic tensor construction; `tabulated` calls the measured-error
 production construction.  The later SCBA backend choice is independent.
 
-See [Optimization decision tree](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md) and
-[Microscopic kernels](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md).
+See [Optimization decision tree](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md) and
+[Microscopic kernels](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md).
 """
 function build_configured_problem(configuration::ResolvedRunConfiguration)
     algorithms = configuration.algorithms

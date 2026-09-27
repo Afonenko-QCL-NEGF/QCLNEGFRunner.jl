@@ -27,6 +27,6 @@ separate output directory for each independent execution.
 
 `qcl-negf analyze RESULT_DIRECTORY ANALYSIS_DIRECTORY` reads saved results without
 rerunning transport. Reports preserve the input identity and scientific statuses.
-The separate [qcl-negf-results](https://github.com/AfonenkoA/qcl-negf-results) project
+The separate [qcl-negf-results](https://github.com/Afonenko-QCL-NEGF/qcl-negf-results) project
 provides Python readers and exports. Schema changes are coordinated with
-[qcl-negf-contracts](https://github.com/AfonenkoA/qcl-negf-contracts).
+[qcl-negf-contracts](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts).

@@ -5,8 +5,8 @@ Public composition adapter around the in-memory production solver. Checkpoint
 paths and atomic file replacement remain outside numerical equations. With no
 checkpoint path this entry point requires neither HDF5 nor a writable install.
 
-See [the closed Poisson–SCBA loop](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md),
-[Production backend](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md), and the
+See [the closed Poisson–SCBA loop](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md),
+[Production backend](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md), and the
 [state persistence contract](@ref native-result-formats).
 """
 function solve_production(

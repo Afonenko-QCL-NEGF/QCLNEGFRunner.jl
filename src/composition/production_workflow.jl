@@ -51,7 +51,7 @@ reference design-oriented overload that reuses one expensive static problem and 
 of flattened kernels across a sequential bias/temperature sweep.  `voltages`
 must contain Unitful voltage drops per period and `temperatures` Unitful
 temperatures.  Full states are checkpointed one at a time; only scalar
-[`ProductionSweepRecord`](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/api/public.md)s are retained in the result.
+[`ProductionSweepRecord`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md)s are retained in the result.
 `checkpoint_prefix` names point HDF5 files, `save_full_state=false` passes no
 checkpoint path into the solver, and `save_csv=false` keeps the summary and
 optical diagnostics in memory without creating CSV files.
@@ -69,7 +69,7 @@ sweep and user interrupts always propagate. The optional
 `incompatible_checkpoint` policy belongs only to the direct Julia API; the
 configured runtimes always reject incompatible checkpoints.
 
-See [Production sweep, warm start, and recovery](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
+See [Production sweep, warm start, and recovery](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
 the [HDF5 checkpoint schema](@ref native-result-formats).
 """
 function run_production_sweep(
@@ -443,8 +443,8 @@ Atomically save one optical-response curve as CSV with explicit SI/eV column
 names.  The file records `trusted` and `edge_loss` so plotting software cannot
 silently treat an energy-window-contaminated point as final data.
 
-See [Optical response](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md) and
-[production plots and saved data](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+See [Optical response](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md) and
+[production plots and saved data](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function save_optical_response(path::AbstractString, response::OpticalResponse)
     directory = dirname(abspath(path))
@@ -494,13 +494,13 @@ end
     save_kernel_diagnostics(path, diagnostics)
 
 Atomically save the measured construction diagnostics returned by
-[`build_kernels_production`](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/api/public.md).  One CSV row is written per enabled
+[`build_kernels_production`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md).  One CSV row is written per enabled
 mechanism.  Refinement histories are semicolon-separated inside their CSV
 fields; residuals are dimensionless and `direct_q_evaluations` is an exact
 counter for the adaptive construction and validation work.
 
-See [Microscopic kernels](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md) and
-[production kernel diagnostics](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+See [Microscopic kernels](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md) and
+[production kernel diagnostics](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function save_kernel_diagnostics(
     path::AbstractString,

@@ -1,7 +1,7 @@
 # QCLNEGFRunner.jl
 
 Julia **1.13.0** execution and storage adapters for
-[QCLNEGF.jl](https://github.com/AfonenkoA/QCLNEGF.jl), version **0.2.0**.
+[QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl), version **0.2.0**.
 The runner validates YAML input, freezes scientific plans, executes calculations,
 checks process resource limits, writes verified results and HDF5 checkpoints,
 and analyzes saved data. CairoMakie plotting is an optional extension.
@@ -41,7 +41,7 @@ deno task docs
 
 Release environments lock Julia dependencies in a Pkg-generated manifest. Tests exercise configuration errors,
 persistence, exact restart, adapter boundaries and public command-line behavior.
-The [platform repository](https://github.com/AfonenkoA/qcl-negf-platform) owns
+The [platform repository](https://github.com/Afonenko-QCL-NEGF/qcl-negf-platform) owns
 NixOS installation and trusted local GitHub Actions runners. Source repositories
 remain on GitHub.
 
@@ -63,12 +63,12 @@ The [configuration guide](docs/src/user/configuration.md),
 [resource boundary](docs/src/user/resources.md), and
 [architecture](docs/src/developer/architecture.md) describe runtime behavior.
 The physical equations and independent numerical operators are documented in
-[QCLNEGF.jl](https://github.com/AfonenkoA/QCLNEGF.jl/tree/main/docs/src).
+[QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/tree/main/docs/src).
 
-The [contracts repository](https://github.com/AfonenkoA/qcl-negf-contracts) owns
-schemas; [qcl-negf-results](https://github.com/AfonenkoA/qcl-negf-results) reads
-published data in Python. [qcl-negf-aiida](https://github.com/AfonenkoA/qcl-negf-aiida)
-owns distributed workflows; [qcl-negf-research](https://github.com/AfonenkoA/qcl-negf-research)
+The [contracts repository](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts) owns
+schemas; [qcl-negf-results](https://github.com/Afonenko-QCL-NEGF/qcl-negf-results) reads
+published data in Python. [qcl-negf-aiida](https://github.com/Afonenko-QCL-NEGF/qcl-negf-aiida)
+owns distributed workflows; [qcl-negf-research](https://github.com/Afonenko-QCL-NEGF/qcl-negf-research)
 owns scientific studies.
 
 License: MIT.

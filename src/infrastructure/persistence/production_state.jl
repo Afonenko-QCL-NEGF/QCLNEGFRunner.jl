@@ -549,7 +549,7 @@ missing datasets, non-finite state arrays, and all other errors remain fatal in
 every mode; these indicate corruption or an implementation error rather than
 a reusable checkpoint from a different discretization.
 
-See [Production sweep and recovery](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and the
+See [Production sweep and recovery](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and the
 [HDF5 checkpoint schema](@ref native-result-formats).
 """
 function load_production_restart(
@@ -589,7 +589,7 @@ end
 """
 Atomically write a language-neutral CSV sweep summary.
 
-See [Production plots and saved data](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+See [Production plots and saved data](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function save_production_summary(path::AbstractString, result::ProductionSweepResult)
     directory = dirname(abspath(path))
