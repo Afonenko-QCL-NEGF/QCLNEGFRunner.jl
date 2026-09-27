@@ -491,7 +491,7 @@ physics are rejected if their `physics_signature` differs from the reference. Th
 an important fail-closed guard: a physical approximation cannot be relabelled
 as an implementation optimization by mistake.
 
-See [Physics-first tests](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md) and
+See [Physics-first tests](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md) and
 [Expert comparison workflow](@ref expert-comparison-workflow).
 """
 function compare_method_runs(

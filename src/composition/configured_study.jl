@@ -1015,7 +1015,7 @@ declared reference profile and write full-precision pointwise errors plus a
 Markdown summary.  Empty axis lists are skipped.
 
 See [Expert comparison workflow](@ref expert-comparison-workflow) and
-[Physics-first tests](https://github.com/AfonenkoA/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
+[Physics-first tests](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
 """
 function run_convergence_study(configuration_directory::AbstractString)
     study = load_run_configuration(configuration_directory)
