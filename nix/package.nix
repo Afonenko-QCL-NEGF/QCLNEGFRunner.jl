@@ -18,7 +18,7 @@ pkgs.stdenvNoCC.mkDerivation {
     export JULIA_PKG_OFFLINE=true JULIA_CPU_TARGET=generic
     export JULIA_NUM_PRECOMPILE_TASKS=2 OPENBLAS_NUM_THREADS=1
     ${julia}/bin/julia --startup-file=no --project="$runtime/julia" \
-      -e 'using Pkg; Pkg.instantiate(); using QCLNEGFRunner'
+      -e 'using Pkg; Pkg.instantiate(; update_registry=false); using QCLNEGFRunner'
     makeWrapper ${julia}/bin/julia $out/bin/qcl-negf \
       --add-flags "--startup-file=no --project=$runtime/julia $runtime/components/QCLNEGFRunner.jl/scripts/scientific_workflow.jl" \
       --set JULIA_DEPOT_PATH "$out/share/depot:${preparedDepot}" \

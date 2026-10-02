@@ -35,6 +35,7 @@ Runner depends on core.
 
 ```console
 deno task check
+deno task test:depot
 deno task test
 deno task docs
 ```
@@ -44,6 +45,23 @@ persistence, exact restart, adapter boundaries and public command-line behavior.
 The [platform repository](https://github.com/Afonenko-QCL-NEGF/qcl-negf-platform) owns
 NixOS installation and trusted local GitHub Actions runners. Source repositories
 remain on GitHub.
+
+The root workspace's `solver:depot` command prepares an empty dependency depot
+with exactly Julia 1.13.0 and its committed Julia manifest. Preparation captures
+all artifacts selected for the host, including lazy artifacts, and verifies their
+tree hashes before retaining the depot. It also retains the captured registry:
+Julia Pkg checks for a registry before checking whether packages are already
+installed. Registry, package and artifact bytes all enter the root command's
+SHA-256 archive; temporary compilation, logs and scratch caches are removed.
+The Nix package uses this complete input with registry updates disabled.
+
+Generate a fresh depot after committing the runner change and its root gitlink.
+The root command binds the depot to that source revision and Julia manifest hash;
+an older archive without its registry cannot supply this build. Preparation needs
+network access and temporary disk space for all selected artifacts and the archive.
+`test:depot` checks capture/pruning with a fake Julia process; it runs no Julia,
+scientific calculation, dependency download or Nix build. A real sandbox build is
+still required to establish the complete runtime behavior.
 
 For coordinated development from adjacent checkouts, create a separate integration
 environment without rewriting either package project:
