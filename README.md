@@ -63,6 +63,26 @@ network access and temporary disk space for all selected artifacts and the archi
 scientific calculation, dependency download or Nix build. A real sandbox build is
 still required to establish the complete runtime behavior.
 
+The Nix Julia package constructs the binary derivation with the release's pinned
+nixpkgs `pkgs/development/compilers/julia/generic-bin.nix` factory and the immutable
+Julia 1.13.0 archive hash. Passing the version to that factory regenerates its
+version-dependent stdlib patch paths and test selection. Changing only `version`
+and `src` with `overrideAttrs` on an existing `julia-bin` retains the original
+version in those phases. The upstream patching, installation and install checks
+remain enabled.
+
+A focused evaluation contract uses the selected nixpkgs source and mocks only
+the build/fetch dependencies:
+
+```console
+nix-instantiate --store dummy:// --eval --strict --json nix/test-julia.nix \
+  --argstr nixpkgs /absolute/path/to/pinned/nixpkgs
+```
+
+This check compares the generated source, patching and install-check phases with
+the pinned upstream factory. It does not create derivations, fetch the archive,
+run Julia or establish that the Julia binary installs successfully.
+
 For coordinated development from adjacent checkouts, create a separate integration
 environment without rewriting either package project:
 
