@@ -83,6 +83,25 @@ This check compares the generated source, patching and install-check phases with
 the pinned upstream factory. It does not create derivations, fetch the archive,
 run Julia or establish that the Julia binary installs successfully.
 
+The solver derivation and its installed wrapper pin `JULIA_SSL_CA_ROOTS_PATH`
+to the selected nixpkgs public CA bundle. `Pkg` initializes LibGit2 when reading
+Git configuration during cold precompilation, including in offline mode.
+Without this explicit path, stdenv's `SSL_CERT_FILE=/no-cert-file.crt` reaches
+LibGit2 and can stop the build before the scientific runtime loads. Certificate
+verification and offline mode remain enabled; no private certificates enter
+the package.
+
+```console
+nix-instantiate --store dummy:// --eval --strict --json nix/test-package.nix \
+  --argstr nixpkgs /absolute/path/to/pinned/nixpkgs
+```
+
+This pure evaluation checks the actual derivation's build environment, retained
+CA store reference, runtime wrapper and offline/install-check policy. Its source
+and depot fixtures are not realized. It does not load Julia, initialize LibGit2
+or establish that solver packaging succeeds; a bounded sandbox smoke check and
+the authorized package build remain necessary before deployment.
+
 For coordinated development from adjacent checkouts, create a separate integration
 environment without rewriting either package project:
 

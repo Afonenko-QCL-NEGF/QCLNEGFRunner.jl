@@ -1,10 +1,15 @@
 # Native Julia manifest and Git submodule inputs are supplied by the root project.
 { pkgs, julia, preparedDepot, coreSrc, runnerSrc, environmentSrc }:
+let caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+in
 pkgs.stdenvNoCC.mkDerivation {
   pname = "qcl-negf";
   version = "0.2.0";
   dontUnpack = true;
   nativeBuildInputs = [ pkgs.makeWrapper ];
+  # Pkg initializes LibGit2 even offline. stdenv's missing SSL_CERT_FILE must
+  # not override a real, immutable CA bundle during cold Pkg precompilation.
+  JULIA_SSL_CA_ROOTS_PATH = caBundle;
   dontBuild = true;
   installPhase = ''
     runHook preInstall
@@ -23,6 +28,7 @@ pkgs.stdenvNoCC.mkDerivation {
       --add-flags "--startup-file=no --project=$runtime/julia $runtime/components/QCLNEGFRunner.jl/scripts/scientific_workflow.jl" \
       --set JULIA_DEPOT_PATH "$out/share/depot:${preparedDepot}" \
       --set JULIA_PKG_OFFLINE true \
+      --set JULIA_SSL_CA_ROOTS_PATH "${caBundle}" \
       --set OPENBLAS_NUM_THREADS 1
     runHook postInstall
   '';
