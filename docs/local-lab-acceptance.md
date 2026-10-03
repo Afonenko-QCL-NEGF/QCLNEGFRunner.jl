@@ -90,6 +90,11 @@ checkpoint initialization/attempt2 второй, cumulative restart coordinates
 
 ## Scratch → shared staging
 
+Вызовы lab `stage_result_tree` задают конечный `byte_budget=64*1024^2` и
+`reserve_bytes=0`. Этот лимит учитывает source и одновременную pending copy в
+логических байтах. Он не ограничивает остальные scratch/logs/retrieval деревья
+и не заменяет штатную filesystem quota; полная AC2 этим fixture не доказана.
+
 `staging SOURCE DEST` принимает completed native storage fixture с hash-bound
 marker и вызывает реальный `stage_result_tree`. Источник должен находиться
 на выделенном local scratch, а destination оператор выбирает на NFS/shared

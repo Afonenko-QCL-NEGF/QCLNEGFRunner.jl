@@ -78,6 +78,16 @@ recovery fit. Filesystem quotas should enforce the configured limit on the insta
 publication checks do not replace quotas for writes by external tools. Interrupted `pending-*`
 directories are never resumable.
 
+Before recovery publication and again before acknowledgement, the logical budget also reserves
+the new receipt and atomic `current.json`/`previous.json` temporary files while counting their old
+versions. Pointer bytes are serialized in advance. The receipt's `verified_unix` remains the actual
+time after published readback: its fixed fields are serialized beforehand with a conservative
+32-byte allowance for a finite Float64 timestamp token, and actual receipt serialization must fit
+that allowance before writing. A metadata-budget refusal leaves the prior acknowledgement and
+fallback pointer intact; a generation published before refusal is not selected by those pointers.
+These publication-boundary checks do not limit every intermediate HDF5 write or concurrent
+external growth. They establish logical accounting, not a filesystem quota or complete AC2.
+
 `qcl-negf pause OUTPUT --execution-id ID --attempt N` writes an attempt-scoped request.
 `verify-pause` with the same arguments verifies the resulting `pause-receipt.json`; `verify-stop`
 also accepts a verified terminal execution with its final archives. A request from an older attempt

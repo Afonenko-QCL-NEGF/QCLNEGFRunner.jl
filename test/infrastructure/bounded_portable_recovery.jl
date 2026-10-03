@@ -79,4 +79,51 @@ end
     end
 end
 
+@testset "Recovery metadata tail cannot advance acknowledgement beyond the budget" begin
+    solution=native_physics_fixture(;energy_nodes=17)
+    mktempdir() do directory
+        first=R.commit_point_artifacts(directory,solution;
+            algorithms=AlgorithmOptions(),analysis=false,reserve_bytes=0)
+        prior=R.commit_point_artifacts(directory,solution;
+            algorithms=AlgorithmOptions(),analysis=false,reserve_bytes=0)
+        root=joinpath(directory,"artifacts")
+        current_bytes=read(joinpath(root,"current.json"))
+        previous_bytes=read(joinpath(root,"previous.json"))
+        budget=32*1024^2
+        padding=joinpath(root,"tail-boundary-padding")
+        for injection in (:before_publish,:after_publish)
+            reached_boundary=Ref(false)
+            hook=boundary->begin
+                boundary===injection || return
+                # Independent file-size observation; one reused sparse padding
+                # has a finite 32 MiB logical allowance, never scientific arrays.
+                used=sum(filesize(joinpath(path,name)) for (path,_,files) in walkdir(root) for name in files)
+                @test used<budget
+                open(padding,"w") do io
+                    truncate(io,budget-used)
+                end
+                reached_boundary[]=true
+            end
+            failure=try
+                R.commit_point_artifacts(directory,solution;
+                    algorithms=AlgorithmOptions(),analysis=false,reserve_bytes=0,
+                    byte_budget=budget,publication_hook=hook)
+                nothing
+            catch error
+                error
+            end
+            @test reached_boundary[]
+            @test failure isa ArgumentError
+            @test failure isa ArgumentError && occursin("budget",sprint(showerror,failure))
+            @test read(joinpath(root,"current.json"))==current_bytes
+            @test read(joinpath(root,"previous.json"))==previous_bytes
+            @test R.load_recovery_commit(directory)==prior
+            @test !any(startswith(name,"pending-") for name in readdir(root))
+            rm(padding)
+        end
+        write(joinpath(dirname(prior),"physics.h5"),"corrupt")
+        @test R.load_recovery_commit(directory)==first
+    end
+end
+
 end

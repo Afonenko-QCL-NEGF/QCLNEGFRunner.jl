@@ -264,8 +264,8 @@ function resume(root, prior, output)
     copied = output * ".portable-input"
     reserve_output(copied)
     bundle = dirname(contained_file(prior,receipt["commit_path"]))
-    QCLNEGFRunner.stage_result_tree(bundle,joinpath(copied,"recovery"))
-    QCLNEGFRunner.stage_result_tree(checked_input(joinpath(prior,"archive")),joinpath(copied,"archive"))
+    QCLNEGFRunner.stage_result_tree(bundle,joinpath(copied,"recovery");byte_budget=64*1024^2,reserve_bytes=0)
+    QCLNEGFRunner.stage_result_tree(checked_input(joinpath(prior,"archive")),joinpath(copied,"archive");byte_budget=64*1024^2,reserve_bytes=0)
     reserve_output(output)
     cp(path,joinpath(output,"scientific_plan.json"))
     QCLNEGFRunner.execute_scientific_plan(plan,output;execution_id=only(plan.executions).id,attempt=2,
@@ -303,12 +303,12 @@ function staging(source,destination)
     hash_file(contained_file(source,marker["commit_path"])) == marker["commit_sha256"] ||
         throw(ArgumentError("native commit changed before staging"))
     before = QCLNEGFRunner._tree_digests(source)
-    QCLNEGFRunner.stage_result_tree(source,destination)
+    QCLNEGFRunner.stage_result_tree(source,destination;byte_budget=64*1024^2,reserve_bytes=0)
     after = QCLNEGFRunner._tree_digests(destination)
     before == after || error("staged tree differs")
     write_json_once(evidence,metadata("staging";source=source,destination=destination,
         implementation="QCLNEGFRunner.stage_result_tree", source_sha256=before,
-        destination_sha256=after, byte_identical=true,
+        destination_sha256=after, byte_identical=true, byte_budget=64*1024^2,reserve_bytes=0,
         publication="hash verification + owning fsync/rename implementation; syscall tracing not measured"))
 end
 function main(arguments=ARGS)

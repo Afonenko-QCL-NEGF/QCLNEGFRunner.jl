@@ -542,15 +542,21 @@ function _check_storage_free(path,required)
     available>=required || throw(ArgumentError("publication storage reserve unavailable: required=$required available=$available"))
     return available
 end
-function _write_bundle_receipt(commit_path)
-    commit=verify_point_artifacts(commit_path)
-    receipt=Dict("schema"=>"qcl-negf-recovery-receipt-v1","status"=>"verified",
+function _bundle_receipt_document(commit_path,commit;verified_unix=time())
+    return Dict("schema"=>"qcl-negf-recovery-receipt-v1","status"=>"verified",
         "commit_sha256"=>bytes2hex(open(sha256,commit_path)),"identity"=>commit["identity"],
         "state_id"=>commit["state_id"],"state_sequence"=>commit["state_sequence"],
-        "verified_unix"=>time(),"publication_scope"=>"local_filesystem")
+        "verified_unix"=>verified_unix,"publication_scope"=>"local_filesystem")
+end
+function _write_bundle_receipt(commit_path;maximum_bytes::Union{Nothing,Int}=nothing)
+    commit=verify_point_artifacts(commit_path)
+    receipt=_bundle_receipt_document(commit_path,commit)
+    encoded=sprint(_light_json,receipt)
+    maximum_bytes===nothing || ncodeunits(encoded)<=maximum_bytes ||
+        throw(ArgumentError("recovery receipt exceeds its reserved metadata byte budget"))
     path=joinpath(dirname(commit_path),"receipt.json")
     _observability_atomic_text(path) do io
-        _light_json(io,receipt)
+        write(io,encoded)
     end
     _sync_artifact_file(path)
     _sync_artifact_directory(dirname(path))
@@ -972,34 +978,72 @@ function commit_point_artifacts(
         end
         _prepare_generation!(stage)
         verify_point_artifacts(joinpath(stage,"commit.json"))
+        pointer_payload=nothing
+        previous_payload=nothing
+        receipt_bound=nothing
+        metadata_tail=0
+        if storage_class===:recovery
+            # The fixed receipt fields are serialized from this exact commit.
+            # Only verified_unix is produced after published readback. An IEEE
+            # binary64 shortest decimal token needs at most 17 significant digits,
+            # sign, decimal point and signed three-digit exponent; 32 extra bytes
+            # conservatively cover it. The real serializer is checked again before
+            # writing, so an unexpected representation cannot acknowledge success.
+            receipt_bound=Base.checked_add(ncodeunits(sprint(_light_json,
+                _bundle_receipt_document(joinpath(stage,"commit.json"),commit;verified_unix=0.0))),32)
+            pointer=Dict("schema"=>"qcl-negf.artifact-pointer.v2","contract_set"=>_RESULT_CONTRACT_SET,
+                "generation"=>generation,"commit_path"=>name*"/commit.json",
+                "sha256"=>bytes2hex(open(sha256,joinpath(stage,"commit.json"))))
+            pointer_payload=sprint(_light_json,pointer)
+            current=joinpath(root,"current.json")
+            if isfile(current)
+                try
+                    _verify_recovery_pointer(root,current)
+                    previous_payload=read(current,String)
+                catch error
+                    error isa InterruptException && rethrow()
+                end
+            end
+            # Old pointer files are still counted by _storage_bytes. Reserve new
+            # receipt and both atomic pointer temporaries without crediting future
+            # replacement/GC; this also covers their simultaneous publication peak.
+            metadata_tail=Base.checked_add(receipt_bound,Base.checked_add(ncodeunits(pointer_payload),
+                previous_payload===nothing ? 0 : ncodeunits(previous_payload)))
+        end
         publication_hook(:before_publish)
-        storage_class===:recovery && _check_storage_budget(accounted,byte_budget,reserve_bytes,0)
+        if storage_class===:recovery
+            _check_storage_budget(accounted,byte_budget,reserve_bytes,metadata_tail)
+            _check_storage_free(root,Base.checked_add(metadata_tail,reserve_bytes))
+        end
         mv(stage, final; force = false)
         _sync_artifact_directory(root)
         commit_path=joinpath(final, "commit.json")
         publication_hook(:after_publish)
         verify_point_artifacts(commit_path)
-        _write_bundle_receipt(commit_path)
+        if storage_class===:recovery
+            pointer=YAML.load(pointer_payload;dicttype=Dict{String,Any})
+            bytes2hex(open(sha256,commit_path))==pointer["sha256"] ||
+                throw(ArgumentError("published recovery commit changed before acknowledgement"))
+            _check_storage_budget(accounted,byte_budget,reserve_bytes,metadata_tail)
+            _check_storage_free(root,Base.checked_add(metadata_tail,reserve_bytes))
+        end
+        _write_bundle_receipt(commit_path;maximum_bytes=receipt_bound)
         publication_hook(:after_verify)
         if storage_class===:recovery
-            pointer=Dict("schema"=>"qcl-negf.artifact-pointer.v2","contract_set"=>_RESULT_CONTRACT_SET,
-                "generation"=>generation,"commit_path"=>name*"/commit.json",
-                "sha256"=>bytes2hex(open(sha256,commit_path)))
             current=joinpath(root,"current.json")
-            if isfile(current)
-                # Only a verified prior pointer may become previous.
-                try
-                    _verify_recovery_pointer(root,current)
-                    _observability_atomic_text(joinpath(root,"previous.json")) do io
-                        write(io,read(current,String))
-                    end
-                    _sync_artifact_file(joinpath(root,"previous.json"))
-                catch error
-                    error isa InterruptException && rethrow()
+            pointer_tail=Base.checked_add(ncodeunits(pointer_payload),
+                previous_payload===nothing ? 0 : ncodeunits(previous_payload))
+            _check_storage_budget(accounted,byte_budget,reserve_bytes,pointer_tail)
+            _check_storage_free(root,Base.checked_add(pointer_tail,reserve_bytes))
+            if previous_payload!==nothing
+                # Only the verified prior pointer can become previous.
+                _observability_atomic_text(joinpath(root,"previous.json")) do io
+                    write(io,previous_payload)
                 end
+                _sync_artifact_file(joinpath(root,"previous.json"))
             end
             _observability_atomic_text(current) do io
-                _light_json(io,pointer)
+                write(io,pointer_payload)
             end
             _sync_artifact_file(current)
             _sync_artifact_directory(root)
