@@ -43,6 +43,14 @@ state на сетке `Nz25/Nb2/NE33/Nk3`, без запуска SCBA/Poisson и
 StateReader/export. Неизвестный restart algorithm contract сохраняется как
 неизвестный: seeded archive не выдаётся за restart-ready checkpoint.
 
+Сначала замораживается native configuration, затем owning
+`build_configured_problem` строит problem из неё, а fixture принимает именно
+этот problem и `solver_options(configuration)`. Таким образом, HDF5 паспорт,
+resolved model и frozen plan описывают одни и те же inputs/controls; fallback
+`tutorial_options()` используется только прежними callers fixture без явных
+options. Native overrides сетки/температуры/рассеяния относятся только к
+storage fixture; physical двухточечное определение не меняется.
+
 `native-evidence.json` фиксирует hashes плана/commit, manifest и
 `solver_executed=false`, `scientific_accepted=false`. Серия имеет `status=failed`
 и предупреждение `STORAGE_FIXTURE_NO_SOLVE`: fixture пригоден для проверки
@@ -99,6 +107,13 @@ mount. Driver проверяет identical hashes всех файлов; owning 
 julia --startup-file=no --history-file=no tools/local_lab_acceptance.jl --help
 julia --startup-file=no --history-file=no test/infrastructure/local_lab_acceptance_paths.jl
 ```
+
+Отдельная регрессия `test/infrastructure/local_lab_native_passport.jl` требует
+exact environment и выполняет только native seeded publication. Она сравнивает
+все сохранённые HDF5 tolerances, mixing/budgets/windows, численные параметры,
+каналы рассеяния, температуры/bias и структуру/материалы с frozen plan, а также
+полные typed physical/numerical/scattering/scales/solver/model inputs между
+планом и resolved model. Никакие итерации SCBA/Poisson она не запускает.
 
 | Утверждение | Свидетельство | Ограничение | Решение |
 | --- | --- | --- | --- |

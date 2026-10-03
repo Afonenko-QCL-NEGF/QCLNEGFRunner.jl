@@ -81,7 +81,7 @@ function load_runtime()
     @eval using QCLNEGFRunner
     @eval using YAML
     @eval import LinearAlgebra
-    Base.invokelatest(LinearAlgebra.BLAS.set_num_threads, 1)
+    @eval LinearAlgebra.BLAS.set_num_threads(1)
     Threads.nthreads() == 1 || throw(ArgumentError("physical acceptance requires exactly one Julia thread"))
     include(joinpath(SOURCE_ROOT, "test", "support", "native_physics_fixture.jl"))
     return nothing
@@ -188,25 +188,30 @@ function prepare(root)
 end
 function native(root)
     reserve_output(root)
-    # Existing seeded state: zero accepted iterations, all channels disabled by its owner.
-    solution = native_physics_fixture(; energy_nodes=33)
-    n = solution.problem.numerical
+    # Freeze before allocation: this configuration owns every actual problem/control.
+    n = tutorial_numerics()
     fields = Dict("spatial_nodes"=>:N_z, "basis_states"=>:N_b, "basis_periods"=>:P_basis,
         "energy_nodes"=>:N_E, "momentum_nodes"=>:N_k, "angular_nodes"=>:N_φ,
         "longitudinal_momentum_nodes"=>:N_qz)
     numeric = Dict{String,Any}(key=>getfield(n, field) for (key,field) in fields)
+    merge!(numeric,Dict("spatial_nodes"=>25,"basis_states"=>2,"energy_nodes"=>33,
+        "momentum_nodes"=>3,"longitudinal_momentum_nodes"=>9,"angular_nodes"=>8))
     for (key,field) in (("energy_min",:E_min),("energy_max",:E_max),("energy_trust_margin",:M_E),
         ("momentum_max",:k_max),("longitudinal_momentum_max",:qz_max),("seed_broadening",:η_seed))
         numeric[key] = string(getfield(n, field))
     end
     plan = freeze_definition(root, diagnostic_definition(;native=true,numerical=numeric))
     execution, point = only(plan.executions), only(plan.points)
+    configuration = execution.configuration
+    configured = QCLNEGFRunner.build_configured_problem(configuration)
+    solution = native_physics_fixture(;problem=configured.problem,
+        options=QCLNEGFRunner.solver_options(configuration))
     identity = Dict{String,Any}("point_id"=>point.id, "execution_id"=>execution.id,
         "attempt"=>1, "plan_fingerprint"=>plan.fingerprint, "producer_kind"=>"native-storage-fixture",
         "scientific_validation"=>"not_performed")
     commit_path = QCLNEGFRunner.commit_point_artifacts(root, solution; identity,
         storage_class=:archive, archive_root=joinpath(root,"archive",execution.id,point.id),
-        configuration=QCLNEGFRunner.resolved_configuration_dict(execution.configuration), reserve_bytes=0)
+        configuration=QCLNEGFRunner.resolved_configuration_dict(configuration), reserve_bytes=0)
     commit = QCLNEGFRunner.verify_point_artifacts(commit_path)
     commit["scientific_accepted"] === false || error("storage fixture must not be scientifically accepted")
     workflow = QCLNEGFRunner.QCLScientificWorkflow
