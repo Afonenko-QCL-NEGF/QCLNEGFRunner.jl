@@ -84,17 +84,45 @@ function _parse_scientific_policies(raw)
     )
 end
 function _parse_scientific_outputs(raw)
-    data=_keys_input(
-        _mapping_input(raw, "outputs"),
-        ("full_state", "optical", "projections", "intermediate_history"),
-        "outputs",
-    )
-    return ScientificOutputs(
-        _boolean_input(get(data, "full_state", false), "full_state"),
-        _boolean_input(get(data, "optical", false), "optical"),
-        _boolean_input(get(data, "projections", true), "projections"),
-        _positive_integer(get(data, "intermediate_history", 16), "intermediate_history"),
-    )
+    data=_mapping_input(raw, "output")
+    legacy=any(haskey(data,key) for key in ("full_state","optical","projections","intermediate_history"))
+    if legacy
+        _keys_input(data,("full_state","optical","projections","intermediate_history"),"legacy outputs")
+        @warn "legacy outputs migrated to output.archive; full_final is always true"
+        haskey(data,"full_state") && _boolean_input(data["full_state"],"outputs.full_state")
+        data=Dict{String,Any}("archive"=>Dict(key=>value for (key,value) in data if key!="full_state"))
+    end
+    _keys_input(data,("archive","recovery","telemetry"),"output")
+    archive=_keys_input(_mapping_input(get(data,"archive",Dict()),"output.archive"),
+        ("full_final","optical","projections","intermediate_history"),"output.archive")
+    _boolean_input(get(archive,"full_final",true),"output.archive.full_final") ||
+        throw(ArgumentError("output.archive.full_final must be true; every returned state is archived"))
+    recovery=_keys_input(_mapping_input(get(data,"recovery",Dict()),"output.recovery"),
+        ("enabled","interval_seconds","retain_generations","byte_budget","reserve_bytes"),"output.recovery")
+    interval=get(recovery,"interval_seconds",1800.0)
+    interval isa Real && !(interval isa Bool) && isfinite(interval) && interval>0 ||
+        throw(ArgumentError("output.recovery.interval_seconds must be positive and finite"))
+    reserve=get(recovery,"reserve_bytes",64*1024^2)
+    reserve isa Integer && !(reserve isa Bool) && reserve>=0 ||
+        throw(ArgumentError("output.recovery.reserve_bytes must be a nonnegative integer"))
+    telemetry=_keys_input(_mapping_input(get(data,"telemetry",Dict()),"output.telemetry"),
+        ("enabled","buffer_events"),"output.telemetry")
+    return ScientificOutputs(true,
+        _boolean_input(get(archive,"optical",false),"output.archive.optical"),
+        _boolean_input(get(archive,"projections",true),"output.archive.projections"),
+        _positive_integer(get(archive,"intermediate_history",16),"output.archive.intermediate_history");
+        recovery=RecoveryOutputPolicy(
+            _boolean_input(get(recovery,"enabled",true),"output.recovery.enabled"),Float64(interval),
+            _positive_integer(get(recovery,"retain_generations",2),"output.recovery.retain_generations"),
+            _positive_integer(get(recovery,"byte_budget",8*1024^3),"output.recovery.byte_budget"),Int(reserve)),
+        telemetry=TelemetryOutputPolicy(
+            _boolean_input(get(telemetry,"enabled",true),"output.telemetry.enabled"),
+            _positive_integer(get(telemetry,"buffer_events",256),"output.telemetry.buffer_events")))
+end
+function _scientific_output_input(data)
+    haskey(data,"output") && haskey(data,"outputs") &&
+        throw(ArgumentError("output and legacy outputs are conflicting policy sources"))
+    return get(data,"output",get(data,"outputs",Dict()))
 end
 
 function _scientific_children(source, data)
@@ -184,6 +212,7 @@ function read_scientific_definition(::FilesystemScientificDefinitions, requested
             "variants",
             "axes",
             "policies",
+            "output",
             "outputs",
             "includes",
             "select",
@@ -201,7 +230,7 @@ function read_scientific_definition(::FilesystemScientificDefinitions, requested
     name=_string_input(get(data, "name", id), "name")
     tags=String.(_vector_input(get(data, "tags", Any[]), "tags"))
     policies=_parse_scientific_policies(get(data, "policies", Dict()))
-    outputs=_parse_scientific_outputs(get(data, "outputs", Dict()))
+    outputs=_parse_scientific_outputs(_scientific_output_input(data))
     if kind===:meta
         any(
             haskey(data, key) for
@@ -369,6 +398,13 @@ function resolve_scientific_configuration(
         (variant.overrides, definition.source*"#"*variant.id),
         (inherited_overrides, definition.source*"#inclusion"),
     )
+        if haskey(override,"output")
+            aliases=_mapping_input(override["output"],"$origin.output")
+            haskey(aliases,"save_full_state") && aliases["save_full_state"]!=true &&
+                throw(ArgumentError("scientific archive full_final conflicts with output.save_full_state override at $origin"))
+            any(haskey(aliases,key) for key in ("archive","recovery","telemetry")) &&
+                throw(ArgumentError("scientific output policy belongs to the definition output, not configuration overrides"))
+        end
         _deep_merge!(raw, override, provenance, origin)
     end
     raw["run"]["name"]=definition.id*"-"*variant.id

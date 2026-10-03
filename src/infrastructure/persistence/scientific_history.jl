@@ -253,27 +253,19 @@ function consolidate_scientific_history(destination, paths)
             _require_native_metadata(file, "qcl-negf-scientific-history-v4")
             _require_native_scba_tables(file)
             metadata=file["metadata"]
-            push!(
-                sources,
-                Dict(
-                    "sha256"=>bytes2hex(open(sha256, path)),
-                    "identity"=>YAML.load(
-                        String(read(metadata["identity_json"]));
-                        dicttype = Dict{String,Any},
-                    ),
-                    "domain_identity"=>String(read_attribute(metadata, "domain_identity")),
-                    "scba_rows"=>Int(read_attribute(metadata, "scba_rows")),
-                    "scba_sequence_first"=>(
-                        length(file["scba/sequence"])==0 ? nothing :
-                        Int(file["scba/sequence"][1])
-                    ),
-                    "scba_sequence_last"=>(
-                        length(file["scba/sequence"])==0 ? nothing :
-                        Int(file["scba/sequence"][length(file["scba/sequence"])])
-                    ),
-                    "outer_rows"=>Int(read_attribute(metadata, "outer_rows")),
-                ),
-            )
+            if haskey(metadata,"source_segments_json")
+                append!(sources,YAML.load(String(read(metadata["source_segments_json"]));dicttype=Dict{String,Any}))
+            else
+                push!(sources,Dict(
+                    "sha256"=>bytes2hex(open(sha256,path)),
+                    "identity"=>YAML.load(String(read(metadata["identity_json"]));dicttype=Dict{String,Any}),
+                    "domain_identity"=>String(read_attribute(metadata,"domain_identity")),
+                    "scba_rows"=>Int(read_attribute(metadata,"scba_rows")),
+                    "scba_sequence_first"=>length(file["scba/sequence"])==0 ? nothing : Int(file["scba/sequence"][1]),
+                    "scba_sequence_last"=>length(file["scba/sequence"])==0 ? nothing : Int(file["scba/sequence"][length(file["scba/sequence"])]),
+                    "outer_rows"=>Int(read_attribute(metadata,"outer_rows")),
+                ))
+            end
             for kind in ("scba", "outer"), name in keys(file[kind])
                 values=read(file[kind][name])
                 append!(get!(tables[kind], name, eltype(values)[]), values)

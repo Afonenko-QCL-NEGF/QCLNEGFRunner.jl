@@ -66,8 +66,16 @@ function execute_scientific_plan_staged(
     output::AbstractString;
     execution_id::Union{Nothing,AbstractString}=nothing,
     scratch_root::Union{Nothing,AbstractString}=nothing,
+    attempt::Union{Nothing,Int}=nothing,
+    recovery_bundle::Union{Nothing,AbstractString}=nothing,
+    telemetry_sink::Union{Nothing,Function}=nothing,
+    archive_bundle::Union{Nothing,AbstractString}=nothing,
+    archive_byte_budget::Int=64*1024^3,
 )
-    scratch_root === nothing && return execute_scientific_plan(plan, output; execution_id)
+    if scratch_root===nothing || any(e.outputs.recovery.enabled for e in plan.executions if execution_id===nothing || e.id==execution_id)
+        scratch_root===nothing || @warn "portable recovery publishes directly to output storage; scratch staging is disabled for this execution"
+        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget)
+    end
     isabspath(scratch_root) || throw(ArgumentError("scratch root must be absolute"))
     destination = abspath(output)
     (ispath(destination) || islink(destination)) &&
@@ -76,7 +84,7 @@ function execute_scientific_plan_staged(
     workspace = mktempdir(scratch_root; prefix="qcl-negf-", cleanup=false)
     local_result = joinpath(workspace, "result")
     try
-        result = execute_scientific_plan(plan, local_result; execution_id, resume=false)
+        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget)
         stage_result_tree(local_result, destination)
         rm(workspace; recursive=true)
         return result

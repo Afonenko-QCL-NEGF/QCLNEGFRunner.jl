@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const preparation = fileURLToPath(new URL("./ci.ts", import.meta.url));
 const registry = 'name = "General"\nuuid = "23338594-aafe-5451-b93e-139f81909106"\n';
@@ -93,6 +93,55 @@ Deno.test("preparation refuses to replace an existing frozen depot", async () =>
     assert(
       await Deno.readTextFile(`${depot}/retained`) === "original bytes",
       "Existing depot changed",
+    );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("bootstrap writes to a Cyrillic checkout path with spaces and percent signs", async () => {
+  const directory = await Deno.makeTempDir({ prefix: "qcl-bootstrap-path-" });
+  try {
+    const checkout = `${directory}/Загрузки/project # 100%`;
+    await Deno.mkdir(`${checkout}/tools`, { recursive: true });
+    await Deno.copyFile(
+      fileURLToPath(new URL("./bootstrap.ts", import.meta.url)),
+      `${checkout}/tools/bootstrap.ts`,
+    );
+    const target = `${checkout}/.build/julia.tar.gz`;
+    const pinnedHash = "8975da61c128a5e5ded3e719e868da8c8781deb7ad7913d37fb99be02a81904b";
+    const digest = Array.from(
+      { length: 32 },
+      (_, index) => parseInt(pinnedHash.slice(2 * index, 2 * index + 2), 16),
+    );
+    const wrapper = `${directory}/fixture.ts`;
+    // Exercise the real bootstrap file/path and publication calls. Network,
+    // checksum input and tar are fixture boundaries; no runtime is installed.
+    await Deno.writeTextFile(
+      wrapper,
+      `
+globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3]));
+Object.defineProperty(crypto.subtle, "digest", { value: async () => new Uint8Array(${
+        JSON.stringify(digest)
+      }).buffer });
+Object.defineProperty(Deno, "Command", { value: class {
+  constructor(command: string) { if (command !== "tar") throw new Error("unexpected subprocess"); }
+  spawn() { return { status: Promise.resolve({ success: true, code: 0, signal: null }) }; }
+} });
+await import(${JSON.stringify(pathToFileURL(`${checkout}/tools/bootstrap.ts`).href)});
+`,
+    );
+    const result = await new Deno.Command(Deno.execPath(), {
+      args: ["run", `--allow-read=${directory}`, `--allow-write=${directory}`, wrapper],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assert(result.success, new TextDecoder().decode(result.stderr));
+    const bytes = await Deno.readFile(target);
+    assert(bytes.join(",") === "1,2,3", "Bootstrap wrote to an encoded pathname");
+    assert(
+      new TextDecoder().decode(result.stdout).trim() === `${checkout}/.build/julia/bin/julia`,
+      "Printed runtime path is encoded",
     );
   } finally {
     await Deno.remove(directory, { recursive: true });

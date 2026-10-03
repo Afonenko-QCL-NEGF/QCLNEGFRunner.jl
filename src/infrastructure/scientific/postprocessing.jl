@@ -381,6 +381,13 @@ function _recompute_optics(rows, root, output, photon_energies)
                 "point $(point["id"]) has no full_state; arbitrary optical grid requires full Green matrices, basis and grids",
             ),
         )
+        source_commit=verify_point_artifacts(_result_path(root,point["data"]["result_commit"]))
+        all(get(source_commit["identity"],key,nothing)==point[key] for key in ("execution_id","attempt")) &&
+        get(source_commit["identity"],"point_id",nothing)==point["id"] ||
+            throw(ArgumentError("optical source state differs from point identity"))
+        physical=only(filter(a->a["role"]=="physics.full",source_commit["artifacts"]))
+        abspath(_result_path(root,path))==abspath(joinpath(dirname(_result_path(root,point["data"]["result_commit"])),physical["path"])) ||
+            throw(ArgumentError("optical full state differs from source commit"))
         execution=execution_map[point["execution_id"]]
         config=execution.configuration
         actual_inputs=replace(
@@ -426,6 +433,10 @@ function _recompute_optics(rows, root, output, photon_energies)
             destination,
             response;
             source_sha256 = bytes2hex(open(sha256, _result_path(root, path))),
+            stationary_quality = point["quality"],
+            stationary_assessment = get(point["observables"],"scientific_assessment",Dict("status"=>"not_evaluated")),
+            source_receipt = verify_recovery_receipt(_result_path(root,point["data"]["result_commit"])),
+            identity = source_commit["identity"],
         )
         peak=peak_gain(response)
         push!(

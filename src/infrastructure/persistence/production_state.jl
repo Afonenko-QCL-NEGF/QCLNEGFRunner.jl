@@ -313,6 +313,19 @@ function _validate_restart_metadata(file, problem::NEGFProblem)
     return nothing
 end
 
+function _recorded_algorithm_options(contract)
+    recorded=get(contract,"algorithms",nothing)
+    recorded isa AbstractDict || throw(ArgumentError("restart has unknown algorithm provenance"))
+    required=String.(fieldnames(AlgorithmOptions))
+    Set(String.(keys(recorded)))==Set(required) || throw(ArgumentError("restart algorithm contract is incomplete"))
+    options=Pair{Symbol,Any}[]
+    for (index,name) in enumerate(fieldnames(AlgorithmOptions))
+        value=recorded[String(name)]
+        push!(options,name=>(fieldtype(AlgorithmOptions,index)===Symbol ? Symbol(value) : value))
+    end
+    return AlgorithmOptions(;options...)
+end
+
 function _load_production_restart(
     path::AbstractString,
     problem::NEGFProblem;
@@ -351,7 +364,7 @@ function _load_production_restart(
         if solver_options !== nothing
             get(contract, "solver", nothing) == _solver_restart_contract(
                 solver_options,
-                algorithms === nothing ? AlgorithmOptions() : algorithms,
+                algorithms === nothing ? _recorded_algorithm_options(contract) : algorithms,
             )["solver"] || _restart_mismatch(
                 "restart mixing/quality policy differs from requested solver options",
             )

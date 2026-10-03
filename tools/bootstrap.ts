@@ -1,8 +1,9 @@
 // Exact, checksum-verified Julia runtime for a trusted Linux x64 runner.
+import { fileURLToPath } from "node:url";
 if (Deno.build.os !== "linux" || Deno.build.arch !== "x86_64") {
   throw new Error("This pinned runtime supports Linux x86_64");
 }
-const root = new URL("../", import.meta.url).pathname.replace(/\/$/, "");
+const root = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
 const path = `${root}/.build/julia`;
 const response = await fetch(
   "https://julialang-s3.julialang.org/bin/linux/x64/1.13/julia-1.13.0-linux-x86_64.tar.gz",

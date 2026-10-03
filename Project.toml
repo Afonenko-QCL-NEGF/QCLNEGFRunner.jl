@@ -7,6 +7,7 @@ version = "0.2.0"
 QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "v0.2.0"}
 
 [deps]
+Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 QCLNEGF = "25d1ffa8-5cfa-41e3-b02e-8fca5bf51027"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
@@ -23,6 +24,7 @@ CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 QCLNEGFRunnerPlotsExt = "CairoMakie"
 
 [compat]
+Downloads = "1.6"
 QCLNEGF = "=0.2.0"
 YAML = "~0.4"
 HDF5 = "~0.17"
