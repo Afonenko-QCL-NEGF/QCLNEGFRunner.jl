@@ -48,12 +48,18 @@ assert lib.assertMsg (same "postPatch")
 assert lib.assertMsg (same "patches" && same "nativeBuildInputs" && same "installPhase"
   && same "dontStrip" && same "dontAutoPatchelf")
   "Julia must retain the pinned upstream binary patching and installation contract";
-assert lib.assertMsg (julia.doInstallCheck && same "preInstallCheck" && same "installCheckPhase")
+assert lib.assertMsg (julia.doInstallCheck
+  && lib.hasPrefix expected.preInstallCheck julia.preInstallCheck
+  && same "installCheckPhase")
   "Julia must retain the pinned upstream install checks and version-dependent skip list";
+assert lib.assertMsg (julia.JULIA_CPU_THREADS == "2")
+  "Julia's upstream test launcher must use the selected two-worker CPU limit";
 {
   version = julia.version;
   source = julia.src;
   patchStdlib = "v1.13";
   upstreamPatchingRetained = true;
   upstreamInstallChecksRetained = julia.doInstallCheck;
+  upstreamPreInstallHookRetained = true;
+  testWorkerLimit = julia.JULIA_CPU_THREADS;
 }
