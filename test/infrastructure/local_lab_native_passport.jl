@@ -1,18 +1,20 @@
 module LocalLabNativePassport
 # Native publication only: seeded fields, no SCBA/Poisson iteration or history.
-using Test, HDF5, YAML, Unitful
-include("../../tools/local_lab_acceptance.jl")
-const Lab = LocalLabAcceptance
-Lab.load_runtime()
-const R = Lab.QCLNEGFRunner
+using Test, HDF5, YAML, Unitful, QCLNEGFRunner
+include("../support/native_physics_fixture.jl")
+const R = QCLNEGFRunner
 
 @testset "Native storage HDF5, model and frozen plan share one passport" begin
     mktempdir() do workspace
         output = joinpath(workspace,"native")
-        Lab.native(output)
+        # Keep the acceptance driver's one-thread budget independent of the test process.
+        driver = normpath(joinpath(@__DIR__, "..", "..", "tools", "local_lab_acceptance.jl"))
+        command = `$(Base.julia_cmd()) --startup-file=no --threads=1 --check-bounds=yes --project=$(dirname(Base.active_project())) $driver native $output`
+        run(command)
         plan = R.load_scientific_plan(joinpath(output,"scientific_plan.json"))
         configuration = only(plan.executions).configuration
         marker = YAML.load_file(joinpath(output,"native-evidence.json"))
+        @test marker["julia_threads"] == 1
         commit_path = joinpath(output,marker["commit_path"])
         commit = R.verify_point_artifacts(commit_path)
         raw_model = R.load_resolved_configuration_envelope(joinpath(dirname(commit_path),"resolved_configuration.json"))
@@ -33,7 +35,7 @@ const R = Lab.QCLNEGFRunner
             @test same_fields(getfield(configuration,field),getfield(model,field))
         end
         configured = R.build_configured_problem(configuration)
-        seed = Lab.native_physics_fixture(;problem=configured.problem,options=configuration.solver)
+        seed = native_physics_fixture(;problem=configured.problem,options=configuration.solver)
         @test seed.problem === configured.problem
         @test seed.options === configuration.solver
         @test same_fields(seed.problem.physical,configuration.physical)
