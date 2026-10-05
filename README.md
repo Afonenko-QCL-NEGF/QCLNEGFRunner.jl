@@ -71,12 +71,33 @@ and `src` with `overrideAttrs` on an existing `julia-bin` retains the original
 version in those phases. The upstream patching, installation and install checks
 remain enabled.
 
-The pinned Julia 1.13.0 test launcher has a local, fail-on-mismatch patch that
-limits parallel test worker processes to two while retaining native CPU and
-affinity detection. Its pre-install guard checks that detection, the patched
-worker-selection expression and BLAS defaults for up to eight affinity sizes
-before the full upstream suite. The limit counts test workers; the coordinator
-and child processes used by threading tests are separate.
+Both `nix/julia.nix` and `nix/package.nix` accept
+`testProfile ? "production-build"`. The default production profile retains the
+upstream Julia 1.13.0 test launcher, which uses the effective CPU count up to the
+number of selected tests. Package precompilation uses the positive
+`NIX_BUILD_CORES` allocation. Pass the same profile to both factories.
+
+`nix/julia.nix` also accepts `testWorkerLimit ? null`. A positive integer applies
+a version-bound worker cap for production without changing native CPU globals.
+The caller must admit that limit using its CPU/RAM budget; for example,16 workers
+at an observed2GiB envelope each plus4GiB reserve require approximately36GiB.
+This is an admission heuristic, not proof that later test groups cannot peak
+higher. With `null`, production retains the upstream launcher.
+
+Explicit `testProfile = "local-debug"` applies a version-bound,
+fail-on-mismatch launcher patch limiting parallel test worker processes to two,
+and sets package precompilation tasks to two. Neither profile sets
+`JULIA_CPU_THREADS`. Local-debug accepts only a null or two-worker limit;
+conflicting explicit limits are rejected. The pre-install guard checks native CPU detection, the
+selected worker expression and BLAS defaults for up to eight affinity sizes
+before the unchanged upstream suite. The coordinator and child processes used
+by threading tests are separate from the worker count.
+
+Production needs resource admission for all concurrent processes. The upstream
+launcher does not reduce its worker count according to available RAM; its
+optional RSS threshold recycles a worker after a test group completes. It does
+not prevent simultaneous memory peaks. CPU allocation and a memory limit alone
+do not establish that the full native suite fits that limit.
 
 A focused evaluation contract uses the selected nixpkgs source and mocks only
 the build/fetch dependencies:
@@ -86,9 +107,19 @@ nix-instantiate --store dummy:// --eval --strict --json nix/test-julia.nix \
   --argstr nixpkgs /absolute/path/to/pinned/nixpkgs
 ```
 
-This check compares the generated source, patching and install-check phases with
-the pinned upstream factory. It does not create derivations, fetch the archive,
-run Julia or establish that the Julia binary installs successfully.
+This check compares both profiles' generated source, patching and install-check
+phases with the pinned upstream factory, including default production behavior
+and invalid-profile rejection. It does not create derivations, fetch the archive,
+run Julia or establish that the Julia binary installs successfully. The guard
+can also run with an existing raw binary:
+
+```console
+julia --startup-file=no --threads=1 nix/tests/julia_cpu_budget.jl \
+  production-build native /absolute/path/to/upstream/julia/test
+```
+
+For `local-debug`, supply a test directory after applying the evaluated debug
+`postPatch`; the guard expects that profile's worker expression.
 
 The solver derivation and its installed wrapper pin `JULIA_SSL_CA_ROOTS_PATH`
 to the selected nixpkgs public CA bundle. `Pkg` initializes LibGit2 when reading

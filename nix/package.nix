@@ -1,5 +1,6 @@
 # Native Julia manifest and Git submodule inputs are supplied by the root project.
-{ pkgs, julia, preparedDepot, coreSrc, runnerSrc, environmentSrc }:
+{ pkgs, julia, preparedDepot, coreSrc, runnerSrc, environmentSrc, testProfile ? "production-build" }:
+assert builtins.elem testProfile [ "production-build" "local-debug" ];
 let caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 in
 pkgs.stdenvNoCC.mkDerivation {
@@ -21,7 +22,12 @@ pkgs.stdenvNoCC.mkDerivation {
     chmod -R u+w "$runtime"
     export JULIA_DEPOT_PATH="$out/share/depot:${preparedDepot}"
     export JULIA_PKG_OFFLINE=true JULIA_CPU_TARGET=generic
-    export JULIA_NUM_PRECOMPILE_TASKS=2 OPENBLAS_NUM_THREADS=1
+    ${pkgs.lib.optionalString (testProfile == "production-build") ''
+      case "$NIX_BUILD_CORES" in
+        ""|*[!0-9]*|0) echo "A positive Nix build CPU allocation is required" >&2; exit 1 ;;
+      esac
+    ''}
+    export JULIA_NUM_PRECOMPILE_TASKS=${if testProfile == "local-debug" then "2" else ''"$NIX_BUILD_CORES"''} OPENBLAS_NUM_THREADS=1
     ${julia}/bin/julia --startup-file=no --project="$runtime/julia" \
       -e 'using Pkg; Pkg.instantiate(; update_registry=false); using QCLNEGFRunner'
     makeWrapper ${julia}/bin/julia $out/bin/qcl-negf \

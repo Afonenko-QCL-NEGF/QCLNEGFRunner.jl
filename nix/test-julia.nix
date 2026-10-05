@@ -34,38 +34,83 @@ let
       sha256.x86_64-linux = "upstream-version-fixture";
     }) { };
   };
-  julia = import ./julia.nix { inherit pkgs; };
+  default = import ./julia.nix { inherit pkgs; };
+  production = import ./julia.nix { inherit pkgs; testProfile = "production-build"; };
+  localDebug = import ./julia.nix { inherit pkgs; testProfile = "local-debug"; };
+  productionBound = import ./julia.nix {
+    inherit pkgs;
+    testProfile = "production-build";
+    testWorkerLimit = 16;
+  };
   expected = callPackage (factory {
     version = "1.13.0";
     sha256.x86_64-linux = "8975da61c128a5e5ded3e719e868da8c8781deb7ad7913d37fb99be02a81904b";
   }) { };
-  same = field: julia.${field} == expected.${field};
+  same = julia: field: julia.${field} == expected.${field};
+  contract = julia:
+    assert lib.assertMsg (julia.version == expected.version && julia.src == expected.src)
+      "Julia source must use the immutable 1.13.0 URL and SHA-256";
+    assert lib.assertMsg (lib.hasPrefix expected.postPatch julia.postPatch)
+      "Julia 1.13.0 must retain the upstream stdlib patch";
+    assert lib.assertMsg (same julia "patches" && same julia "nativeBuildInputs"
+      && same julia "installPhase" && same julia "dontStrip" && same julia "dontAutoPatchelf")
+      "Julia must retain the pinned upstream binary patching and installation contract";
+    assert lib.assertMsg (julia.doInstallCheck
+      && lib.hasPrefix expected.preInstallCheck julia.preInstallCheck
+      && same julia "installCheckPhase")
+      "Julia must retain the pinned upstream install checks and version-dependent skip list";
+    assert lib.assertMsg (!(julia ? JULIA_CPU_THREADS))
+      "Test profiles must not override native Julia CPU detection";
+    true;
 in
-assert lib.assertMsg (julia.version == expected.version && julia.src == expected.src)
-  "Julia source must use the immutable 1.13.0 URL and SHA-256";
-assert lib.assertMsg (lib.hasPrefix expected.postPatch julia.postPatch)
-  "Julia 1.13.0 must retain the upstream stdlib patch before its worker-limit patch";
-assert lib.assertMsg (same "patches" && same "nativeBuildInputs" && same "installPhase"
-  && same "dontStrip" && same "dontAutoPatchelf")
-  "Julia must retain the pinned upstream binary patching and installation contract";
-assert lib.assertMsg (julia.doInstallCheck
-  && lib.hasPrefix expected.preInstallCheck julia.preInstallCheck
-  && same "installCheckPhase")
-  "Julia must retain the pinned upstream install checks and version-dependent skip list";
-assert lib.assertMsg (!(julia ? JULIA_CPU_THREADS))
-  "The install-check worker limit must not override native Julia CPU detection";
-assert lib.assertMsg (lib.hasInfix "--replace-fail" julia.postPatch
-  && lib.hasInfix "n = min(2, Sys.EFFECTIVE_CPU_THREADS, length(tests))" julia.postPatch)
-  "The version-pinned launcher patch must limit workers and fail on upstream mismatch";
+assert lib.assertMsg (default.postPatch == expected.postPatch)
+  "The default production profile must retain the upstream native worker count";
+assert lib.all contract [ default production localDebug productionBound ];
+assert lib.assertMsg (production.postPatch == expected.postPatch
+  && default.preInstallCheck == production.preInstallCheck)
+  "Explicit production and default must leave the upstream launcher unchanged";
+assert lib.assertMsg (lib.hasInfix "--replace-fail" localDebug.postPatch
+  && lib.hasInfix "n = min(2, Sys.EFFECTIVE_CPU_THREADS, length(tests))" localDebug.postPatch)
+  "Only local-debug must apply the version-pinned fail-on-mismatch worker limit";
+assert lib.assertMsg (lib.hasInfix "julia_cpu_budget.jl production-build" production.preInstallCheck
+  && lib.hasInfix "julia_cpu_budget.jl local-debug" localDebug.preInstallCheck)
+  "Each install-check guard must receive its selected test profile";
+assert lib.assertMsg (lib.hasInfix "--replace-fail" productionBound.postPatch
+  && lib.hasInfix "n = min(16, Sys.EFFECTIVE_CPU_THREADS, length(tests))" productionBound.postPatch
+  && lib.hasInfix "julia_cpu_budget.jl production-build 16" productionBound.preInstallCheck)
+  "An explicit production worker budget must cap only workers and reach the guard";
+assert lib.assertMsg (!(builtins.tryEval (import ./julia.nix { inherit pkgs; testProfile = "unknown"; })).success)
+  "Unknown Julia test profiles must be rejected";
+assert lib.all (limit: !(builtins.tryEval (import ./julia.nix {
+  inherit pkgs; testWorkerLimit = limit;
+})).success) [ 0 (-1) "16" ];
+assert !(builtins.tryEval (import ./julia.nix {
+  inherit pkgs; testProfile = "local-debug"; testWorkerLimit = 16;
+})).success;
+assert (import ./julia.nix {
+  inherit pkgs; testProfile = "local-debug"; testWorkerLimit = 2;
+}).postPatch == localDebug.postPatch;
 {
-  version = julia.version;
-  source = julia.src;
+  version = default.version;
+  source = default.src;
   patchStdlib = "v1.13";
   upstreamPatchingRetained = true;
-  upstreamInstallChecksRetained = julia.doInstallCheck;
+  upstreamInstallChecksRetained = default.doInstallCheck;
   upstreamPreInstallHookRetained = true;
-  testWorkerLimit = 2;
+  defaultProfile = "production-build";
   nativeCpuDetectionRetained = true;
-  # Expose the evaluated phase for a bounded check against the raw runtime.
-  postPatch = julia.postPatch;
+  profiles = {
+    production-build = {
+      testWorkerLimit = "Sys.EFFECTIVE_CPU_THREADS";
+      postPatch = production.postPatch;
+    };
+    local-debug = {
+      testWorkerLimit = 2;
+      postPatch = localDebug.postPatch;
+    };
+    production-bounded = {
+      testWorkerLimit = 16;
+      postPatch = productionBound.postPatch;
+    };
+  };
 }
