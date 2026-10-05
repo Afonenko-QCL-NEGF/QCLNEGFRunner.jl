@@ -71,6 +71,13 @@ and `src` with `overrideAttrs` on an existing `julia-bin` retains the original
 version in those phases. The upstream patching, installation and install checks
 remain enabled.
 
+The pinned Julia 1.13.0 test launcher has a local, fail-on-mismatch patch that
+limits parallel test worker processes to two while retaining native CPU and
+affinity detection. Its pre-install guard checks that detection, the patched
+worker-selection expression and BLAS defaults for up to eight affinity sizes
+before the full upstream suite. The limit counts test workers; the coordinator
+and child processes used by threading tests are separate.
+
 A focused evaluation contract uses the selected nixpkgs source and mocks only
 the build/fetch dependencies:
 

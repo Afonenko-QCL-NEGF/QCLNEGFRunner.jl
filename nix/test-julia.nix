@@ -43,8 +43,8 @@ let
 in
 assert lib.assertMsg (julia.version == expected.version && julia.src == expected.src)
   "Julia source must use the immutable 1.13.0 URL and SHA-256";
-assert lib.assertMsg (same "postPatch")
-  "Julia 1.13.0 must regenerate the upstream stdlib patch path, not retain v1.12";
+assert lib.assertMsg (lib.hasPrefix expected.postPatch julia.postPatch)
+  "Julia 1.13.0 must retain the upstream stdlib patch before its worker-limit patch";
 assert lib.assertMsg (same "patches" && same "nativeBuildInputs" && same "installPhase"
   && same "dontStrip" && same "dontAutoPatchelf")
   "Julia must retain the pinned upstream binary patching and installation contract";
@@ -52,8 +52,11 @@ assert lib.assertMsg (julia.doInstallCheck
   && lib.hasPrefix expected.preInstallCheck julia.preInstallCheck
   && same "installCheckPhase")
   "Julia must retain the pinned upstream install checks and version-dependent skip list";
-assert lib.assertMsg (julia.JULIA_CPU_THREADS == "2")
-  "Julia's upstream test launcher must use the selected two-worker CPU limit";
+assert lib.assertMsg (!(julia ? JULIA_CPU_THREADS))
+  "The install-check worker limit must not override native Julia CPU detection";
+assert lib.assertMsg (lib.hasInfix "--replace-fail" julia.postPatch
+  && lib.hasInfix "n = min(2, Sys.EFFECTIVE_CPU_THREADS, length(tests))" julia.postPatch)
+  "The version-pinned launcher patch must limit workers and fail on upstream mismatch";
 {
   version = julia.version;
   source = julia.src;
@@ -61,5 +64,8 @@ assert lib.assertMsg (julia.JULIA_CPU_THREADS == "2")
   upstreamPatchingRetained = true;
   upstreamInstallChecksRetained = julia.doInstallCheck;
   upstreamPreInstallHookRetained = true;
-  testWorkerLimit = julia.JULIA_CPU_THREADS;
+  testWorkerLimit = 2;
+  nativeCpuDetectionRetained = true;
+  # Expose the evaluated phase for a bounded check against the raw runtime.
+  postPatch = julia.postPatch;
 }
