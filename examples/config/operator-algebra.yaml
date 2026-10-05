@@ -29,8 +29,9 @@ policies:
     mode: independent
     invalid_predecessor: stop_branch
   on_child_failure: continue
-outputs:
-  full_state: false
-  projections: false
-  optical: false
-  intermediate_history: 64
+output:
+  archive:
+    full_final: true
+    projections: false
+    optical: false
+    intermediate_history: 64

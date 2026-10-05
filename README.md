@@ -35,6 +35,7 @@ Runner depends on core.
 
 ```console
 deno task check
+deno task test:depot
 deno task test
 deno task docs
 ```
@@ -44,6 +45,100 @@ persistence, exact restart, adapter boundaries and public command-line behavior.
 The [platform repository](https://github.com/Afonenko-QCL-NEGF/qcl-negf-platform) owns
 NixOS installation and trusted local GitHub Actions runners. Source repositories
 remain on GitHub.
+
+The root workspace's `solver:depot` command prepares an empty dependency depot
+with exactly Julia 1.13.0 and its committed Julia manifest. Preparation captures
+all artifacts selected for the host, including lazy artifacts, and verifies their
+tree hashes before retaining the depot. It also retains the captured registry:
+Julia Pkg checks for a registry before checking whether packages are already
+installed. Registry, package and artifact bytes all enter the root command's
+SHA-256 archive; temporary compilation, logs and scratch caches are removed.
+The Nix package uses this complete input with registry updates disabled.
+
+Generate a fresh depot after committing the runner change and its root gitlink.
+The root command binds the depot to that source revision and Julia manifest hash;
+an older archive without its registry cannot supply this build. Preparation needs
+network access and temporary disk space for all selected artifacts and the archive.
+`test:depot` checks capture/pruning with a fake Julia process; it runs no Julia,
+scientific calculation, dependency download or Nix build. A real sandbox build is
+still required to establish the complete runtime behavior.
+
+The Nix Julia package constructs the binary derivation with the release's pinned
+nixpkgs `pkgs/development/compilers/julia/generic-bin.nix` factory and the immutable
+Julia 1.13.0 archive hash. Passing the version to that factory regenerates its
+version-dependent stdlib patch paths and test selection. Changing only `version`
+and `src` with `overrideAttrs` on an existing `julia-bin` retains the original
+version in those phases. The upstream patching, installation and install checks
+remain enabled.
+
+Both `nix/julia.nix` and `nix/package.nix` accept
+`testProfile ? "production-build"`. The default production profile retains the
+upstream Julia 1.13.0 test launcher, which uses the effective CPU count up to the
+number of selected tests. Package precompilation uses the positive
+`NIX_BUILD_CORES` allocation. Pass the same profile to both factories.
+
+`nix/julia.nix` also accepts `testWorkerLimit ? null`. A positive integer applies
+a version-bound worker cap for production without changing native CPU globals.
+The caller must admit that limit using its CPU/RAM budget; for example,16 workers
+at an observed2GiB envelope each plus4GiB reserve require approximately36GiB.
+This is an admission heuristic, not proof that later test groups cannot peak
+higher. With `null`, production retains the upstream launcher.
+
+Explicit `testProfile = "local-debug"` applies a version-bound,
+fail-on-mismatch launcher patch limiting parallel test worker processes to two,
+and sets package precompilation tasks to two. Neither profile sets
+`JULIA_CPU_THREADS`. Local-debug accepts only a null or two-worker limit;
+conflicting explicit limits are rejected. The pre-install guard checks native CPU detection, the
+selected worker expression and BLAS defaults for up to eight affinity sizes
+before the unchanged upstream suite. The coordinator and child processes used
+by threading tests are separate from the worker count.
+
+Production needs resource admission for all concurrent processes. The upstream
+launcher does not reduce its worker count according to available RAM; its
+optional RSS threshold recycles a worker after a test group completes. It does
+not prevent simultaneous memory peaks. CPU allocation and a memory limit alone
+do not establish that the full native suite fits that limit.
+
+A focused evaluation contract uses the selected nixpkgs source and mocks only
+the build/fetch dependencies:
+
+```console
+nix-instantiate --store dummy:// --eval --strict --json nix/test-julia.nix \
+  --argstr nixpkgs /absolute/path/to/pinned/nixpkgs
+```
+
+This check compares both profiles' generated source, patching and install-check
+phases with the pinned upstream factory, including default production behavior
+and invalid-profile rejection. It does not create derivations, fetch the archive,
+run Julia or establish that the Julia binary installs successfully. The guard
+can also run with an existing raw binary:
+
+```console
+julia --startup-file=no --threads=1 nix/tests/julia_cpu_budget.jl \
+  production-build native /absolute/path/to/upstream/julia/test
+```
+
+For `local-debug`, supply a test directory after applying the evaluated debug
+`postPatch`; the guard expects that profile's worker expression.
+
+The solver derivation and its installed wrapper pin `JULIA_SSL_CA_ROOTS_PATH`
+to the selected nixpkgs public CA bundle. `Pkg` initializes LibGit2 when reading
+Git configuration during cold precompilation, including in offline mode.
+Without this explicit path, stdenv's `SSL_CERT_FILE=/no-cert-file.crt` reaches
+LibGit2 and can stop the build before the scientific runtime loads. Certificate
+verification and offline mode remain enabled; no private certificates enter
+the package.
+
+```console
+nix-instantiate --store dummy:// --eval --strict --json nix/test-package.nix \
+  --argstr nixpkgs /absolute/path/to/pinned/nixpkgs
+```
+
+This pure evaluation checks the actual derivation's build environment, retained
+CA store reference, runtime wrapper and offline/install-check policy. Its source
+and depot fixtures are not realized. It does not load Julia, initialize LibGit2
+or establish that solver packaging succeeds; a bounded sandbox smoke check and
+the authorized package build remain necessary before deployment.
 
 For coordinated development from adjacent checkouts, create a separate integration
 environment without rewriting either package project:

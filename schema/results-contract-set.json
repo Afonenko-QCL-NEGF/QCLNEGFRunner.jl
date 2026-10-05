@@ -4,7 +4,7 @@
   "native_schema_version": "4.0",
   "commit": "qcl-negf.artifact-commit.v2",
   "pointer": "qcl-negf.artifact-pointer.v2",
-  "export": "qcl-negf.science-export.v2",
+  "export": "qcl-negf.science-export.v3",
   "performance": "qcl-negf.performance.v2",
   "series": "qcl-negf-series-result-v3",
   "history_index": "qcl-negf-scientific-history-index-v2",
@@ -16,6 +16,11 @@
   "psd_history": "qcl-negf-psd-history-v2",
   "packed_witnesses": "qcl-negf-psd-selected-packed-v2",
   "artifacts": [
+    {
+      "role": "execution.progress",
+      "media_type": "application/json",
+      "schemas": ["qcl-negf-execution-progress-v1"]
+    },
     {
       "role": "model",
       "media_type": "application/json",
@@ -73,7 +78,10 @@
   "threshold_crossings": "qcl-negf-scba-threshold-crossings-v1",
   "witness_selection_policy": "per-attempt-first-first-positive-ratio-worst-last-v1",
   "telemetry_compaction_proof": "qcl-negf.telemetry-compaction-proof.v1",
-  "export_transport": "qcl-negf.export-parts.v1",
-  "export_part": "qcl-negf.export-part.v1",
-  "maximum_export_part_bytes": 200000000
+  "export_transport": "qcl-negf.export-archive.v1",
+  "diagnostic_export": "qcl-negf.operational-evidence.v2",
+  "legacy_export_transport": "qcl-negf.export-parts.v1",
+  "legacy_export_part": "qcl-negf.export-part.v1",
+  "legacy_maximum_export_part_bytes": 200000000,
+  "export_receipt": "export-receipt.schema.json"
 }

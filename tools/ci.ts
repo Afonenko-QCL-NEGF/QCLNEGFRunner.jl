@@ -48,7 +48,7 @@ switch (command) {
       throw new Error("Dependency depot must be empty");
     }
     const before = await Deno.readFile(`${project}/Manifest.toml`);
-    await run([`--project=${project}`, "-e", "using Pkg; Pkg.instantiate()"], {
+    await run([`--project=${project}`, `${root}/tools/prepare_depot.jl`], {
       JULIA_DEPOT_PATH: depot,
       JULIA_CPU_TARGET: "generic",
       JULIA_PKG_PRECOMPILE_AUTO: "0",
@@ -57,7 +57,10 @@ switch (command) {
     if (before.length !== after.length || before.some((value, index) => value !== after[index])) {
       throw new Error("Dependency preparation changed the committed native manifest");
     }
-    for (const name of ["compiled", "logs", "registries", "scratchspaces"]) {
+    // Pkg.instantiate checks for registries before accepting installed packages.
+    // Keep the captured registry inside the hashed depot; an offline sandbox
+    // must never bootstrap an unpinned registry from the network.
+    for (const name of ["compiled", "logs", "scratchspaces"]) {
       try {
         await Deno.remove(`${depot}/${name}`, { recursive: true });
       } catch (error) {

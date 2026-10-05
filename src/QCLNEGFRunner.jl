@@ -2,6 +2,7 @@ module QCLNEGFRunner
 using LinearAlgebra
 using Logging
 using SHA
+import Downloads
 using FFTW
 using Unitful
 using YAML
@@ -16,6 +17,7 @@ include("infrastructure/persistence/hdf5_backend.jl")
 include("infrastructure/persistence/hdf5.jl")
 include("infrastructure/telemetry/progress.jl")
 include("infrastructure/persistence/light_results.jl")
+include("infrastructure/telemetry/sender.jl")
 include("presentation/expert_report.jl")
 include("infrastructure/persistence/production_state.jl")
 include("infrastructure/persistence/point_artifacts.jl")

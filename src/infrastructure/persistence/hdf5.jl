@@ -272,6 +272,12 @@ function _write_checkpoint(
     artifact_role::String = "recovery",
     identity::AbstractDict = Dict{String,Any}(),
 )
+    recorded=get(solution.observables,:restart_contract,nothing)
+    recorded===nothing && (recorded=solution.scba.restart_contract)
+    requested=algorithms===nothing ? nothing : _solver_restart_contract(solution.options,algorithms)
+    recorded!==nothing && requested!==nothing && recorded!=requested &&
+        throw(ArgumentError("explicit algorithm contract differs from executed state"))
+    actual_contract=requested===nothing ? recorded : requested
     problem = solution.problem
     h5open(path, "w") do file
         metadata = create_group(file, "metadata")
@@ -303,9 +309,8 @@ function _write_checkpoint(
         attributes(metadata)["julia_threads"] = Base.Threads.nthreads(:default)
         attributes(metadata)["blas_threads"] = BLAS.get_num_threads()
         attributes(metadata)["runtime_architecture"] = string(Sys.ARCH)
-        contract =
-            algorithms === nothing ? get(solution.observables, :restart_contract, nothing) :
-            _solver_restart_contract(solution.options, algorithms)
+        contract = actual_contract
+        attributes(metadata)["algorithm_provenance"] = contract===nothing ? "unknown" : "recorded"
         if contract !== nothing
             metadata["restart_contract_yaml"] = YAML.write(contract)
         end

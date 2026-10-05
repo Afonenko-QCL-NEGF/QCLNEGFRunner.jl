@@ -184,6 +184,7 @@ QCLNEGFRunner.QCLScientificWorkflow.load_scientific_plan
 QCLNEGFRunner.QCLScientificWorkflow.resolve_scientific_plan
 QCLNEGFRunner.QCLScientificWorkflow.VoltageContinuation
 QCLNEGFRunner.QCLScientificWorkflow.ScientificPoint
+QCLNEGFRunner.QCLScientificWorkflow.ScientificOutputs
 QCLNEGFRunner.QCLScientificWorkflow.execute_scientific_plan
 QCLNEGFRunner.QCLScientificWorkflow.write_scientific_plan
 QCLNEGFRunner.QCLScientificWorkflow.differential_conductance
@@ -194,8 +195,8 @@ QCLNEGFRunner.configured_resource_plan
 
 ## Numerical solve adapter
 
-`QCLNEGF.solve_production` accepts an in-memory checkpoint callback. Runner
-adds durable checkpoint paths and compatible restart handling.
+`QCLNEGF.solve_production` accepts an in-memory checkpoint callback. Runner adds durable checkpoint
+paths and compatible restart handling.
 
 ```@docs
 QCLNEGFRunner.solve_production

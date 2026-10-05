@@ -24,6 +24,9 @@ function load_scientific_plan(data::AbstractDict)
             String(k)=>String.(v) for
             (k, v) in get(get(item, "provenance", Dict()), "sources", Dict())
         )
+        policy=_parse_scientific_outputs(_scientific_output_input(item))
+        get(get(configuration,"output",Dict()),"save_full_state",nothing)==true ||
+            throw(ArgumentError("resolved scientific configuration conflicts with mandatory full_final archive"))
         config=_resolve_configuration(
             configuration,
             ConfigurationProvenance(String[], String[], sources),
@@ -44,7 +47,7 @@ function load_scientific_plan(data::AbstractDict)
                 String.(item["point_ids"]),
                 config,
                 _parse_scientific_policies(item["policies"]),
-                _parse_scientific_outputs(item["outputs"]),
+                policy,
                 Int(item["estimated_peak_bytes"]),
                 Symbol(item["purpose"]),
                 Int(item["repetition"]),

@@ -44,7 +44,7 @@ function _scientific_pause_data(
     return data
 end
 
-function _scientific_validate_checkpoint_identity(commit, old, point, fingerprint)
+function _scientific_validate_checkpoint_identity(commit, old, point, fingerprint; acknowledged_fallback=false)
     source_attempt = get(old.data, "checkpoint_source_attempt", old.attempt)
     if haskey(old.data, "checkpoint_source_attempt")
         old.status === :paused &&
@@ -58,6 +58,12 @@ function _scientific_validate_checkpoint_identity(commit, old, point, fingerprin
             throw(ArgumentError("invalid historical checkpoint provenance"))
     end
     identity = commit["identity"]
+    if acknowledged_fallback
+        actual=get(identity,"attempt",nothing)
+        actual isa Integer && !(actual isa Bool) && 0<actual<=old.attempt ||
+            throw(ArgumentError("fallback checkpoint source attempt differs"))
+        source_attempt=actual
+    end
     expected = Dict(
         "point_id" => point.id,
         "execution_id" => point.execution_id,
@@ -101,6 +107,10 @@ function _point_result(
     data = Dict{String,Any}(),
     postprocessing = Dict{String,Any}(),
 )
+    if status in (:skipped,:failed,:cancelled) && get(data,"full_state",nothing)===nothing
+        data["full_state"]=nothing
+        data["state_absence_reason"]=status===:skipped ? "solver_not_run" : "solver_did_not_publish_a_final_state"
+    end
     return ScientificPointResult(
         point.id,
         point.execution_id,
@@ -275,6 +285,8 @@ function _scientific_charge_observables(solution)
         )
     end
     try
+        isdefined(@__MODULE__,:_occupied_energy_quantiles) ||
+            throw(ArgumentError("occupied spectral quantile estimator is unavailable in this release"))
         quantiles=_occupied_energy_quantiles(
             problem.grids.ε,
             problem.grids.wᴱ,
@@ -357,18 +369,98 @@ function _scientific_progress(root, point, attempt, status, artifact_root; event
     end
 end
 
+function _scientific_execution_progress(records,active,root,fingerprint)
+    completed=Any[]
+    for record in records
+        record.execution_id==active.execution_id && record.id!=active.id && record.status===:completed || continue
+        commit_path=get(record.data,"result_commit",nothing)
+        commit_path===nothing && throw(ArgumentError("completed predecessor has no archive receipt"))
+        absolute=joinpath(root,commit_path)
+        receipt=verify_recovery_receipt(absolute)
+        commit=verify_point_artifacts(absolute)
+        get(commit,"storage_class",nothing)=="archive" || throw(ArgumentError("completed predecessor has no immutable archive"))
+        point=YAML.load(sprint(_light_json,_scientific_result_dict(record));dicttype=Dict{String,Any})
+        point["data"]=Dict(key=>deepcopy(value) for (key,value) in point["data"] if key in
+            ("result_commit","full_state","analysis_physics","optical"))
+        point["data"]["artifact_root"]=replace(relpath(dirname(absolute),root),'\\'=>'/')
+        files=Any[]
+        names=String["commit.json","receipt.json"]
+        append!(names,String[a["path"] for a in commit["artifacts"]])
+        optical=get(record.data,"optical",nothing)
+        optical===nothing || push!(names,"optical.h5")
+        for name in unique(names)
+            path=joinpath(dirname(absolute),name)
+            push!(files,Dict("path"=>name,"bytes"=>filesize(path),"sha256"=>bytes2hex(open(sha256,path))))
+        end
+        push!(completed,Dict("point"=>point,
+            "final_commit"=>replace(relpath(absolute,joinpath(root,"archive")),'\\'=>'/'),
+            "receipt"=>Dict(key=>receipt[key] for key in ("identity","state_id","state_sequence","commit_sha256")),
+            "files"=>files))
+    end
+    return Dict{String,Any}("schema"=>"qcl-negf-execution-progress-v1","contract_set"=>"qcl-negf.results.v1",
+        "plan_fingerprint"=>fingerprint,"execution_id"=>active.execution_id,"active_point_id"=>active.id,
+        "completed_points"=>completed)
+end
+function _import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget::Int=64*1024^3)
+    entries=get(progress,"completed_points",nothing)
+    entries isa AbstractVector || throw(ArgumentError("execution progress has no completed-point index"))
+    if isempty(entries)
+        _verify_prior_final_dependencies(progress,joinpath(root,"archive");byte_budget=archive_byte_budget,reserve_bytes=policy.reserve_bytes)
+        return ScientificPointResult[]
+    end
+    archive_bundle===nothing && throw(ArgumentError("recovery requires --archive-bundle for completed prior finals"))
+    source_root=joinpath(abspath(archive_bundle),"archive")
+    closure=_verify_prior_final_dependencies(progress,source_root;byte_budget=archive_byte_budget,reserve_bytes=policy.reserve_bytes)
+    validated=Tuple{String,String,Any}[]
+    records=ScientificPointResult[]
+    for dependency in closure.dependencies
+        target=joinpath(root,"archive",dirname(dependency.relative))
+        ispath(target) && throw(ArgumentError("prior archive destination already exists"))
+        push!(validated,(dependency.source,target,dependency.entry))
+        push!(records,_scientific_resume_result(dependency.entry["point"]))
+    end
+    mkpath(root)
+    _check_storage_free(root,closure.bytes+policy.reserve_bytes)
+    for (source,target,entry) in validated
+        mkpath(dirname(target))
+        temporary=mktempdir(dirname(target);prefix="pending-import-")
+        try
+            for file in entry["files"]
+                cp(joinpath(source,file["path"]),joinpath(temporary,file["path"]);follow_symlinks=false)
+            end
+            verify_recovery_receipt(joinpath(temporary,"commit.json"))
+            for (_,_,files) in walkdir(temporary), name in files
+                _sync_artifact_file(joinpath(temporary,name))
+            end
+            _sync_artifact_directory(temporary)
+            mv(temporary,target;force=false)
+            _sync_artifact_directory(dirname(target))
+        finally
+            isdir(temporary) && rm(temporary;recursive=true,force=true)
+        end
+    end
+    return records
+end
+
 """Execute exactly the frozen Julia plan; one execution uses the shared machine budget.
 
-The stationary record and final projection are committed before optional optical
-analysis. A retry is a separate attempt. Only final point data are resumable;
-intermediate display projections never seed another physical operating point.
+Every returned stationary state owns one final archive before optional optical
+analysis. A pause owns a verified recovery bundle. Retries preserve cumulative
+coordinates and completed-point receipts; display projections never seed a
+physical operating point.
 """
 function execute_scientific_plan(
     plan::ScientificPlan,
     output_directory::AbstractString;
     resume::Bool = true,
     execution_id::Union{Nothing,AbstractString} = nothing,
+    attempt::Union{Nothing,Int} = nothing,
+    recovery_bundle::Union{Nothing,AbstractString} = nothing,
+    telemetry_sink::Union{Nothing,Function} = nothing,
+    archive_bundle::Union{Nothing,AbstractString} = nothing,
+    archive_byte_budget::Int = 64*1024^3,
 )
+    archive_byte_budget>0 || throw(ArgumentError("archive byte budget must be positive"))
     # Re-decode the frozen raw contract, rejecting mutation and stale typed aliases.
     plan=load_scientific_plan(scientific_plan_dict(plan))
     selected_executions=execution_id===nothing ? plan.executions :
@@ -378,6 +470,9 @@ function execute_scientific_plan(
     selected_points=[p for p in plan.points if p.execution_id in selected_ids]
     root=abspath(output_directory)
     mkpath(root)
+    attempt===nothing || attempt>0 || throw(ArgumentError("attempt must be positive"))
+    requested_attempt=attempt
+    _check_storage_free(root,_minimum_scientific_output_bytes(plan)+maximum(e.outputs.recovery.reserve_bytes for e in selected_executions))
     plan_path=joinpath(root, "scientific_plan.json")
     if isfile(plan_path)
         stored=load_scientific_plan(plan_path)
@@ -406,6 +501,40 @@ function execute_scientific_plan(
                 (existing[record.id]=record)
         end
     end
+    inherited_history=Dict{String,String}()
+    if recovery_bundle!==nothing
+        requested_attempt===nothing && throw(ArgumentError("recovery import requires an explicit new attempt"))
+        source=abspath(recovery_bundle)
+        receipt=verify_recovery_receipt(joinpath(source,"commit.json"))
+        identity=receipt["identity"]
+        get(identity,"plan_fingerprint",nothing)==plan.fingerprint || throw(ArgumentError("recovery scientific plan differs"))
+        point=only(filter(p->p.id==get(identity,"point_id",nothing),selected_points))
+        point.execution_id==get(identity,"execution_id",nothing) || throw(ArgumentError("recovery execution identity differs"))
+        source_attempt=Int(identity["attempt"])
+        requested_attempt>source_attempt || throw(ArgumentError("new attempt must exceed recovery source attempt"))
+        target=joinpath(root,"recovery",point.execution_id,point.id,"imported-$(source_attempt)")
+        ispath(target) && throw(ArgumentError("recovery import destination already exists"))
+        policy=only(e.outputs.recovery for e in selected_executions if e.id==point.execution_id)
+        progress_path=joinpath(source,"execution_progress.json")
+        isfile(progress_path) || throw(ArgumentError("portable recovery lacks execution_progress.json"))
+        progress=YAML.load_file(progress_path;dicttype=Dict{String,Any})
+        get(progress,"identity",nothing)==identity && get(progress,"active_point_id",nothing)==point.id &&
+        get(progress,"plan_fingerprint",nothing)==plan.fingerprint || throw(ArgumentError("portable recovery progress identity differs"))
+        imported_records=_import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget)
+        for record in imported_records
+            haskey(existing,record.id) && throw(ArgumentError("imported completed point already exists"))
+            existing[record.id]=record
+            push!(history,record)
+        end
+        _check_storage_budget([joinpath(root,"executions"),joinpath(root,"recovery")],policy.byte_budget,policy.reserve_bytes,_storage_bytes([source]))
+        mkpath(dirname(target))
+        cp(source,target;follow_symlinks=false)
+        verify_recovery_receipt(joinpath(target,"commit.json"))
+        commit_relative=replace(relpath(joinpath(target,"commit.json"),root),'\\'=>'/')
+        data=Dict{String,Any}("result_commit"=>commit_relative,"full_state"=>replace(relpath(joinpath(target,"physics.h5"),root),'\\'=>'/'))
+        existing[point.id]=_point_result(point,source_attempt,_initialization("checkpoint"),:paused,:unconverged,false;data)
+        isfile(joinpath(target,"history.h5")) && (inherited_history[point.id]=joinpath(target,"history.h5"))
+    end
     points=Dict(p.id=>p for p in plan.points)
     function result_document(status)
         document=_series_document(plan, results, status)
@@ -425,7 +554,7 @@ function execute_scientific_plan(
         for point in selected_points
             point.id in present && continue
             old=get(existing, point.id, nothing)
-            attempt=old===nothing ? 1 : old.attempt+1
+            attempt=requested_attempt===nothing ? (old===nothing ? 1 : old.attempt+1) : requested_attempt
             record=_point_result(
                 point,
                 attempt,
@@ -478,7 +607,7 @@ function execute_scientific_plan(
             for point_id in execution.point_ids
                 point=points[point_id]
                 old=get(existing, point_id, nothing)
-                attempt=old===nothing ? 1 : old.attempt+1
+                attempt=requested_attempt===nothing ? (old===nothing ? 1 : old.attempt+1) : requested_attempt
                 if resume && old!==nothing && old.status===:completed
                     all(
                         pair->first(pair)=="artifact_root" ?
@@ -585,12 +714,25 @@ function execute_scientific_plan(
         previous_id=nothing
         stored_scba, stored_outer=preparation_error===nothing ?
                                   scientific_history_counts(execution_dir) : (0, 0)
+        archive_history=joinpath(root,"archive",execution.id)
+        if isdir(archive_history)
+            for (directory,_,files) in walkdir(archive_history)
+                "history.h5" in files || continue
+                h5open(joinpath(directory,"history.h5"),"r") do file
+                    for (kind,previous_count) in (("scba",stored_scba),("outer",stored_outer))
+                        column=file[kind*"/sequence"]
+                        value=length(column)==0 ? 0 : Int(column[length(column)])
+                        kind=="scba" ? (stored_scba=max(stored_scba,value)) : (stored_outer=max(stored_outer,value))
+                    end
+                end
+            end
+        end
         scba_count=Ref(stored_scba)
         outer_count=Ref(stored_outer)
         for point_id in execution.point_ids
             point=points[point_id]
             old=get(existing, point_id, nothing)
-            attempt=old===nothing ? 1 : old.attempt+1
+            attempt=requested_attempt===nothing ? (old===nothing ? 1 : old.attempt+1) : requested_attempt
             initialization=_initialization("cold")
             if resume &&
                old!==nothing &&
@@ -600,7 +742,7 @@ function execute_scientific_plan(
                 # Completed independent points can be resumed without a solver state.
                 all(
                     pair->first(pair)=="artifact_root" ? isdir(joinpath(root, last(pair))) :
-                          last(pair)===nothing || isfile(joinpath(root, last(pair))),
+                          first(pair) in ("state_absence_reason","resume_kind","pause_reason","recovery_origin","checkpoint_source_attempt") || last(pair)===nothing || isfile(joinpath(root, last(pair))),
                     pairs(old.data),
                 ) || throw(ArgumentError("saved final artifacts missing for $point_id"))
                 commit=get(old.data, "result_commit", nothing)
@@ -673,6 +815,9 @@ function execute_scientific_plan(
                       old!==nothing &&
                       old.status in (:paused, :running, :failed) &&
                       get(old.data, "full_state", nothing)!==nothing
+            if resume && old!==nothing && old.status in (:paused,:running) && !restoring
+                throw(ArgumentError("unfinished point has no validated recovery; explicit fresh execution is required"))
+            end
             if restoring
                 initialization=_initialization(
                     "checkpoint";
@@ -750,6 +895,7 @@ function execute_scientific_plan(
             )
             solution=nothing
             reporter=nothing
+            telemetry_sender=nothing
             history_recorder=nothing
             latest_commit=Ref{Union{Nothing,String}}(
                 restoring &&
@@ -772,17 +918,22 @@ function execute_scientific_plan(
                     iteration = 0,
                     total = 1,
                 )
-                event_sink=_progress_event_sink(
-                    reporter;
-                    solver_event_observer = event->_scientific_progress(
-                        root,
-                        point,
-                        attempt,
-                        :running,
-                        directory;
-                        event,
-                    ),
-                )
+                if execution.outputs.telemetry.enabled && telemetry_sink!==nothing
+                    telemetry_sender=ScalarTelemetrySender(telemetry_sink;capacity=execution.outputs.telemetry.buffer_events)
+                end
+                function observe_solver_event(event)
+                    if telemetry_sender!==nothing
+                        attributes=Dict{String,Any}("point_id"=>point.id,"execution_id"=>execution.id,
+                            "attempt"=>attempt,"stage"=>String(event.stage),"iteration"=>event.iteration,
+                            "total"=>event.total,"message"=>event.message,
+                            "metrics"=>Dict(String(m.name)=>Dict("value"=>m.value,"unit"=>m.unit) for m in event.metrics))
+                        emit_telemetry!(telemetry_sender,Dict("schema"=>"qcl-runtime-event-v1",
+                            "event"=>String(event.action),"name"=>event.label,"status"=>String(event.status),
+                            "timestamp_unix_seconds"=>time(),"attributes"=>attributes))
+                    end
+                    _scientific_progress(root,point,attempt,:running,directory;event)
+                end
+                event_sink=_progress_event_sink(reporter;solver_event_observer=observe_solver_event)
                 runtime_options=with_production_options(
                     config.production;
                     event_sink,
@@ -799,14 +950,24 @@ function execute_scientific_plan(
                       retarget_production_cache(base_cache, problem)
                 restart=nothing
                 if restoring
-                    recovery=joinpath(root, old.data["full_state"])
-                    source_commit =
-                        verify_point_artifacts(joinpath(root, old.data["result_commit"]))
+                    source_path=joinpath(root,old.data["result_commit"])
+                    recovery_directory=joinpath(root,"recovery",execution.id,point.id)
+                    if isfile(joinpath(recovery_directory,"current.json"))
+                        source_path=load_recovery_commit(directory;recovery_root=recovery_directory)
+                    else
+                        verify_recovery_receipt(source_path)
+                    end
+                    recovery=joinpath(dirname(source_path),"physics.h5")
+                    source_commit=verify_point_artifacts(source_path)
+                    initialization=_initialization("checkpoint";checkpoint=replace(relpath(recovery,root),'\\'=>'/'))
+                    isfile(joinpath(dirname(source_path),"history.h5")) &&
+                        (inherited_history[point.id]=joinpath(dirname(source_path),"history.h5"))
                     _scientific_validate_checkpoint_identity(
                         source_commit,
                         old,
                         point,
-                        plan.fingerprint,
+                        plan.fingerprint;
+                        acknowledged_fallback=source_path!=joinpath(root,old.data["result_commit"]),
                     )
                     saved_inputs=joinpath(dirname(recovery), "resolved_configuration.json")
                     isfile(saved_inputs) || throw(
@@ -862,6 +1023,17 @@ function execute_scientific_plan(
                     "attempt"=>attempt,
                     "plan_fingerprint"=>plan.fingerprint,
                 )
+                if haskey(inherited_history,point.id)
+                    inherited=joinpath(directory,"inherited-history.h5")
+                    cp(inherited_history[point.id],inherited;force=false)
+                    inherited_history[point.id]=inherited
+                    h5open(inherited,"r") do file
+                        for (kind,counter) in (("scba",scba_count),("outer",outer_count))
+                            sequences=read(file[kind*"/sequence"])
+                            isempty(sequences) || (counter[]=max(counter[],maximum(sequences)))
+                        end
+                    end
+                end
                 history_recorder=ScientificHistoryRecorder(
                     directory,
                     identity,
@@ -875,7 +1047,11 @@ function execute_scientific_plan(
                     row,
                     source,
                 )
-                checkpoint_clock=CheckpointDeadline()
+                recovery_policy=execution.outputs.recovery
+                recovery_directory=joinpath(root,"recovery",execution.id,point.id)
+                archive_directory=joinpath(root,"archive",execution.id,point.id)
+                operational_directories=[joinpath(root,"executions"),joinpath(root,"recovery")]
+                checkpoint_clock=CheckpointDeadline(;interval_seconds=recovery_policy.interval_seconds)
                 function durable_state(state; analysis = true)
                     state.observables[:representation_preflight]=coverage
                     state.observables[:model_capabilities]=model_capabilities(
@@ -883,7 +1059,8 @@ function execute_scientific_plan(
                         config.algorithms,
                     )
                     flush_scientific_history!(history_recorder)
-                    history_paths=scientific_history_sources(dirname(directory))
+                    history_paths=scientific_history_sources(haskey(inherited_history,point.id) ? directory : dirname(directory))
+                    haskey(inherited_history,point.id) && pushfirst!(history_paths,inherited_history[point.id])
                     commit=commit_point_artifacts(
                         directory,
                         state;
@@ -896,9 +1073,20 @@ function execute_scientific_plan(
                                           (:running, :running_scba, :snapshot) ? "running" :
                                           "completed",
                         checkpoint_metadata = checkpoint_policy(checkpoint_clock),
+                        storage_class = :recovery,
+                        recovery_root = recovery_directory,
+                        retain_generations = recovery_policy.retain_generations,
+                        byte_budget = recovery_policy.byte_budget,
+                        reserve_bytes = recovery_policy.reserve_bytes,
+                        operational_roots = operational_directories,
+                        state_sequence = _scientific_next_state_sequence(recovery_directory),
+                        execution_progress = _scientific_execution_progress(results,point,root,plan.fingerprint),
                     )
                     checkpoint_completed!(checkpoint_clock)
                     latest_commit[]=commit
+                    for name in readdir(recovery_directory)
+                        startswith(name,"imported-") && rm(joinpath(recovery_directory,name);recursive=true)
+                    end
                     current_data=Dict{String,Any}(
                         "artifact_root"=>replace(relpath(directory, root), '\\'=>'/'),
                         "result_commit"=>replace(relpath(commit, root), '\\'=>'/'),
@@ -920,8 +1108,10 @@ function execute_scientific_plan(
                     index===nothing ? push!(results, running_record) :
                     (results[index]=running_record)
                     publish()
-                    isfile(joinpath(root, "control", "pause.json")) &&
+                    if pause_requested(root,identity)
+                        write_pause_receipt(root,commit,identity;archive_byte_budget)
                         throw(_ScientificPause(commit))
+                    end
                     return nothing
                 end
                 function observer(state)
@@ -929,11 +1119,12 @@ function execute_scientific_plan(
                     outer=length(state.outer_history)
                     cadence=config.output.snapshot_every_outer
                     cadence>0 && (outer==1 || outer%cadence==0) || return
-                    durable_state(state)
+                    recovery_policy.enabled && durable_state(state)
                 end
                 function checkpoint_request(context)
+                    pause_requested(root,identity) && return true
+                    recovery_policy.enabled || return false
                     checkpoint_due(checkpoint_clock) && return true
-                    isfile(joinpath(root, "control", "pause.json")) && return true
                     cadence =
                         context.stage === :scba ? config.production.checkpoint_every_scba :
                         config.production.checkpoint_every_outer
@@ -1056,7 +1247,8 @@ function execute_scientific_plan(
                     config.algorithms,
                 )
                 flush_scientific_history!(history_recorder)
-                history_paths=scientific_history_sources(dirname(directory))
+                history_paths=scientific_history_sources(haskey(inherited_history,point.id) ? directory : dirname(directory))
+                haskey(inherited_history,point.id) && pushfirst!(history_paths,inherited_history[point.id])
                 commit=commit_point_artifacts(
                     directory,
                     solution;
@@ -1065,6 +1257,12 @@ function execute_scientific_plan(
                     configuration = _point_resolved_raw(config, point),
                     history_paths,
                     checkpoint_metadata = checkpoint_policy(checkpoint_clock),
+                    storage_class = :archive,
+                    archive_root = archive_directory,
+                    recovery_root = recovery_directory,
+                    state_sequence = _scientific_next_state_sequence(recovery_directory),
+                    reserve_bytes = recovery_policy.reserve_bytes,
+                    execution_progress = _scientific_execution_progress(results,point,root,plan.fingerprint),
                 )
                 checkpoint_completed!(checkpoint_clock)
                 data["result_commit"]=replace(relpath(commit, root), '\\'=>'/')
@@ -1111,25 +1309,22 @@ function execute_scientific_plan(
                             edge_tolerance = config.study.optical_edge_tolerance,
                             threaded = config.production.parallel_backend===:threads,
                         )
-                        solution.observables[:optical_response]=response
-                        commit=commit_point_artifacts(
-                            directory,
-                            solution;
-                            identity,
-                            algorithms = config.algorithms,
-                            configuration = _point_resolved_raw(config, point),
-                            history_paths,
-                        )
-                        data["result_commit"]=replace(relpath(commit, root), '\\'=>'/')
-                        data["analysis_physics"]=replace(
-                            relpath(joinpath(dirname(commit), "analysis.h5"), root),
-                            '\\'=>'/',
-                        )
-                        data["full_state"]=replace(
-                            relpath(joinpath(dirname(commit), "physics.h5"), root),
-                            '\\'=>'/',
-                        )
-                        data["optical"]=data["analysis_physics"]
+                        optical_path=joinpath(dirname(commit),"optical.h5")
+                        temporary_optical=optical_path*".pending"
+                        source_receipt=verify_recovery_receipt(commit)
+                        try
+                            save_optical_physics(temporary_optical,response;
+                                source_sha256=bytes2hex(open(sha256,joinpath(dirname(commit),"physics.h5"))),
+                                stationary_quality=String(solution_quality(solution)),
+                                stationary_assessment=solution_scientific_assessment(solution),
+                                source_receipt,identity=source_receipt["identity"])
+                            _sync_artifact_file(temporary_optical)
+                            mv(temporary_optical,optical_path;force=false)
+                            _sync_artifact_directory(dirname(commit))
+                        finally
+                            isfile(temporary_optical) && rm(temporary_optical)
+                        end
+                        data["optical"]=replace(relpath(optical_path,root),'\\'=>'/')
                         merge!(observables, Dict(String(k)=>v for (k, v) in metrics))
                         derived["optical"]["status"]="completed"
                     catch error
@@ -1237,6 +1432,7 @@ function execute_scientific_plan(
                 previous_id=point_id
                 execution.policies.on_child_failure===:stop && (stop_campaign=true)
             finally
+                telemetry_sender===nothing || close(telemetry_sender)
                 history_recorder===nothing || flush_scientific_history!(history_recorder)
                 if reporter!==nothing
                     try
@@ -1281,5 +1477,24 @@ function execute_scientific_plan(
         ) ? :completed : :completed_with_warnings
     ) : :failed
     publish(final_status)
-    return result_document(final_status)
+    document=result_document(final_status)
+    for execution in selected_executions
+        records=filter(r->r.execution_id==execution.id,results)
+        isempty(records) || write_stop_receipt(root,execution.id,maximum(r.attempt for r in records),document;archive_byte_budget)
+    end
+    return document
+end
+
+function _scientific_next_state_sequence(directory)
+    isdir(directory) || return 1
+    sequences=Int[]
+    for name in readdir(directory)
+        if occursin(r"^generation-\d+$",name)
+            push!(sequences,parse(Int,match(r"^generation-(\d+)$",name).captures[1]))
+        elseif startswith(name,"imported-") && isfile(joinpath(directory,name,"receipt.json"))
+            receipt=verify_recovery_receipt(joinpath(directory,name,"commit.json"))
+            push!(sequences,Int(receipt["state_sequence"]))
+        end
+    end
+    return isempty(sequences) ? 1 : maximum(sequences)+1
 end

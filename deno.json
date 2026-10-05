@@ -1,6 +1,7 @@
 {
   "tasks": {
-    "check": "deno check tools/ci.ts tools/bootstrap.ts",
+    "check": "deno check tools/ci.ts tools/bootstrap.ts tools/ci_test.ts",
+    "test:depot": "deno test --allow-read --allow-write --allow-env --allow-run tools/ci_test.ts",
     "test": "deno run --allow-run --allow-env --allow-read tools/ci.ts test",
     "docs": "deno run --allow-run --allow-env --allow-read tools/ci.ts docs",
     "prepare-depot": "deno run --allow-run --allow-env --allow-read --allow-write tools/ci.ts prepare-depot",

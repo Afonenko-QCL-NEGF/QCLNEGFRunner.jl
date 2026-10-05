@@ -99,9 +99,9 @@ include("../support/native_physics_fixture.jl")
         )
         @test read(first_commit)==first_bytes
         @test first_commit!=second_commit
-        @test QCLNEGFRunner.verify_point_artifacts(second_commit)["science_parent_commit"]["sha256"]==bytes2hex(
-            sha256(first_bytes),
-        )
+        @test !haskey(QCLNEGFRunner.verify_point_artifacts(second_commit),"science_parent_commit")
+        @test !any(a->a["role"]=="physics.analysis",QCLNEGFRunner.verify_point_artifacts(second_commit)["artifacts"])
+        @test isfile(joinpath(dirname(second_commit),"receipt.json"))
         @test !any(
             endswith(name, ".csv") || name=="data.json" for
             (_, _, names) in walkdir(directory) for name in names

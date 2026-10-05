@@ -7,10 +7,12 @@ _policies_dict(p::ScientificPolicies) = Dict(
     "on_child_failure"=>String(p.on_child_failure),
 )
 _outputs_dict(o::ScientificOutputs) = Dict(
-    "full_state"=>o.full_state,
-    "optical"=>o.optical,
-    "projections"=>o.projections,
-    "intermediate_history"=>o.intermediate_history,
+    "archive"=>Dict("full_final"=>true,"optical"=>o.optical,"projections"=>o.projections,
+        "intermediate_history"=>o.intermediate_history),
+    "recovery"=>Dict("enabled"=>o.recovery.enabled,"interval_seconds"=>o.recovery.interval_seconds,
+        "retain_generations"=>o.recovery.retain_generations,"byte_budget"=>o.recovery.byte_budget,
+        "reserve_bytes"=>o.recovery.reserve_bytes),
+    "telemetry"=>Dict("enabled"=>o.telemetry.enabled,"buffer_events"=>o.telemetry.buffer_events),
 )
 _point_dict(p::ScientificPoint) = Dict(
     "id"=>p.id,
@@ -84,7 +86,7 @@ function scientific_plan_dict(plan::ScientificPlan)
             "effective_inputs"=>_effective_scientific_inputs(e.configuration),
             "provenance"=>Dict("sources"=>e.configuration.provenance.sources),
             "policies"=>_policies_dict(e.policies),
-            "outputs"=>_outputs_dict(e.outputs),
+            "output"=>_outputs_dict(e.outputs),
             "estimated_peak_bytes"=>e.estimated_peak_bytes,
             "purpose"=>String(e.purpose),
             "repetition"=>e.repetition,
@@ -287,7 +289,7 @@ function resolve_scientific_plan(
             identity=Dict(
                 "configuration"=>deepcopy(config.raw),
                 "policies"=>_policies_dict(definition.policies),
-                "outputs"=>_outputs_dict(definition.outputs),
+                "output"=>_outputs_dict(definition.outputs),
                 "branch"=>Dict("id"=>branch.id, "voltages"=>branch.voltages),
                 "temperature"=>T,
                 "purpose"=>String(definition.purpose),

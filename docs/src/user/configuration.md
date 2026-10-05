@@ -32,6 +32,20 @@ a unique local directory and copies a closed result tree to a fresh destination.
 Runner verifies copied bytes and native commit manifests, then publishes the
 destination directory. The destination must not already exist.
 
+Staging uses the selected execution's existing `output.recovery.byte_budget` and
+`reserve_bytes` as its operational policy even when periodic recovery is disabled.
+For several selected executions it uses the smallest budget and largest reserve;
+an incompatible combination is rejected before computing. Recovery-enabled plans
+publish directly to output storage and bypass end-only scratch staging.
+
+`stage_result_tree(SOURCE, DEST; byte_budget=8*1024^3, reserve_bytes=64*1024^2)`
+counts the simultaneous logical bytes of the closed source and pending destination
+copy, plus the reserve. Each controlled copy write checks projected growth and
+observed destination free space. Refusal does not replace an existing destination
+or alter the source, and removes only its own incomplete staging directory.
+This is a logical copy guard, not a filesystem quota or an aggregate limit on
+unrelated scratch directories, logs, AiiDA retrieval or concurrent writers.
+
 On computation or transfer failure, the local workspace is retained and its path is
 reported on stderr. This option starts a fresh execution; explicit restart uses the
 normal execution path and compatible checkpoint state. It does not merge results

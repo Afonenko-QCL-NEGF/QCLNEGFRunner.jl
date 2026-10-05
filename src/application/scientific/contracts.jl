@@ -37,19 +37,42 @@ struct ScientificPolicies
     end
 end
 
+struct RecoveryOutputPolicy
+    enabled::Bool
+    interval_seconds::Float64
+    retain_generations::Int
+    byte_budget::Int
+    reserve_bytes::Int
+end
+struct TelemetryOutputPolicy
+    enabled::Bool
+    buffer_events::Int
+end
+
+"""One scientific archive policy with independent operational recovery and telemetry."""
 struct ScientificOutputs
     full_state::Bool
     optical::Bool
     projections::Bool
     intermediate_history::Int
+    recovery::RecoveryOutputPolicy
+    telemetry::TelemetryOutputPolicy
     function ScientificOutputs(
-        full_state::Bool = false,
+        full_state::Bool = true,
         optical::Bool = false,
         projections::Bool = true,
-        history::Int = 16,
+        history::Int = 16;
+        recovery = RecoveryOutputPolicy(true, 1800.0, 2, 8*1024^3, 64*1024^2),
+        telemetry = TelemetryOutputPolicy(true, 256),
     )
         history>=1 || throw(ArgumentError("intermediate_history must be positive"))
-        new(full_state, optical, projections, history)
+        isfinite(recovery.interval_seconds) && recovery.interval_seconds>0 ||
+            throw(ArgumentError("recovery interval must be finite and positive"))
+        recovery.retain_generations>=2 || throw(ArgumentError("recovery needs latest and previous generations"))
+        recovery.byte_budget>0 && 0<=recovery.reserve_bytes<recovery.byte_budget ||
+            throw(ArgumentError("recovery byte budget must exceed its nonnegative reserve"))
+        telemetry.buffer_events>0 || throw(ArgumentError("telemetry buffer_events must be positive"))
+        new(true, optical, projections, history, recovery, telemetry)
     end
 end
 
