@@ -5,7 +5,8 @@
     "test": "deno run --allow-run --allow-env --allow-read tools/ci.ts test",
     "docs": "deno run --allow-run --allow-env --allow-read tools/ci.ts docs",
     "prepare-depot": "deno run --allow-run --allow-env --allow-read --allow-write tools/ci.ts prepare-depot",
-    "bootstrap": "deno run --allow-read --allow-write=.build --allow-run=tar --allow-net=julialang-s3.julialang.org tools/bootstrap.ts"
+    "bootstrap": "deno run --allow-read --allow-write=.build --allow-run=tar --allow-env=PATH --allow-net=julialang-s3.julialang.org tools/bootstrap.ts",
+    "test:bootstrap": "deno test --allow-read --allow-write --allow-run=tar --allow-env=PATH,LD_LIBRARY_PATH,LD_PRELOAD tools/bootstrap_tar_test.ts"
   },
   "fmt": {
     "lineWidth": 100
