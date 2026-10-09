@@ -136,7 +136,7 @@ function _continuation_record_history!(history,record)
     return history
 end
 
-function _upsert_scientific_point!(rows,record,point_order)
+function _upsert_scientific_point!(rows,record,point_order,preserve_completed::Bool=true)
     positions=Dict(id=>i for (i,id) in enumerate(point_order))
     length(positions)==length(point_order) || throw(ArgumentError("duplicate frozen point ID"))
     haskey(positions,record.id) || throw(ArgumentError("unknown point ID"))
@@ -145,8 +145,8 @@ function _upsert_scientific_point!(rows,record,point_order)
     all(haskey(positions,id) for id in ids) || throw(ArgumentError("unknown current point ID"))
     index=findfirst(==(record.id),ids)
     prior=index===nothing ? nothing : rows[index]
-    # A completed archive is immutable even when later optional work is cancelled.
-    prior===nothing || prior.status!==:completed || return rows
+    # Stationary finals stay immutable; operator reruns opt into new current rows.
+    preserve_completed && prior!==nothing && prior.status===:completed && return rows
     for warning in record.warnings
         if haskey(warning,"reason_kind")
             source_attempt=get(warning,"source_attempt",nothing)

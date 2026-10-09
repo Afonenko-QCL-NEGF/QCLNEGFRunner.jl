@@ -652,7 +652,7 @@ function execute_scientific_plan(
                     ),
                 )
                 record.data["result_commit"]=replace(relpath(commit, root), '\\'=>'/')
-                _upsert_scientific_point!(results,record,point_order)
+                _upsert_scientific_point!(results,record,point_order,false)
                 _continuation_record_history!(history,record)
                 publish()
                 _scientific_progress(root, point, attempt, :completed, directory)

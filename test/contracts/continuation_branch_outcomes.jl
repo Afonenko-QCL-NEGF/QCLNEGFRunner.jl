@@ -284,6 +284,48 @@ end
     push!(cases,base)
     @test length(cases)==17
 end
+# Baseline forwards to the existing actual method; repaired explicit policy uses
+# the actual four-argument method. This adapter adds no production mock/stub.
+function engineering_upsert!(rows,record,point_order)
+    if applicable(_upsert_scientific_point!,rows,record,point_order,false)
+        return _upsert_scientific_point!(rows,record,point_order,false)
+    end
+    return _upsert_scientific_point!(rows,record,point_order)
+end
+function operator_row(attempt)
+    p=points[4]
+    ScientificPointResult(p.id,p.execution_id,attempt,
+        (temperature_K=p.temperature_K,voltage_per_period_V=p.voltage_per_period_V,branch=p.branch,order=p.order),
+        (kind="analytic_fixture",source_point_id=nothing,checkpoint=nothing,fallback_reason=nothing),
+        :completed,:strict,true,Dict{String,Any}[],Dict{String,Any}("operator_checks_passed"=>true),
+        Dict{String,Any}("artifact_root"=>"operator/attempt-$attempt","operator_checks"=>"operator/attempt-$attempt/operator_checks.json", "result_commit"=>"operator/attempt-$attempt/commit.json"),Dict{String,Any}())
+end
+@testset "Explicit engineering operator reruns preserve current attempt identity" begin
+    execution=(id="e1",operation=:operator_algebra)
+    @test execution.operation!==:stationary
+    first=operator_row(1);current=[first];history=[first]
+    first_before=deepcopy(_scientific_result_dict(first))
+    for attempt in (2,3)
+        fresh=operator_row(attempt)
+        engineering_upsert!(current,fresh,order)
+        _continuation_record_history!(history,fresh)
+        @test current[1].attempt==attempt
+        @test current[1].data["operator_checks"]=="operator/attempt-$attempt/operator_checks.json"
+        @test current[1].data["result_commit"]=="operator/attempt-$attempt/commit.json"
+        @test [r.attempt for r in history]==collect(1:attempt)
+        # Generic latest-history preload and current return select the same tuple.
+        latest=argmax(r->r.attempt,history)
+        @test _scientific_result_dict(current[1])==_scientific_result_dict(latest)
+    end
+    @test _scientific_result_dict(history[1])==first_before
+    @test length(unique(r.data["operator_checks"] for r in history))==3
+    # An orphan directory reserves attempt4; hand-selected next attempt5 owns new output.
+    orphan="operator/attempt-4/operator_checks.json"
+    engineering_upsert!(current,operator_row(5),order)
+    _continuation_record_history!(history,current[1])
+    @test current[1].attempt==5 && current[1].data["operator_checks"]!=orphan
+    @test [r.attempt for r in history]==[1,2,3,5]
+end
 # Parse caller source without evaluation/import; production placement is independently reviewed.
 @testset "Production caller parses" begin
     @test Meta.parseall(read(joinpath(ROOT,"src/composition/scientific_execution.jl"),String)) isa Expr
