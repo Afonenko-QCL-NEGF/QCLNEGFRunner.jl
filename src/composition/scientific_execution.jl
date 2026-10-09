@@ -156,22 +156,6 @@ function _scientific_resume_result(item)
     )
 end
 
-function _strict_voltage_state(solution)
-    return solution.converged &&
-           solution.scba.converged &&
-           solution.scba.quality===:strictly_converged
-end
-function _usable_voltage_state(solution, mode)
-    _strict_voltage_state(solution) && return true
-    mode===:research || return false
-    return solution.scba.status in
-           (:converged, :approximately_converged, :research_continue) &&
-           all(isfinite, solution.Uᴴ) &&
-           all(isfinite, solution.scba.green.Gˡ) &&
-           all(isfinite, solution.scba.green.Gᴿ)
-end
-
-
 # Reserve a new attempt directory, preserving files left by a killed process.
 function _scientific_attempt_directory(parent::AbstractString, first_attempt::Int)
     mkpath(parent)
@@ -758,7 +742,7 @@ function execute_scientific_plan(
                old!==nothing &&
                old.status===:completed &&
                get(old.data, "full_state", nothing)!==nothing
-                verify_point_artifacts(joinpath(root, old.data["result_commit"]))
+                verified_commit=verify_point_artifacts(joinpath(root, old.data["result_commit"]))
                 recovery=joinpath(root, old.data["full_state"])
                 raw=load_resolved_configuration_envelope(
                     joinpath(dirname(recovery), "resolved_configuration.json"),
@@ -778,34 +762,25 @@ function execute_scientific_plan(
                     algorithms = config.algorithms,
                     solver_options = config.solver,
                 )
-                state=saved.scba
-                restored_scba=SCBAResult(
-                    state.green,
-                    state.scattering,
-                    state.embedding,
-                    state.embedding_plus,
-                    state.embedding_minus,
-                    state.history,
-                    saved.original_scba_converged,
-                    saved.original_scba_status,
-                    saved.original_scba_quality,
-                    state.restart_contract,
-                    state.mixer_state,
-                )
-                candidate=NEGFSolution(
-                    saved_problem,
-                    config.solver,
-                    saved.Uᴴ,
-                    _electron_density_bar(saved_problem, state.green.Gˡ),
-                    restored_scba,
-                    saved.outer_history,
-                    Dict{Symbol,Any}(:warnings=>saved.warnings),
-                    ConvergenceReport(old.converged, Dict{Symbol,Float64}(), String[]),
-                    old.converged,
-                    saved.status,
-                )
-                previous=_usable_voltage_state(candidate, execution.policies.voltage.mode) ?
-                         candidate : nothing
+                seed_summary=_restored_voltage_seed_summary(verified_commit, saved, old)
+                previous=nothing
+                if _usable_voltage_state(seed_summary, execution.policies.voltage.mode)
+                    state=saved.scba
+                    restored_scba=SCBAResult(
+                        state.green,
+                        state.scattering,
+                        state.embedding,
+                        state.embedding_plus,
+                        state.embedding_minus,
+                        state.history,
+                        saved.original_scba_converged,
+                        saved.original_scba_status,
+                        saved.original_scba_quality,
+                        state.restart_contract,
+                        state.mixer_state,
+                    )
+                    previous=(; Uᴴ=saved.Uᴴ, scba=restored_scba)
+                end
                 previous_id=point_id
                 push!(results, old)
                 publish()
@@ -1196,17 +1171,6 @@ function execute_scientific_plan(
                     deepcopy(w) for
                     w in get(solution.observables, :warnings, Dict{String,Any}[])
                 ]
-                previous!==nothing &&
-                    !_strict_voltage_state(previous) &&
-                    push!(
-                        warnings,
-                        Dict{String,Any}(
-                            "code"=>"RESEARCH_VOLTAGE_SEED",
-                            "scope"=>"point",
-                            "message"=>"explicit research voltage continuation used non-strict predecessor",
-                            "source_point_id"=>previous_id,
-                        ),
-                    )
                 data=Dict{String,Any}(
                     "artifact_root"=>replace(relpath(directory, root), '\\'=>'/'),
                     "full_state"=>nothing,
@@ -1345,7 +1309,10 @@ function execute_scientific_plan(
                 publish()
                 terminal_status=:completed
                 _scientific_progress(root, point, attempt, :completed, directory)
-                previous=_usable_voltage_state(solution, execution.policies.voltage.mode) ?
+                seed_summary=_live_voltage_seed_summary(
+                    solution, solution_quality(solution), observables["scientific_assessment"],
+                )
+                previous=_usable_voltage_state(seed_summary, execution.policies.voltage.mode) ?
                          solution : nothing
                 previous_id=point_id
                 if execution.policies.on_child_failure===:stop && !solution.converged

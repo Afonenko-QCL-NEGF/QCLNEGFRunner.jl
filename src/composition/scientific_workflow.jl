@@ -94,6 +94,7 @@ import ..QCLNEGFRunner:
 import ..QCLNumerics: effective_seed_parameters, solution_scientific_assessment
 import ..QCLApplicationRuntime: canonical_bytes
 include("../application/scientific/contracts.jl")
+include("../application/scientific/voltage_continuation.jl")
 include("../application/scientific/planning.jl")
 include("../application/scientific/postprocessing.jl")
 include("../infrastructure/scientific/definitions.jl")
