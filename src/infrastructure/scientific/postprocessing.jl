@@ -1,19 +1,18 @@
 """Offline scientific projections from saved data; never launches NEGF.
 
-Supported operations: iv, differential_conductance, gain_voltage, populations,
-density_map, potential_map, optical_map. Missing required fields are explicit
-errors; display projections retain their sampling declaration.
+Default operations: iv, populations, density_map, potential_map, energy_density_map.
+Explicit expert operations also support differential_conductance, gain_voltage,
+optical_map and optical_recompute. Missing required fields are explicit errors;
+display projections retain their sampling declaration.
 """
 function postprocess_series(
     directory::AbstractString;
     operations = [
         "iv",
-        "gain_voltage",
         "populations",
         "density_map",
         "potential_map",
         "energy_density_map",
-        "optical_map",
     ],
     output_directory::AbstractString = joinpath(directory, "analysis"),
     photon_energies = nothing,

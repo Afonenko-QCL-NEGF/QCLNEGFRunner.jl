@@ -24,7 +24,16 @@ independent execution.
 ## Postprocessing
 
 `qcl-negf analyze RESULT_DIRECTORY ANALYSIS_DIRECTORY` reads saved results without rerunning
-transport. Reports preserve the input identity and scientific statuses. The separate
+transport. Its default operations are `iv`, `populations`, `density_map`,
+`potential_map`, and `energy_density_map`; spectral transport maps remain included.
+Default analysis does not request saved optical spectra or peak gain. This changes
+the previous default, which also requested `gain_voltage` and `optical_map`.
+Expert API callers can still select those operations explicitly with
+`postprocess_series(...; operations=[...])`; `optical_recompute` retains its explicit
+Unitful photon-energy and saved-full-state requirements. Missing optical data is
+still reported as `insufficient_data` for an explicitly selected operation.
+These expert optical projections do not establish quantitative gain validation.
+Reports preserve the input identity and scientific statuses. The separate
 [qcl-negf-results](https://github.com/Afonenko-QCL-NEGF/qcl-negf-results) project provides Python
 readers and exports. Schema changes are coordinated with
 [qcl-negf-contracts](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts).
