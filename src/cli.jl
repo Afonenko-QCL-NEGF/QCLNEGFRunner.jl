@@ -1,3 +1,29 @@
+function _cli_compare(arguments)
+    length(arguments) >= 5 && isodd(length(arguments)) || throw(ArgumentError("compare expects CATALOG.csv OUTPUT --reference-id ID [--temperature-atol K] [--voltage-atol V] [--maximum-input-bytes BYTES]"))
+    options = Dict{String,String}()
+    for index in 4:2:length(arguments)
+        flag = arguments[index]
+        flag in ("--reference-id","--temperature-atol","--voltage-atol","--maximum-input-bytes") || throw(ArgumentError("unknown compare option $flag"))
+        haskey(options,flag) && throw(ArgumentError("duplicate compare option $flag"))
+        options[flag] = arguments[index+1]
+    end
+    haskey(options,"--reference-id") || throw(ArgumentError("compare requires --reference-id"))
+    function tolerance(flag, default, unit)
+        value = get(options,flag,default)
+        parsed = tryparse(Float64,value)
+        parsed === nothing && throw(ArgumentError("invalid_matching_tolerance: $flag ($unit): $value"))
+        return parsed
+    end
+    result = compare_saved_results(arguments[2],arguments[3];reference_id=options["--reference-id"],
+        temperature_atol=tolerance("--temperature-atol","1e-9","K"),
+        voltage_atol=tolerance("--voltage-atol","1e-12","V"),
+        maximum_input_bytes=parse(Int,get(options,"--maximum-input-bytes",string(16*1024^2))))
+    for path in values(result.paths)
+        println(path)
+    end
+    return 0
+end
+
 function _cli_self_check(arguments)
     length(arguments) in (1,3) || throw(ArgumentError("self-check expects [--directory DIRECTORY]"))
     directory=tempdir()
@@ -79,11 +105,12 @@ end
 function main(arguments::AbstractVector{<:AbstractString}=ARGS)
     try
         isempty(arguments) && throw(ArgumentError(
-            "usage: qcl-negf self-check [--directory DIRECTORY] | pause OUTPUT --execution-id ID --attempt N | verify-pause|verify-stop OUTPUT --execution-id ID --attempt N [--archive-byte-budget BYTES] | plan CONFIG [--max-runs N] | run-plan PLAN OUTPUT [OPTIONS] | analyze RESULTS [OUTPUT]"))
+            "usage: qcl-negf self-check [--directory DIRECTORY] | pause OUTPUT --execution-id ID --attempt N | verify-pause|verify-stop OUTPUT --execution-id ID --attempt N [--archive-byte-budget BYTES] | plan CONFIG [--max-runs N] | run-plan PLAN OUTPUT [OPTIONS] | analyze RESULTS [OUTPUT] | compare CATALOG.csv OUTPUT --reference-id ID [OPTIONS]"))
         command=first(arguments)
         # Keep operational commands outside the solver handler's inference graph.
         # The process status remains independent of scientific gates in artifacts.
-        handler=command=="self-check" ? _cli_self_check :
+        handler=command=="compare" ? _cli_compare :
+            command=="self-check" ? _cli_self_check :
             command in ("pause","verify-pause","verify-stop") ? _cli_pause_verify : _cli_heavy
         return Base.invokelatest(handler,arguments)
     catch error

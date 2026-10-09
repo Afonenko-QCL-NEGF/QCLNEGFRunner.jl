@@ -210,3 +210,15 @@ QCLNEGFRunner.execute_scientific_plan_staged
 QCLNEGFRunner.stage_result_tree
 scattering_options(::ResolvedRunConfiguration)
 ```
+
+## Saved comparison
+
+```@docs
+QCLNEGFRunner.compare_saved_results
+```
+
+This API reads bounded legacy report snapshots and returns descriptive differences,
+coverage, hashes and analysis status. It cannot supply native full identity or
+scientific acceptance. `run_comparison_study`, `run_convergence_study` and
+`run_production_study` execute computations; `plan`/`run-plan` are the explicit
+plan creation/execution CLI route. CLI `compare` performs saved analysis only.

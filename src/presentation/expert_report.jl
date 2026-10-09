@@ -229,7 +229,10 @@ function _read_report_csv_record(stream::IO, path::AbstractString, record_index:
 end
 
 function _read_report_csv(path::AbstractString)
-    return open(path, "r") do stream
+    return open(stream -> _read_report_csv(stream, path), path, "r")
+end
+
+function _read_report_csv(stream::IO, path::AbstractString)
         # A byte-order mark belongs to the file, including when its first
         # header field is quoted. It must not become part of that field.
         if !eof(stream) && read(stream, Char) != '\ufeff'
@@ -259,7 +262,6 @@ function _read_report_csv(path::AbstractString)
             record_index += 1
         end
         return header, rows
-    end
 end
 
 function _required_report_field(row, name::AbstractString, path)
@@ -313,6 +315,10 @@ See [Expert comparison workflow](@ref expert-comparison-workflow).
 function load_method_run(descriptor::MethodDescriptor, summary_path::AbstractString)
     path = abspath(summary_path)
     header, rows = _read_report_csv(path)
+    return _load_method_run(descriptor, path, header, rows)
+end
+
+function _load_method_run(descriptor, path, header, rows)
     required = (
         "temperature_K",
         "voltage_per_period_V",
@@ -761,284 +767,289 @@ function _write_expert_markdown(
     reference =
         only(filter(run -> run.descriptor.id === comparison.reference_id, comparison.runs))
     return _observability_atomic_text(path) do stream
-        println(stream, "# ", title, "\n")
-        println(stream, "- Structure: `", _human_identifier(comparison.structure_id), "`")
-        println(stream, "- Reference method: `", comparison.reference_id, "`")
+        _render_expert_markdown(stream, comparison, reference; title)
+    end
+end
+
+function _render_expert_markdown(stream::IO, comparison::ExpertComparison,
+    reference::MethodRun; title::AbstractString)
+    println(stream, "# ", title, "\n")
+    println(stream, "- Structure: `", _human_identifier(comparison.structure_id), "`")
+    println(stream, "- Reference method: `", comparison.reference_id, "`")
+    println(
+        stream,
+        "- Reference physics signature: `",
+        _human_identifier(reference.descriptor.physics_signature),
+        "`",
+    )
+    println(stream, "- Stored methods: ", length(comparison.runs))
+    println(stream, "- Matched long-form metric rows: ", length(comparison.rows), "\n")
+    println(
+        stream,
+        "> Long structure and physics identifiers are abbreviated " *
+        "only in this human-readable report. Their complete exact values " *
+        "remain in `method_catalog.csv` and the full-precision CSV outputs.\n",
+    )
+    println(
+        stream,
+        "> This report compares stored numerical results. It does not " *
+        "by itself prove physical equivalence. Methods marked **physics changed** " *
+        "must be validated against the reference with the physics-first test suite.\n",
+    )
+
+    println(stream, "## Method classification\n")
+    println(stream, "| Method | Family | Classification | Physics signature | Source |")
+    println(stream, "|---|---|---|---|---|")
+    for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
+        descriptor = run.descriptor
+        classification =
+            descriptor.id === comparison.reference_id ? "reference equations" :
+            descriptor.modifies_physics ? "**physics changed**" :
+            descriptor.algorithm_family === :controlled_approximation ?
+            "controlled numerical" : "computational only"
+        source =
+            isempty(descriptor.literature) ? "—" :
+            _markdown_escape(descriptor.literature)
         println(
             stream,
-            "- Reference physics signature: `",
-            _human_identifier(reference.descriptor.physics_signature),
+            "| `",
+            descriptor.id,
+            "` — ",
+            _markdown_escape(descriptor.label),
+            " | `",
+            descriptor.algorithm_family,
+            "` | ",
+            classification,
+            " | `",
+            _human_identifier(descriptor.physics_signature),
+            "` | ",
+            source,
+            " |",
+        )
+    end
+
+    println(stream, "\n## Coverage and convergence\n")
+    println(
+        stream,
+        "| Method | Points | Strict overall | Approximate overall | Unconverged overall | Invalid overall |",
+    )
+    println(stream, "|---|---:|---:|---:|---:|---:|")
+    for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
+        strict=count(point->point.converged, run.points)
+        approximate=count(point->point.status === :approximate, run.points)
+        invalid=count(point->point.scba_quality === :invalid, run.points)
+        unresolved=length(run.points)-strict-approximate-invalid
+        println(
+            stream,
+            "| `",
+            run.descriptor.id,
+            "` | ",
+            length(run.points),
+            " | ",
+            strict,
+            " | ",
+            approximate,
+            " | ",
+            unresolved,
+            " | ",
+            invalid,
+            " |",
+        )
+    end
+
+    println(stream, "\n## Quality warnings\n")
+    for run in comparison.runs, point in run.points, warning in point.warnings
+        println(
+            stream,
+            "- `",
+            run.descriptor.id,
+            "` T=",
+            point.temperature_K,
+            " K, V=",
+            point.voltage_per_period_V,
+            " V: `",
+            get(warning, "code", "warning"),
+            "`; scope `",
+            get(warning, "scope", "point"),
+            "`. Details: `",
+            _markdown_escape(sprint(_light_json, warning)),
+            "`.",
+        )
+    end
+    println(
+        stream,
+        "Approximate acceptance completes the workflow with warnings; it is not a strict accuracy certificate.",
+    )
+
+    println(stream, "\n## Current-density accuracy and resources\n")
+    println(
+        stream,
+        "| Candidate | Classification | Converged J pairs | " *
+        "Max relative current error | Median speedup | " *
+        "Median peak-memory ratio |",
+    )
+    println(stream, "|---|---|---:|---:|---:|---:|")
+    for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
+        run.descriptor.id === comparison.reference_id && continue
+        rows = filter(
+            row ->
+                row.candidate_id === run.descriptor.id &&
+                row.metric === :current_A_per_m2,
+            comparison.rows,
+        )
+        valid_rows =
+            filter(row -> row.reference_converged && row.candidate_converged, rows)
+        relative =
+            [row.relative_error for row in valid_rows if row.relative_error !== missing]
+        maximum_relative = isempty(relative) ? missing : maximum(relative)
+        speedup = _report_median(getfield.(valid_rows, :speedup))
+        memory = _report_median(getfield.(valid_rows, :memory_ratio))
+        classification =
+            run.descriptor.modifies_physics ? "physics changed" :
+            run.descriptor.algorithm_family === :controlled_approximation ?
+            "controlled numerical" : "exact computational"
+        println(
+            stream,
+            "| `",
+            run.descriptor.id,
+            "` | ",
+            classification,
+            " | ",
+            length(valid_rows),
+            " | ",
+            _report_number(maximum_relative),
+            " | ",
+            _report_number(speedup),
+            " | ",
+            _report_number(memory),
+            " |",
+        )
+    end
+
+    println(stream, "\n## Physics-first metric envelope\n")
+    println(
+        stream,
+        "The table includes only point pairs for which both " *
+        "methods report convergence. A small I–V error cannot compensate " *
+        "for a failed conservation, causality, sum-rule, population, or " *
+        "gain test.\n",
+    )
+    println(
+        stream,
+        "| Candidate | Metric | Converged pairs | Max absolute " *
+        "error | Max relative error |",
+    )
+    println(stream, "|---|---|---:|---:|---:|")
+    candidate_metrics = sort!(
+        unique((row.candidate_id, row.metric) for row in comparison.rows);
+        by = item -> (String(item[1]), String(item[2])),
+    )
+    for (candidate_id, metric) in candidate_metrics
+        rows = filter(
+            row ->
+                row.candidate_id === candidate_id &&
+                row.metric === metric &&
+                row.reference_converged &&
+                row.candidate_converged,
+            comparison.rows,
+        )
+        absolute = isempty(rows) ? missing : maximum(getfield.(rows, :absolute_error))
+        relative_values =
+            [row.relative_error for row in rows if row.relative_error !== missing]
+        relative = isempty(relative_values) ? missing : maximum(relative_values)
+        println(
+            stream,
+            "| `",
+            candidate_id,
+            "` | `",
+            metric,
+            "` | ",
+            length(rows),
+            " | ",
+            _report_number(absolute),
+            " | ",
+            _report_number(relative),
+            " |",
+        )
+    end
+
+    println(stream, "\n## Operating-point comparison\n")
+    println(
+        stream,
+        "Only converged current-density pairs should be used for " *
+        "physical conclusions. Full-precision data are in " *
+        "`method_comparison.csv`.\n",
+    )
+    println(
+        stream,
+        "| Candidate | T (K) | Vp (V) | " *
+        "Reference J (A/cm²) | Candidate J (A/cm²) | Relative error | " *
+        "SCBA quality (ref / candidate) | Pair converged |",
+    )
+    println(stream, "|---|---:|---:|---:|---:|---:|---|---|")
+    current_rows = filter(row -> row.metric === :current_A_per_m2, comparison.rows)
+    for row in current_rows
+        pair_ok = row.reference_converged && row.candidate_converged
+        println(
+            stream,
+            "| `",
+            row.candidate_id,
+            "` | ",
+            _report_number(row.temperature_K),
+            " | ",
+            _report_number(row.voltage_per_period_V),
+            " | ",
+            _report_current_density(row.reference_value),
+            " | ",
+            _report_current_density(row.candidate_value),
+            " | ",
+            _report_number(row.relative_error),
+            " | ",
+            "`",
+            row.reference_scba_quality,
+            "` / `",
+            row.candidate_scba_quality,
+            "` | ",
+            pair_ok ? "yes" : "**no**",
+            " |",
+        )
+    end
+
+    println(stream, "\n## Interpretation checklist\n")
+    println(
+        stream,
+        "1. Confirm identical structure and physics signatures for " *
+        "every method declaring unchanged physics; then keep controlled " *
+        "numerical errors separate from round-off-equivalent implementations.",
+    )
+    println(
+        stream,
+        "2. Exclude unconverged point pairs before evaluating errors " * "or speedups.",
+    )
+    println(
+        stream,
+        "3. Inspect current continuity, causality, spectral sum rule, " *
+        "charge neutrality, and power balance—not only I–V agreement.",
+    )
+    println(
+        stream,
+        "4. For physics-changing methods, repeat the comparison for " *
+        "populations, gain peak, peak energy, and linewidth.",
+    )
+    println(stream, "5. Treat estimated memory separately from measured peak RSS.")
+
+    println(stream, "\n## Provenance\n")
+    for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
+        println(
+            stream,
+            "- `",
+            run.descriptor.id,
+            "`: `",
+            replace(run.summary_path, '\\' => '/'),
             "`",
         )
-        println(stream, "- Stored methods: ", length(comparison.runs))
-        println(stream, "- Matched long-form metric rows: ", length(comparison.rows), "\n")
-        println(
-            stream,
-            "> Long structure and physics identifiers are abbreviated " *
-            "only in this human-readable report. Their complete exact values " *
-            "remain in `method_catalog.csv` and the full-precision CSV outputs.\n",
-        )
-        println(
-            stream,
-            "> This report compares stored numerical results. It does not " *
-            "by itself prove physical equivalence. Methods marked **physics changed** " *
-            "must be validated against the reference with the physics-first test suite.\n",
-        )
-
-        println(stream, "## Method classification\n")
-        println(stream, "| Method | Family | Classification | Physics signature | Source |")
-        println(stream, "|---|---|---|---|---|")
-        for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
-            descriptor = run.descriptor
-            classification =
-                descriptor.id === comparison.reference_id ? "reference equations" :
-                descriptor.modifies_physics ? "**physics changed**" :
-                descriptor.algorithm_family === :controlled_approximation ?
-                "controlled numerical" : "computational only"
-            source =
-                isempty(descriptor.literature) ? "—" :
-                _markdown_escape(descriptor.literature)
-            println(
-                stream,
-                "| `",
-                descriptor.id,
-                "` — ",
-                _markdown_escape(descriptor.label),
-                " | `",
-                descriptor.algorithm_family,
-                "` | ",
-                classification,
-                " | `",
-                _human_identifier(descriptor.physics_signature),
-                "` | ",
-                source,
-                " |",
-            )
-        end
-
-        println(stream, "\n## Coverage and convergence\n")
-        println(
-            stream,
-            "| Method | Points | Strict overall | Approximate overall | Unconverged overall | Invalid overall |",
-        )
-        println(stream, "|---|---:|---:|---:|---:|---:|")
-        for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
-            strict=count(point->point.converged, run.points)
-            approximate=count(point->point.status === :approximate, run.points)
-            invalid=count(point->point.scba_quality === :invalid, run.points)
-            unresolved=length(run.points)-strict-approximate-invalid
-            println(
-                stream,
-                "| `",
-                run.descriptor.id,
-                "` | ",
-                length(run.points),
-                " | ",
-                strict,
-                " | ",
-                approximate,
-                " | ",
-                unresolved,
-                " | ",
-                invalid,
-                " |",
-            )
-        end
-
-        println(stream, "\n## Quality warnings\n")
-        for run in comparison.runs, point in run.points, warning in point.warnings
-            println(
-                stream,
-                "- `",
-                run.descriptor.id,
-                "` T=",
-                point.temperature_K,
-                " K, V=",
-                point.voltage_per_period_V,
-                " V: `",
-                get(warning, "code", "warning"),
-                "`; scope `",
-                get(warning, "scope", "point"),
-                "`. Details: `",
-                _markdown_escape(sprint(_light_json, warning)),
-                "`.",
-            )
-        end
-        println(
-            stream,
-            "Approximate acceptance completes the workflow with warnings; it is not a strict accuracy certificate.",
-        )
-
-        println(stream, "\n## Current-density accuracy and resources\n")
-        println(
-            stream,
-            "| Candidate | Classification | Converged J pairs | " *
-            "Max relative current error | Median speedup | " *
-            "Median peak-memory ratio |",
-        )
-        println(stream, "|---|---|---:|---:|---:|---:|")
-        for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
-            run.descriptor.id === comparison.reference_id && continue
-            rows = filter(
-                row ->
-                    row.candidate_id === run.descriptor.id &&
-                    row.metric === :current_A_per_m2,
-                comparison.rows,
-            )
-            valid_rows =
-                filter(row -> row.reference_converged && row.candidate_converged, rows)
-            relative =
-                [row.relative_error for row in valid_rows if row.relative_error !== missing]
-            maximum_relative = isempty(relative) ? missing : maximum(relative)
-            speedup = _report_median(getfield.(valid_rows, :speedup))
-            memory = _report_median(getfield.(valid_rows, :memory_ratio))
-            classification =
-                run.descriptor.modifies_physics ? "physics changed" :
-                run.descriptor.algorithm_family === :controlled_approximation ?
-                "controlled numerical" : "exact computational"
-            println(
-                stream,
-                "| `",
-                run.descriptor.id,
-                "` | ",
-                classification,
-                " | ",
-                length(valid_rows),
-                " | ",
-                _report_number(maximum_relative),
-                " | ",
-                _report_number(speedup),
-                " | ",
-                _report_number(memory),
-                " |",
-            )
-        end
-
-        println(stream, "\n## Physics-first metric envelope\n")
-        println(
-            stream,
-            "The table includes only point pairs for which both " *
-            "methods report convergence. A small I–V error cannot compensate " *
-            "for a failed conservation, causality, sum-rule, population, or " *
-            "gain test.\n",
-        )
-        println(
-            stream,
-            "| Candidate | Metric | Converged pairs | Max absolute " *
-            "error | Max relative error |",
-        )
-        println(stream, "|---|---|---:|---:|---:|")
-        candidate_metrics = sort!(
-            unique((row.candidate_id, row.metric) for row in comparison.rows);
-            by = item -> (String(item[1]), String(item[2])),
-        )
-        for (candidate_id, metric) in candidate_metrics
-            rows = filter(
-                row ->
-                    row.candidate_id === candidate_id &&
-                    row.metric === metric &&
-                    row.reference_converged &&
-                    row.candidate_converged,
-                comparison.rows,
-            )
-            absolute = isempty(rows) ? missing : maximum(getfield.(rows, :absolute_error))
-            relative_values =
-                [row.relative_error for row in rows if row.relative_error !== missing]
-            relative = isempty(relative_values) ? missing : maximum(relative_values)
-            println(
-                stream,
-                "| `",
-                candidate_id,
-                "` | `",
-                metric,
-                "` | ",
-                length(rows),
-                " | ",
-                _report_number(absolute),
-                " | ",
-                _report_number(relative),
-                " |",
-            )
-        end
-
-        println(stream, "\n## Operating-point comparison\n")
-        println(
-            stream,
-            "Only converged current-density pairs should be used for " *
-            "physical conclusions. Full-precision data are in " *
-            "`method_comparison.csv`.\n",
-        )
-        println(
-            stream,
-            "| Candidate | T (K) | Vp (V) | " *
-            "Reference J (A/cm²) | Candidate J (A/cm²) | Relative error | " *
-            "SCBA quality (ref / candidate) | Pair converged |",
-        )
-        println(stream, "|---|---:|---:|---:|---:|---:|---|---|")
-        current_rows = filter(row -> row.metric === :current_A_per_m2, comparison.rows)
-        for row in current_rows
-            pair_ok = row.reference_converged && row.candidate_converged
-            println(
-                stream,
-                "| `",
-                row.candidate_id,
-                "` | ",
-                _report_number(row.temperature_K),
-                " | ",
-                _report_number(row.voltage_per_period_V),
-                " | ",
-                _report_current_density(row.reference_value),
-                " | ",
-                _report_current_density(row.candidate_value),
-                " | ",
-                _report_number(row.relative_error),
-                " | ",
-                "`",
-                row.reference_scba_quality,
-                "` / `",
-                row.candidate_scba_quality,
-                "` | ",
-                pair_ok ? "yes" : "**no**",
-                " |",
-            )
-        end
-
-        println(stream, "\n## Interpretation checklist\n")
-        println(
-            stream,
-            "1. Confirm identical structure and physics signatures for " *
-            "every method declaring unchanged physics; then keep controlled " *
-            "numerical errors separate from round-off-equivalent implementations.",
-        )
-        println(
-            stream,
-            "2. Exclude unconverged point pairs before evaluating errors " * "or speedups.",
-        )
-        println(
-            stream,
-            "3. Inspect current continuity, causality, spectral sum rule, " *
-            "charge neutrality, and power balance—not only I–V agreement.",
-        )
-        println(
-            stream,
-            "4. For physics-changing methods, repeat the comparison for " *
-            "populations, gain peak, peak energy, and linewidth.",
-        )
-        println(stream, "5. Treat estimated memory separately from measured peak RSS.")
-
-        println(stream, "\n## Provenance\n")
-        for run in sort(comparison.runs; by = run -> String(run.descriptor.id))
-            println(
-                stream,
-                "- `",
-                run.descriptor.id,
-                "`: `",
-                replace(run.summary_path, '\\' => '/'),
-                "`",
-            )
-            isempty(run.descriptor.description) ||
-                println(stream, "  - ", _markdown_escape(run.descriptor.description))
-        end
+        isempty(run.descriptor.description) ||
+            println(stream, "  - ", _markdown_escape(run.descriptor.description))
     end
 end
 
@@ -1088,3 +1099,231 @@ end
 """Optional CairoMakie extension point described by the
 [expert comparison workflow](@ref expert-comparison-workflow)."""
 function plot_method_comparison end
+
+# These tolerances locate serialized operating points; they are not scientific
+# equivalence thresholds. Validate before touching even the catalog path.
+function _saved_matching_tolerance(value, name, unit)
+    fail() = throw(ArgumentError("invalid_matching_tolerance: $name ($unit) must be finite, nonnegative and Float64-convertible"))
+    value isa Real && isfinite(value) && value >= 0 || fail()
+    effective = try Float64(value) catch; fail() end
+    isfinite(effective) && effective >= 0 || fail()
+    return effective
+end
+
+function _saved_capture(path, remaining)
+    isfile(path) || throw(ArgumentError("insufficient_data: missing saved CSV $path"))
+    bytes = open(path, "r") do io
+        read(io, remaining + 1)
+    end
+    length(bytes) <= remaining || throw(ArgumentError("input_budget_exceeded: $path"))
+    return (path=path, sha256=bytes2hex(sha256(bytes)), bytes=bytes)
+end
+
+function _saved_parse(snapshot)
+    try
+        return _read_report_csv(IOBuffer(snapshot.bytes), snapshot.path)
+    catch error
+        error isa ArgumentError || rethrow()
+        throw(ArgumentError("insufficient_data: $(snapshot.path): $(error.msg)"))
+    end
+end
+
+function _saved_path(path)
+    absolute = abspath(path)
+    ispath(absolute) && return realpath(absolute)
+    parent = dirname(absolute)
+    parent == absolute && return absolute
+    return joinpath(_saved_path(parent), basename(absolute))
+end
+
+"""
+    compare_saved_results(catalog_path, output_directory; reference_id,
+        temperature_atol=1e-9, voltage_atol=1e-12, maximum_input_bytes=16*1024^2)
+
+Compare bounded, captured catalog/summary CSV snapshots without computation.
+Returns comparison, report paths, coverage, source snapshots and analysis status.
+The provenance scope is `declared_saved_report`; native identity and scientific
+assessments are unavailable. Completion refers only to descriptive analysis.
+"""
+function compare_saved_results(catalog_path::AbstractString, output_directory::AbstractString;
+    reference_id, temperature_atol=1e-9, voltage_atol=1e-12,
+    maximum_input_bytes=16*1024^2)
+    ta = _saved_matching_tolerance(temperature_atol, "temperature_atol", "K")
+    va = _saved_matching_tolerance(voltage_atol, "voltage_atol", "V")
+    maximum_input_bytes isa Integer && 0 < maximum_input_bytes < typemax(Int) ||
+        throw(ArgumentError("input_budget_exceeded: maximum_input_bytes must be a positive bounded integer"))
+    endswith(lowercase(catalog_path), ".csv") ||
+        throw(ArgumentError("unsupported_saved_input: expected saved catalog CSV: $catalog_path"))
+    catalog = _saved_path(catalog_path)
+    snapshots = [_saved_capture(catalog, Int(maximum_input_bytes))]
+    header, records = _saved_parse(first(snapshots))
+    required = ("method_id", "label", "structure_id", "physics_signature", "modifies_physics", "algorithm_family", "summary_path")
+    all(name -> name in header, required) || throw(ArgumentError("insufficient_data: required catalog columns absent: $catalog"))
+    runs = MethodRun[]
+    remaining = Int(maximum_input_bytes) - length(first(snapshots).bytes)
+    for record in records
+        descriptor = try
+            MethodDescriptor(id=_required_report_field(record,"method_id",catalog),
+                label=_required_report_field(record,"label",catalog),
+                structure_id=_required_report_field(record,"structure_id",catalog),
+                physics_signature=_required_report_field(record,"physics_signature",catalog),
+                modifies_physics=_parse_report_bool(_required_report_field(record,"modifies_physics",catalog),"modifies_physics"),
+                algorithm_family=_required_report_field(record,"algorithm_family",catalog),
+                description=something(_optional_report_field(record,"description"),""),
+                literature=something(_optional_report_field(record,"literature"),""))
+        catch error
+            error isa ArgumentError || rethrow()
+            throw(ArgumentError("insufficient_data: $catalog: $(error.msg)"))
+        end
+        any(run -> run.descriptor.id == descriptor.id, runs) && throw(ArgumentError("incomparable_inputs: duplicate method id $(descriptor.id): $catalog"))
+        summary = try _required_report_field(record,"summary_path",catalog) catch error
+            error isa ArgumentError || rethrow()
+            throw(ArgumentError("insufficient_data: $catalog: $(error.msg)"))
+        end
+        endswith(lowercase(summary),".csv") || throw(ArgumentError("unsupported_saved_input: $summary"))
+        path = _saved_path(isabspath(summary) ? summary : joinpath(dirname(catalog),summary))
+        index = findfirst(s -> s.path == path, snapshots)
+        if index === nothing
+            snapshot = _saved_capture(path,remaining)
+            push!(snapshots,snapshot)
+            remaining -= length(snapshot.bytes)
+        else
+            snapshot = snapshots[index]
+        end
+        columns, rows = _saved_parse(snapshot)
+        run = try _load_method_run(descriptor,path,columns,rows) catch error
+            error isa ArgumentError || rethrow()
+            throw(ArgumentError("insufficient_data: $path: $(error.msg)"))
+        end
+        push!(runs,run)
+    end
+    length(runs) >= 2 || throw(ArgumentError("insufficient_data: catalog requires reference and candidate: $catalog"))
+    refs = filter(r -> r.descriptor.id == Symbol(reference_id), runs)
+    length(refs) == 1 || throw(ArgumentError("incomparable_inputs: reference_id must identify exactly one method: $catalog"))
+    reference = only(refs)
+    for run in runs
+        run.descriptor.structure_id == reference.descriptor.structure_id || throw(ArgumentError("incomparable_inputs: different structure_id: $(run.summary_path)"))
+        !run.descriptor.modifies_physics && run.descriptor.physics_signature != reference.descriptor.physics_signature && throw(ArgumentError("incomparable_inputs: unchanged physics signature differs: $(run.summary_path)"))
+        for (i, point) in enumerate(run.points)
+            isfinite(point.temperature_K) && isfinite(point.voltage_per_period_V) || throw(ArgumentError("ambiguous_points: nonfinite coordinates: $(run.summary_path)"))
+            for other in run.points[1:i-1]
+                abs(point.temperature_K-other.temperature_K) <= ta && abs(point.voltage_per_period_V-other.voltage_per_period_V) <= va && throw(ArgumentError("ambiguous_points: repeated or near coordinates: $(run.summary_path)"))
+            end
+        end
+    end
+    coverage = NamedTuple[]
+    matches = NamedTuple[]
+    for candidate in runs
+        candidate === reference && continue
+        used = Set{Int}()
+        for rp in reference.points
+            indices = findall(cp -> abs(cp.temperature_K-rp.temperature_K) <= ta && abs(cp.voltage_per_period_V-rp.voltage_per_period_V) <= va,candidate.points)
+            length(indices) <= 1 || throw(ArgumentError("ambiguous_points: $(candidate.summary_path)"))
+            selector = (reference_id=reference.descriptor.id,candidate_id=candidate.descriptor.id,
+                reference_path=reference.summary_path,candidate_path=candidate.summary_path,
+                reference_temperature_K=rp.temperature_K,reference_voltage_V=rp.voltage_per_period_V)
+            if isempty(indices)
+                push!(coverage,merge(selector,(metric=:all,reason=:unmatched_reference_point,)))
+                continue
+            end
+            index = only(indices)
+            index in used && throw(ArgumentError("ambiguous_points: candidate reused: $(candidate.summary_path)"))
+            push!(used,index)
+            cp = candidate.points[index]
+            push!(matches,merge(selector,(candidate_temperature_K=cp.temperature_K,candidate_voltage_V=cp.voltage_per_period_V,
+                delta_temperature_K=cp.temperature_K-rp.temperature_K,delta_voltage_V=cp.voltage_per_period_V-rp.voltage_per_period_V)))
+            for metric in union(keys(rp.metrics),keys(cp.metrics))
+                reason = !haskey(rp.metrics,metric) || !haskey(cp.metrics,metric) ? :missing_metric :
+                    !isfinite(rp.metrics[metric]) || !isfinite(cp.metrics[metric]) ? :nonfinite_metric : nothing
+                reason === nothing || push!(coverage,merge(selector,(metric=metric,reason=reason,)))
+            end
+        end
+        for (index, cp) in enumerate(candidate.points)
+            index in used && continue
+            push!(coverage,(reference_id=reference.descriptor.id,candidate_id=candidate.descriptor.id,
+                reference_path=reference.summary_path,candidate_path=candidate.summary_path,
+                reference_temperature_K=missing,reference_voltage_V=missing,
+                candidate_temperature_K=cp.temperature_K,candidate_voltage_V=cp.voltage_per_period_V,
+                metric=:all,reason=:unmatched_candidate_point))
+        end
+    end
+    compared = compare_method_runs(runs;reference_id,temperature_atol=ta,voltage_atol=va)
+    rows = filter(row -> isfinite(row.reference_value) && isfinite(row.candidate_value),compared.rows)
+    isempty(rows) && throw(ArgumentError("insufficient_data: no finite matched metric pair: $catalog"))
+    comparison = ExpertComparison(compared.structure_id,compared.reference_id,compared.runs,rows)
+    directory = _saved_path(output_directory)
+    for snapshot in snapshots
+        (snapshot.path == directory || startswith(snapshot.path, directory * (Sys.iswindows() ? "\\" : "/"))) && throw(ArgumentError("output_collision: analysis directory contains input $(snapshot.path)"))
+        for name in ("expert_report.md","method_comparison.csv","method_points.csv","comparison_coverage.csv")
+            target = joinpath(directory,name)
+            (_saved_path(target) == snapshot.path || (isfile(target) && samefile(target,snapshot.path))) && throw(ArgumentError("output_collision: $(snapshot.path)"))
+        end
+    end
+    status = isempty(coverage) ? :completed : :partial
+    paths = (markdown=joinpath(directory,"expert_report.md"),
+        comparison_csv=joinpath(directory,"method_comparison.csv"),
+        points_csv=joinpath(directory,"method_points.csv"),
+        coverage_csv=joinpath(directory,"comparison_coverage.csv"))
+    # Build the completion-bearing report in memory. Legacy direct writers keep
+    # their behavior; no final Markdown is published until all other writes pass.
+    markdown_buffer = IOBuffer()
+    _render_expert_markdown(markdown_buffer,comparison,reference;
+        title="Saved report descriptive differences")
+    # Preserve legacy writer behavior for direct calls; the saved frontend labels
+    # its reused report as differences and unverified declarations.
+    markdown = replace(String(take!(markdown_buffer)),
+        "Current-density accuracy and resources" => "Current-density differences and resources",
+        "computational only" => "declares unchanged physics (unverified)",
+        "exact computational" => "declares unchanged physics (unverified)",
+        "Approximate acceptance completes the workflow with warnings; it is not a strict accuracy certificate." => "Approximate and failed source statuses remain descriptive observations.",
+        "Only converged current-density pairs should be used for physical conclusions." => "Converged pairs are descriptive differences, not independent physical validation.",
+        "Max relative current error" => "Max relative current difference",
+        "Max absolute error" => "Max absolute difference",
+        "Max relative error" => "Max relative difference",
+        "Relative error" => "Relative difference",
+        "Physics-first metric envelope" => "Converged metric differences")
+    footer_buffer = IOBuffer()
+    write(footer_buffer,markdown)
+    let io = footer_buffer
+        println(io,"\n## Saved source provenance\n")
+        println(io,"Scope: declared_saved_report. Analysis status: $status. Native execution/attempt/branch/order/commit identity and scientific/physics/discretization/experimental assessments: unavailable. Declared signatures do not establish full resolved-model equivalence. Optical metrics are archived observations only. No accuracy or scientific acceptance certificate is produced.")
+        println(io,"Matching locator tolerances (caller/effective): temperature $(repr(temperature_atol)) / $ta K; voltage $(repr(voltage_atol)) / $va V.")
+        for snapshot in snapshots
+            println(io,"\nSource: `$(snapshot.path)`; SHA256 `$(snapshot.sha256)`; $(length(snapshot.bytes)) captured bytes.")
+        end
+        for match in matches
+            println(io,"\nMatch selector: `$(repr(match))`")
+        end
+        for item in coverage
+            println(io,"\nCoverage: `$(repr(item))`")
+        end
+    end
+    complete_markdown = String(take!(footer_buffer))
+    mkpath(directory)
+    _write_comparison_csv(paths.comparison_csv,comparison)
+    _write_points_csv(paths.points_csv,comparison)
+    open(paths.coverage_csv,"w") do io
+        println(io,"reason,metric,source_selector")
+        for item in coverage
+            println(io,join(_report_csv_field.((String(item.reason),String(item.metric),repr(item))),","))
+        end
+    end
+    source_metadata = map(snapshots) do snapshot
+        selectors = snapshot.path == catalog ?
+            [(method_id=run.descriptor.id,) for run in runs] :
+            [(method_id=run.descriptor.id, temperature_K=point.temperature_K,
+                voltage_per_period_V=point.voltage_per_period_V)
+                for run in runs if run.summary_path == snapshot.path for point in run.points]
+        (path=snapshot.path, sha256=snapshot.sha256,
+            byte_count=length(snapshot.bytes), source_selectors=selectors)
+    end
+    result = (comparison=comparison,paths=paths,coverage=coverage,
+        source_snapshots=source_metadata,analysis_status=status,matches=matches,
+        matching_tolerances=(temperature_caller=temperature_atol,temperature_effective=ta,voltage_caller=voltage_atol,voltage_effective=va))
+    # Last output operation: existing atomic helper cleans up on failure and
+    # publishes the truthful completed/partial label only after the whole set.
+    _observability_atomic_text(paths.markdown) do io
+        write(io,complete_markdown)
+    end
+    return result
+end

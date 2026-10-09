@@ -32,8 +32,10 @@ independent plan with a new identity; existing fingerprints, statuses, qualities
 and warnings are not rewritten or automatically migrated. Independent Results
 readers and raw archive inspection remain separate from executable typed loading.
 Compatibility with every historical archive schema has not been established.
-Existing invalid-predecessor `cold_start`/`skip` behavior and complete S06 branch
-failure acceptance remain separate work; retirement does not establish that gate.
+Strict invalid predecessors leave declared descendants skipped and not evaluated.
+Only explicit `cold_start` permits a cold suffix; an accepted suffix does not erase
+the earlier branch failure. Metadata routing evidence does not establish full
+S06 native recovery or scientific acceptance.
 
 The CLI writes scientific result JSON to stdout and artifacts below the output
 directory. Exit code 0 means successful process completion. Inspect scientific

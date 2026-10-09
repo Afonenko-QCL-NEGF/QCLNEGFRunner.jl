@@ -152,3 +152,26 @@ temporary HDF5 round-trip. It verifies that the selected Julia release and stora
 on a node; its JSON explicitly leaves nonlinear, discretization, and experimental acceptance
 unevaluated. It does not run SCBA or Poisson. `--directory DIRECTORY` selects the existing
 temporary-file parent.
+
+## Branch failure metadata
+
+New branch warnings contain exactly `code`, `scope`, `reason_kind`,
+`source_execution_id`, `source_point_id`, `source_attempt`, and `message`.
+`BRANCH_STOPPED` records an observed cause on the terminal source;
+`DEPENDENCY_UNAVAILABLE` preserves that exact causal attempt on an unrun
+descendant, whose initialization still names its immediate predecessor.
+Strict continuation admits only the existing Core final certificate. The default
+stops the branch; explicit `cold_start` permits a cold suffix but does not erase
+its earlier failure. Other independent executions follow the campaign policy.
+
+Skipped rows have `quality: not_evaluated`, `full_state: null`, and
+`state_absence_reason: solver_not_run`. Their required Boolean `converged: false`
+is not a measured convergence result. An absent row after a hard kill remains
+absent. Row counts include skipped metadata, not just scientific payloads.
+Verified recovery into an explicitly authorized new attempt preserves the prefix
+and cumulative budget. A completed immutable final is reused, including a
+nonaccepted final; scientific retry needs a separate authorized identity.
+Legacy warnings and historical attempts remain unchanged; an unknown legacy
+reason is not inferred from prose. Raw conflicting or incomplete provenance is
+refused before normalization or result replacement. These metadata checks do not
+establish native recovery, discretization or experimental validation.
