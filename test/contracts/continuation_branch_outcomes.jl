@@ -102,7 +102,8 @@ end
     _upsert_scientific_point!(rows,row(4;status=:failed),order)
     @test [r.id for r in rows]==["p1","p2","p3","p4","p5"]
     @test rows[1:3]==prefix && rows[5]===future
-    _upsert_scientific_point!(rows,row(4;attempt=2),order)
+    _upsert_scientific_point!(rows,row(4;attempt=2,
+        data=Dict{String,Any}("full_state"=>"sentinel-4-attempt2","result_commit"=>"commit-4-attempt2")),order)
     @test rows[4].attempt==2 && length(rows)==5
     dup=[row(1),row(1)];before=copy(dup)
     @test_throws ArgumentError _upsert_scientific_point!(dup,row(4),order)
@@ -148,7 +149,42 @@ const cases=Any[]
     history=[old];current=[row(1),row(2),row(3),old,row(5;status=:skipped,quality=:not_evaluated)]
     _upsert_scientific_point!(current,row(4;attempt=2),order)
     @test _scientific_result_dict(history[1])==before && history[1].attempt==1
+    @test current[4]===old && current[4].attempt==1
     @test _usable_voltage_state(eligible,:strict) && !_usable_voltage_state(ineligible,:strict)
+end
+# Review regressions exercise production upsert, not file presence/caller text.
+# Wrong immutable replacement, locator copying or causal attempt admission must fail.
+@testset "Review immutable final and attempt ownership regressions" begin
+    final=row(4;attempt=3,assessment=assessment("physical_and_algebraic","fail"))
+    before=deepcopy(_scientific_result_dict(final))
+    rows=[row(1),row(2),row(3),final]
+    cancelled=row(4;attempt=3,status=:cancelled,quality=:not_evaluated,converged=false,
+                  data=Dict{String,Any}("full_state"=>nothing,"state_absence_reason"=>"solver_did_not_publish_a_final_state"))
+    _upsert_scientific_point!(rows,cancelled,order)
+    @test _scientific_result_dict(rows[4])==before
+    @test rows[4].status===:completed && rows[4].attempt==3
+    old=row(4;attempt=1,status=:paused,quality=:unconverged,converged=false,
+            assessment=assessment("physical_and_algebraic","not_measured"))
+    oldbefore=deepcopy(_scientific_result_dict(old));rows=[old]
+    failed=row(4;attempt=2,status=:failed,quality=:invalid,converged=false,
+               assessment=deepcopy(old.observables["scientific_assessment"]),data=deepcopy(old.data))
+    @test_throws ArgumentError _upsert_scientific_point!(rows,failed,order)
+    @test _scientific_result_dict(rows[1])==oldbefore
+    source=row(4;attempt=3,assessment=assessment("physical_and_algebraic","fail"))
+    owner=row(5;attempt=1,status=:skipped,quality=:not_evaluated,converged=false,
+              data=Dict{String,Any}("full_state"=>nothing,"state_absence_reason"=>"solver_not_run"))
+    push!(owner.warnings,_continuation_reason_record("DEPENDENCY_UNAVAILABLE","physical_gate_failed",source,"actual source3"))
+    rows=[source]
+    @test_throws ArgumentError _upsert_scientific_point!(rows,owner,order)
+    @test [r.id for r in rows]==["p4"]
+    # Campaign stop for a preloaded completed point of another execution.
+    e2=ScientificPointResult("p6","e2",4,points[6] |> p->(temperature_K=p.temperature_K,voltage_per_period_V=p.voltage_per_period_V,branch=p.branch,order=p.order),
+        final.initialization,:completed,:unconverged,false,Dict{String,Any}[],deepcopy(final.observables),Dict{String,Any}("full_state"=>"e2-final","result_commit"=>"e2-commit"),Dict{String,Any}())
+    e2before=deepcopy(_scientific_result_dict(e2));rows=[row(1;status=:failed),e2]
+    stopped=ScientificPointResult(e2.id,e2.execution_id,5,e2.coordinates,e2.initialization,:skipped,:not_evaluated,false,
+        Dict{String,Any}[],Dict{String,Any}(),Dict{String,Any}("full_state"=>nothing,"state_absence_reason"=>"solver_not_run"),Dict{String,Any}())
+    _upsert_scientific_point!(rows,stopped,order)
+    @test _scientific_result_dict(rows[2])==e2before
 end
 @testset "Cold suffix, interruption and recovery assumptions" begin
     strict=VoltageContinuation(:strict,:cold_start)
@@ -170,9 +206,12 @@ end
     verified_recovery=true;confirmed_stop=true;new_attempt=2;completed_final=false
     @test verified_recovery && confirmed_stop && new_attempt>source.attempt && !completed_final
     recovery_calls=["p4:2","p5:2"]
-    retained=[source];before=deepcopy(_scientific_result_dict(source))
-    _upsert_scientific_point!(rows,row(4;attempt=2),order)
-    @test recovery_calls==["p4:2","p5:2"] && rows[1:3]==prefix
+    recovery_source=row(4;attempt=1,status=:paused,quality=:unconverged,converged=false)
+    recovery_rows=[prefix...,recovery_source]
+    retained=[recovery_source];before=deepcopy(_scientific_result_dict(recovery_source))
+    _upsert_scientific_point!(recovery_rows,row(4;attempt=2,
+        data=Dict{String,Any}("full_state"=>"new-attempt2-state","result_commit"=>"new-attempt2-commit")),order)
+    @test recovery_calls==["p4:2","p5:2"] && recovery_rows[1:3]==prefix && recovery_rows[4].attempt==2
     @test _scientific_result_dict(retained[1])==before
     for status in (:paused,:cancelled)
         operational=row(4;status,quality=:not_evaluated,converged=false)
@@ -180,7 +219,8 @@ end
         @test status in (:paused,:cancelled) # root keeps operational carrier
     end
     # Historical cause attempt1 remains exact on owner attempt2, immediate predecessor p5.
-    base=deepcopy(cases[2]);owner=row(6;attempt=2,status=:skipped,quality=:not_evaluated,converged=false)
+    base=deepcopy(cases[2]);owner=row(6;attempt=2,status=:skipped,quality=:not_evaluated,converged=false,
+        data=Dict{String,Any}("full_state"=>nothing,"state_absence_reason"=>"solver_not_run"))
     warning=_continuation_reason_record("DEPENDENCY_UNAVAILABLE","process_failure",source,"historical cause")
     push!(owner.warnings,warning)
     owner_dict=_scientific_result_dict(owner)
@@ -195,6 +235,54 @@ end
     legacy["record"]=legacy_warning;legacy["expected"]=nothing
     push!(cases,legacy)
     @test length(cases)==16
+end
+@testset "Exact prior selection and terminal retention seam" begin
+    old=row(4;attempt=1,status=:paused,converged=false,
+            assessment=assessment("physical_and_algebraic","not_measured"))
+    oldbefore=deepcopy(_scientific_result_dict(old));current=[row(1),row(2),row(3),old]
+    prefix=copy(current[1:3]);history=[old]
+    prior=_continuation_current_attempt_row(current,"p4","e1",2)
+    @test prior===nothing
+    @test _continuation_current_attempt_row(current,"p4","foreign",1)===nothing
+    fresh=row(4;attempt=2,status=:failed,quality=:invalid,converged=false,
+              data=Dict{String,Any}("full_state"=>nothing,"state_absence_reason"=>"solver_did_not_publish_a_final_state"))
+    _upsert_scientific_point!(current,fresh,order)
+    _continuation_record_history!(history,fresh)
+    @test current[1:3]==prefix && current[4].attempt==2
+    @test isempty(current[4].observables) && !haskey(current[4].data,"result_commit")
+    @test _scientific_result_dict(history[1])==oldbefore
+    final=row(4;attempt=3,assessment=assessment("physical_and_algebraic","fail"))
+    current=[row(1),row(2),row(3),final];history=ScientificPointResult[]
+    retained=_continuation_current_attempt_row(current,"p4","e1",3)
+    _continuation_record_history!(history,retained)
+    _continuation_record_history!(history,retained)
+    @test length(history)==1 && history[1]===final && current[4]===final
+    @test current[4].status===:completed && current[4].data["result_commit"]=="commit-4"
+    # Subsequent generic resume admits no current-point retry and no failed seed.
+    dispatches=String[]
+    current[4].status===:completed || push!(dispatches,"p4")
+    _continuation_branch_action(VoltageContinuation(:strict),final,false)===:continue && push!(dispatches,"p5")
+    @test isempty(dispatches)
+    compatible=_continuation_unrun_attempt(1,final,nothing)
+    @test compatible==3
+    @test_throws ArgumentError _continuation_unrun_attempt(1,final,2)
+    base=deepcopy(cases[2]);source=row(4;attempt=3,status=:completed,quality=:unconverged,converged=false,assessment=assessment("physical_and_algebraic","fail"))
+    owner=row(6;attempt=compatible,status=:skipped,quality=:not_evaluated,converged=false,
+              data=Dict{String,Any}("full_state"=>nothing,"state_absence_reason"=>"solver_not_run"))
+    warning=_continuation_reason_record("DEPENDENCY_UNAVAILABLE","physical_gate_failed",source,"actual source3")
+    push!(owner.warnings,warning)
+    ownerdict=_scientific_result_dict(owner)
+    ownerdict["initialization"]=(kind="unavailable_predecessor",source_point_id="p5",checkpoint=nothing,fallback_reason=nothing)
+    base["record"]=warning;base["owner_point"]=ownerdict
+    base["expected"]=Dict("code"=>"DEPENDENCY_UNAVAILABLE","scope"=>"branch","reason_kind"=>"physical_gate_failed","source_execution_id"=>"e1","source_point_id"=>"p4","source_attempt"=>3,"message"=>"actual source3")
+    base["source_points"]["points"][4]=_scientific_result_dict(source)
+    base["source_points"]["points"][6]=ownerdict
+    base["source_points"]["attempt_history"]=[_scientific_result_dict(source),ownerdict]
+    boundrows=[source]
+    _upsert_scientific_point!(boundrows,owner,order)
+    @test boundrows[2].attempt==3 && boundrows[2].warnings[1]["source_attempt"]==3
+    push!(cases,base)
+    @test length(cases)==17
 end
 # Parse caller source without evaluation/import; production placement is independently reviewed.
 @testset "Production caller parses" begin

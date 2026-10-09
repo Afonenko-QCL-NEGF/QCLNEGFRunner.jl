@@ -552,7 +552,7 @@ function execute_scientific_plan(
                 _initialization("unavailable_predecessor";source=point.predecessor_id),
                 :skipped,:not_evaluated,false;warnings)
             _upsert_scientific_point!(results,record,point_order)
-            push!(history,record)
+            _continuation_record_history!(history,record)
         end
         publish(status)
     end
@@ -564,6 +564,10 @@ function execute_scientific_plan(
             for point_id in execution.point_ids
                 point=points[point_id]
                 old=get(existing, point_id, nothing)
+                if old!==nothing && old.status===:completed
+                    _upsert_scientific_point!(results,old,point_order)
+                    continue
+                end
                 record=_point_result(
                     point,
                     old===nothing ? 1 : old.attempt+1,
@@ -580,7 +584,7 @@ function execute_scientific_plan(
                     ],
                 )
                 _upsert_scientific_point!(results,record,point_order)
-                push!(history, record)
+                _continuation_record_history!(history,record)
             end
             publish()
             continue
@@ -649,7 +653,7 @@ function execute_scientific_plan(
                 )
                 record.data["result_commit"]=replace(relpath(commit, root), '\\'=>'/')
                 _upsert_scientific_point!(results,record,point_order)
-                push!(history, record)
+                _continuation_record_history!(history,record)
                 publish()
                 _scientific_progress(root, point, attempt, :completed, directory)
             end
@@ -851,6 +855,8 @@ function execute_scientific_plan(
                     )
                     previous=nothing
                 else
+                    attempt=_continuation_unrun_attempt(attempt,
+                        branch_cause===nothing ? nothing : branch_cause.source,requested_attempt)
                     record=_point_result(
                         point,
                         attempt,
@@ -876,7 +882,7 @@ function execute_scientific_plan(
                     end
                     branch_failed |= execution.policies.voltage.mode===:strict
                     _upsert_scientific_point!(results,record,point_order)
-                    push!(history, record)
+                    _continuation_record_history!(history,record)
                     publish()
                     continue
                 end
@@ -902,7 +908,7 @@ function execute_scientific_plan(
                 )
                 preparation_error===nothing || remember_failure(record)
                 _upsert_scientific_point!(results,record,point_order)
-                push!(history, record)
+                _continuation_record_history!(history,record)
                 publish()
                 preparation_error!==nothing &&
                     execution.policies.on_child_failure===:stop &&
@@ -1354,7 +1360,7 @@ function execute_scientific_plan(
                         )
                     end
                 end
-                push!(history, record)
+                _continuation_record_history!(history,record)
                 publish()
                 terminal_status=:completed
                 _scientific_progress(root, point, attempt, :completed, directory)
@@ -1403,25 +1409,42 @@ function execute_scientific_plan(
                     )
                     remember_failure(record;interruption=error.reason)
                     _upsert_scientific_point!(results,record,point_order)
-                    push!(history, record)
+                    _continuation_record_history!(history,record)
                     publish_unrun_descendants(record,"interrupted",error.reason)
                     _scientific_progress(root, point, attempt, error.reason, directory)
                     return result_document(error.reason)
                 end
                 if error isa InterruptException
                     terminal_status=:cancelled
+                    retained=_continuation_current_attempt_row(results,point_id,execution.id,attempt)
+                    if retained!==nothing && retained.status===:completed
+                        _continuation_record_history!(history,retained)
+                        publish_unrun_descendants(retained,"interrupted",:cancelled)
+                        _scientific_progress(root,point,attempt,:cancelled,directory)
+                        rethrow()
+                    end
                     record=_point_result(point,attempt,initialization,:cancelled,:not_evaluated,false;
                         warnings=[Dict{String,Any}("code"=>"CANCELLED","scope"=>"point","message"=>"cooperative cancellation")])
                     remember_failure(record;interruption=:cancelled)
                     _upsert_scientific_point!(results,record,point_order)
-                    push!(history,record)
+                    _continuation_record_history!(history,record)
                     publish_unrun_descendants(record,"interrupted",:cancelled)
                     _scientific_progress(root,point,attempt,:cancelled,directory)
                     rethrow()
                 end
                 # Preserve a computed current if the mandatory artifact sink failed.
-                prior_index=findfirst(r->r.id==point_id,results)
-                prior=prior_index===nothing ? nothing : results[prior_index]
+                prior=_continuation_current_attempt_row(results,point_id,execution.id,attempt)
+                if prior!==nothing && prior.status===:completed
+                    # A later operational error cannot revoke an immutable final.
+                    _continuation_record_history!(history,prior)
+                    branch_failed=true
+                    previous=nothing
+                    previous_id=point_id
+                    execution.policies.on_child_failure===:stop && (stop_campaign=true)
+                    publish()
+                    _scientific_progress(root,point,attempt,:failed,directory)
+                    continue
+                end
                 warnings=prior===nothing ? Dict{String,Any}[] : copy(prior.warnings)
                 push!(
                     warnings,
@@ -1448,7 +1471,7 @@ function execute_scientific_plan(
                 remember_failure(record,nothing,solution===nothing ? nothing : solution.status;
                     artifact_error=solution===nothing ? nothing : sprint(showerror,error))
                 _upsert_scientific_point!(results,record,point_order)
-                push!(history, record)
+                _continuation_record_history!(history,record)
                 publish()
                 _scientific_progress(root, point, attempt, :failed, directory)
                 previous=nothing

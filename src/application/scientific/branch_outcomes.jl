@@ -110,6 +110,32 @@ function _continuation_reason_record(code,kind,source_row,message)
         "source_attempt"=>source_row.attempt,"message"=>_continuation_bounded_message(message))
 end
 
+# Only a row published by this exact attempt may donate its current payload.
+function _continuation_current_attempt_row(rows,id,execution_id,attempt)
+    index=findfirst(r->r.id==id && r.execution_id==execution_id && r.attempt==attempt,rows)
+    return index===nothing ? nothing : rows[index]
+end
+
+function _continuation_unrun_attempt(default_attempt,source_row,requested_attempt)
+    source_row===nothing && return default_attempt
+    requested_attempt===nothing || requested_attempt>=source_row.attempt ||
+        throw(ArgumentError("scientific_source_invalid: requested unrun attempt precedes causal source"))
+    return max(default_attempt,source_row.attempt)
+end
+
+function _continuation_record_history!(history,record)
+    index=findfirst(r->r.id==record.id && r.execution_id==record.execution_id &&
+        r.attempt==record.attempt,history)
+    if index===nothing
+        push!(history,record)
+    else
+        old=history[index]
+        all(isequal(getfield(old,key),getfield(record,key)) for key in fieldnames(typeof(record))) ||
+            throw(ArgumentError("scientific_source_invalid: conflicting terminal history tuple"))
+    end
+    return history
+end
+
 function _upsert_scientific_point!(rows,record,point_order)
     positions=Dict(id=>i for (i,id) in enumerate(point_order))
     length(positions)==length(point_order) || throw(ArgumentError("duplicate frozen point ID"))
@@ -118,6 +144,33 @@ function _upsert_scientific_point!(rows,record,point_order)
     length(unique(ids))==length(ids) || throw(ArgumentError("duplicate current point ID"))
     all(haskey(positions,id) for id in ids) || throw(ArgumentError("unknown current point ID"))
     index=findfirst(==(record.id),ids)
+    prior=index===nothing ? nothing : rows[index]
+    # A completed archive is immutable even when later optional work is cancelled.
+    prior===nothing || prior.status!==:completed || return rows
+    for warning in record.warnings
+        if haskey(warning,"reason_kind")
+            source_attempt=get(warning,"source_attempt",nothing)
+            source_attempt isa Integer && !(source_attempt isa Bool) &&
+            0<source_attempt<=record.attempt ||
+                throw(ArgumentError("scientific_source_invalid: branch source attempt exceeds owner attempt"))
+        end
+    end
+    if prior!==nothing && prior.attempt!=record.attempt
+        copied=any(get(prior.data,key,nothing)!==nothing &&
+            get(record.data,key,nothing)==get(prior.data,key,nothing)
+            for key in ("full_state","result_commit"))
+        if copied
+            historical_source=get(prior.data,"checkpoint_source_attempt",prior.attempt)
+            declared=record.status===:paused &&
+                get(record.data,"pause_reason",nothing)=="resource_pressure" &&
+                get(record.data,"resume_kind",nothing)=="checkpoint" &&
+                get(record.data,"recovery_origin",nothing)=="last_committed_before_resource_pause" &&
+                get(record.data,"checkpoint_source_attempt",nothing)==historical_source &&
+                historical_source isa Integer && !(historical_source isa Bool) &&
+                0<historical_source<record.attempt
+            declared || throw(ArgumentError("scientific_source_invalid: native payload belongs to a prior attempt"))
+        end
+    end
     index===nothing ? push!(rows,record) : (rows[index]=record)
     sort!(rows;by=r->positions[r.id])
     return rows
