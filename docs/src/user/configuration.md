@@ -15,6 +15,26 @@ points. Temperature and voltage axes must be explicit; no device-specific operat
 ID must be an entry from `plan.executions`, never an unrelated process identifier.
 Continuation points within that execution remain sequential.
 
+Voltage policy accepts `independent` (the default, no predecessor reuse) and `strict`.
+Strict reuse requires consistent final whole/inner convergence and quality plus
+ready Core stationary assessment with its known registry version and all four
+stationary certificate flags true. Live reuse also requires the actual final
+report to pass; completed restore reads the retained assessment from a verified
+native commit and checks original final flags against commit and series metadata.
+Operational `restart` is not a final convergence verdict. This gate is separate
+from inner SCBA→Poisson permission and from campaign discretization or experimental
+validation; `not_measured` is not promoted to pass.
+
+Legacy voltage `research` finite-predecessor policy is retired with an explicit
+error. This is a breaking boundary for typed frozen-plan load, re-execution,
+resume, and Runner helpers that load such plans. Choose a new explicit strict or
+independent plan with a new identity; existing fingerprints, statuses, qualities
+and warnings are not rewritten or automatically migrated. Independent Results
+readers and raw archive inspection remain separate from executable typed loading.
+Compatibility with every historical archive schema has not been established.
+Existing invalid-predecessor `cold_start`/`skip` behavior and complete S06 branch
+failure acceptance remain separate work; retirement does not establish that gate.
+
 The CLI writes scientific result JSON to stdout and artifacts below the output
 directory. Exit code 0 means successful process completion. Inspect scientific
 status and point quality before treating a result as accepted. Invalid arguments

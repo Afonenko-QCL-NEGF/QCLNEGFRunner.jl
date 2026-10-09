@@ -4,7 +4,12 @@ function _scientific_identity(value::String, label::String)
     return value
 end
 
-"""Named voltage continuation is independent of the inner SCBA→Poisson policy."""
+"""Named voltage continuation, separate from inner SCBA→Poisson permission.
+
+New executable plans support `:independent` (default) or `:strict` predecessors.
+Legacy finite `:research` predecessors are retired, including typed frozen-plan
+load and resume. Create a new explicitly selected plan; do not migrate its identity.
+"""
 struct VoltageContinuation
     mode::Symbol
     invalid_predecessor::Symbol
@@ -12,7 +17,10 @@ struct VoltageContinuation
         mode::Symbol = :independent,
         invalid_predecessor::Symbol = :stop_branch,
     )
-        mode in (:independent, :strict, :research) ||
+        mode===:research && throw(ArgumentError(
+            "voltage continuation :research retired: legacy finite predecessor policy; create a new explicit :independent or :strict plan",
+        ))
+        mode in (:independent, :strict) ||
             throw(ArgumentError("unknown voltage continuation: $mode"))
         invalid_predecessor in (:stop_branch, :skip, :cold_start) ||
             throw(ArgumentError("invalid predecessor policy: $invalid_predecessor"))
