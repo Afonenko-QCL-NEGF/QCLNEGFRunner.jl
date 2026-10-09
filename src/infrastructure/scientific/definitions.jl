@@ -407,18 +407,33 @@ function resolve_scientific_configuration(
         end
         _deep_merge!(raw, override, provenance, origin)
     end
-    raw["run"]["name"]=definition.id*"-"*variant.id
-    raw["study"]=deepcopy(_scientific_single_study(raw["study"], definition))
-    raw["solver"]["convergence"]["mode"]=String(definition.policies.scba_to_poisson)
-    raw["physical"]["lattice_temperature"]="$(first(definition.temperatures)) K"
-    raw["physical"]["lo_temperature"]="$(first(definition.temperatures)) K"
-    raw["output"]["resume"]=false
-    raw["output"]["save_full_state"]=definition.outputs.full_state
-    raw["output"]["save_csv"]=true
-    raw["output"]["save_plots"]=false
-    raw["output"]["live_visualization"]=false
-    raw["output"]["progress"]["terminal"]=false
-    raw["output"]["light_max_snapshots"]=definition.outputs.intermediate_history
+    # Generated labels identify the assigning policy, not physical data sources.
+    _deep_merge!(raw, Dict{String,Any}(
+        "run"=>Dict{String,Any}("name"=>definition.id*"-"*variant.id),
+    ), provenance, definition.source*"#generated:run-identity")
+    raw["study"]=_scientific_single_study(raw["study"], definition, provenance)
+    _deep_merge!(raw, Dict{String,Any}(
+        "solver"=>Dict{String,Any}("convergence"=>Dict{String,Any}(
+            "mode"=>String(definition.policies.scba_to_poisson),
+        )),
+    ), provenance, definition.source*"#generated:convergence-policy")
+    _deep_merge!(raw, Dict{String,Any}(
+        "physical"=>Dict{String,Any}(
+            "lattice_temperature"=>"$(first(definition.temperatures)) K",
+            "lo_temperature"=>"$(first(definition.temperatures)) K",
+        ),
+    ), provenance, definition.source*"#generated:temperature-axis")
+    _deep_merge!(raw, Dict{String,Any}(
+        "output"=>Dict{String,Any}(
+            "resume"=>false,
+            "save_full_state"=>definition.outputs.full_state,
+            "save_csv"=>true,
+            "save_plots"=>false,
+            "live_visualization"=>false,
+            "progress"=>Dict{String,Any}("terminal"=>false),
+            "light_max_snapshots"=>definition.outputs.intermediate_history,
+        ),
+    ), provenance, definition.source*"#generated:output-policy")
     return _resolve_configuration(
         raw,
         ConfigurationProvenance(
@@ -428,20 +443,23 @@ function resolve_scientific_configuration(
         ),
     )
 end
-function _scientific_single_study(study, definition)
+function _scientific_single_study(study, definition, provenance)
     value=deepcopy(study)
-    value["mode"]="single"
-    value["voltages_per_period"]=["$(first(first(definition.branches).voltages)) V"]
-    value["temperatures"]=["$(first(definition.temperatures)) K"]
-    value["methods"]=Any[]
-    value["reference_profile"]=nothing
-    value["comparison_profiles"]=Any[]
-    value["repetitions"]=1
-    value["calculate_optical_response"]=false
-    value["convergence"]=Dict{String,Any}(
-        key=>Int[] for
-        key in ("spatial_nodes", "energy_nodes", "momentum_nodes", "angular_nodes")
-    )
+    # Merge only assigned leaves so copied photon-energy controls keep their origins.
+    _deep_merge!(value, Dict{String,Any}(
+        "mode"=>"single",
+        "voltages_per_period"=>["$(first(first(definition.branches).voltages)) V"],
+        "temperatures"=>["$(first(definition.temperatures)) K"],
+        "methods"=>Any[],
+        "reference_profile"=>nothing,
+        "comparison_profiles"=>Any[],
+        "repetitions"=>1,
+        "calculate_optical_response"=>false,
+        "convergence"=>Dict{String,Any}(
+            key=>Int[] for
+            key in ("spatial_nodes", "energy_nodes", "momentum_nodes", "angular_nodes")
+        ),
+    ), provenance, definition.source*"#generated:single-study", "study")
     return value
 end
 function scientific_memory_estimate(
