@@ -689,6 +689,9 @@ end
 """
     run_comparison_study(configuration_directory)
 
+Deprecated combined compute wrapper. For saved analysis use `compare_saved_results`
+or CLI `compare`; `plan`/`run-plan` create and execute declared plans.
+
 Run every `study.methods` profile on the same physical structure, grid,
 operating points, and convergence tolerances.  Each repetition has its own
 checkpoint directory; its physical records remain separate. The comparison
@@ -704,6 +707,7 @@ function run_comparison_study(configuration_directory::AbstractString)
 end
 
 function run_comparison_study(study::ResolvedRunConfiguration, profile_root::AbstractString)
+    @warn "run_comparison_study is a deprecated combined compute wrapper: executes declared methods × repetitions. Use plan/run-plan for create/execute and compare_saved_results/CLI compare for saved analysis."
     study.study.mode === :comparison ||
         throw(ArgumentError("run_comparison_study requires study.mode: comparison"))
     output = configuration_output_directory(study)
