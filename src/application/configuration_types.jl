@@ -208,8 +208,16 @@ ResolvedRunConfiguration(args::Vararg{Any,17}) =
 """
     configuration_source(configuration, dotted_path)
 
-Return the winning YAML file for `dotted_path`, or `nothing` when the path is
-not a leaf in the resolved tree.
+Return the last assigning-source identifier recorded in the provenance
+history for `dotted_path`, or `nothing` when that history is absent or empty.
+Explicit configuration leaves record source filenames; generated overrides
+may record identifiers containing a `#generated:` marker. Later recorded
+assignments override earlier assignments.
+
+This lookup reports an assigning source. It does not infer a schema default,
+a typed-constructor default, or the complete origin of an effective value.
+It reads provenance only; source loading and validation are performed by
+`validate_configuration_source` and `load_configuration_source`.
 
 See [YAML run configurations](@ref yaml-run-configurations).
 """

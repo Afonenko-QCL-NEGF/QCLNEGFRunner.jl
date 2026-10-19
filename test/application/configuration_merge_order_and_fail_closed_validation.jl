@@ -25,6 +25,14 @@ include("../support/configuration.jl")
         reverse=load_run_configuration([base, second_file, first_file])
         @test reverse.production.energy_chunk==17
         @test reverse.output.directory=="results/first"
+        @test endswith(configuration_source(reverse, "production.energy_chunk"), "first.yaml")
+        @test endswith(configuration_source(load_run_configuration(base), "production.energy_chunk"), "base.yaml")
+        missing_history = deepcopy(merged)
+        delete!(missing_history.provenance.sources, "production.energy_chunk")
+        @test missing_history.production.energy_chunk == 23
+        @test configuration_source(missing_history, "production.energy_chunk") === nothing
+        missing_history.provenance.sources["production.energy_chunk"] = String[]
+        @test configuration_source(missing_history, "production.energy_chunk") === nothing
         invalid=[
             "physical:\n  undocumented_magic_parameter: 42\n",
             "physical:\n  lattice_temperature: '200 eV'\n",

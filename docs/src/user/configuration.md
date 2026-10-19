@@ -6,6 +6,39 @@ ordered files with `load_run_configuration`; later files override explicit field
 The schema is `schema/run.schema.json`. The checked example is
 `examples/config/reference-2019-70k.yaml`.
 
+## Recorded assignments and value origins
+
+`configuration_source(configuration, dotted_path)` returns the last
+assigning-source identifier in that leaf's recorded provenance history.
+Explicit configuration leaves record source filenames; generated overrides
+may record identifiers containing a `#generated:` marker. Later recorded
+assignments override earlier assignments. The lookup returns `nothing` when
+the history is absent or empty, even if a typed field has a value. It reads
+the recorded history; it does not load or validate source files.
+
+The [merge-order fixture](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/0c53c6d0f68e0b25fce79388db831da6fc3ae856/test/application/configuration_merge_order_and_fail_closed_validation.jl)
+starts with a base file and applies `first.yaml` with `energy_chunk: 17`, then
+`second.yaml` with `energy_chunk: 23`. The resolved value is 23 and the assigning
+source is `second.yaml`. Reversing those two overrides gives 17 and `first.yaml`.
+These are fixture expectations; the source example is not a production-run receipt.
+
+The merged declarative input requires a positive integer `production.energy_chunk`
+and assigns no schema default. It sets the maximum number of energy points per
+execution chunk for work scheduling; it does not set energy-grid spacing. The
+Core `ProductionOptions` constructor has its own default of 64. The base fixture
+also explicitly assigns 64. Equal values do not establish the same assigning
+source, and an absent history does not identify that constructor as an origin.
+The existing [generated-provenance fixture](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/0c53c6d0f68e0b25fce79388db831da6fc3ae856/test/contracts/generated_scientific_configuration_provenance.jl)
+expects `configuration_source(configuration, "physical.lattice_temperature")`
+to return `definition_path * "#generated:temperature-axis"`. That recorded
+identifier names the generated assigning policy; it does not identify a physical
+data source. Freeze/load preserves such recorded histories. The lookup returns
+these markers when present; it does not reconstruct the complete effective-value
+origin chain, including any further resource-planning decisions.
+
+The owning [schema provenance contract](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/main/docs/schema-provenance.md) defines
+packaged-byte verification and comparison with a selected workspace Contracts copy.
+
 ## [Scientific plans](@id scientific-plans)
 
 A `qcl-negf-study-v2` definition names configuration sources, variants and operating
