@@ -289,6 +289,9 @@ function _physical_certification_data(solution)
     end
     algebra=category([:r_D, :r_A, :r_caus, :r_PSD, :r_selfenergy_identity])
     stationary=category([
+        :r_D_candidate,
+        :r_A_candidate,
+        :r_lambda_candidate,
         :r_K,
         :r_Σ,
         :r_λ,
@@ -299,6 +302,25 @@ function _physical_certification_data(solution)
         :r_power,
         (Symbol(:r_C_, name) for name in solution.problem.kernels.enabled)...,
     ])
+    audit=get(solution.observables,:final_fixed_point_audit,nothing)
+    if audit!==nothing
+        for (section,name,metric) in (("dyson","ratio",:r_D_candidate),
+                ("spectral","ratio",:r_A_candidate),("charge","candidate_constraint",:r_lambda_candidate))
+            measurement=get(get(audit,section,Dict()),name,Dict())
+            status=get(measurement,"status",nothing)
+            value=get(measurement,"value",nothing)
+            failed=status=="error" || get(measurement,"nonfinite",nothing)!==nothing ||
+                (value isa Real && !isfinite(value))
+            unavailable=status!="measured" || !(value isa Real) || value isa Bool
+            if failed
+                stationary["status"]="failed"
+                String(metric) in stationary["failed_metrics"] || push!(stationary["failed_metrics"],String(metric))
+            elseif unavailable
+                stationary["status"]=="passed" && (stationary["status"]="not_evaluated")
+                String(metric) in stationary["missing_metrics"] || push!(stationary["missing_metrics"],String(metric))
+            end
+        end
+    end
     discretization=category([
         :r_sum,
         :r_tail_low,
@@ -455,4 +477,243 @@ function _diagnostic_eigenvalues(block)
         error isa LinearAlgebra.LAPACKException || rethrow()
         return fill(NaN, size(block, 1))
     end
+end
+
+# Transport guards for the owning Core template. The complete portable format
+# policy is owned by qcl-negf-contracts/final_audit.py, not a second evaluator.
+const _FINAL_FIXED_POINT_SCHEMA = "qcl-negf-final-fixed-point-audit-v1"
+const _FINAL_FIXED_POINT_IDENTITY = (
+    "execution_id", "point_id", "state_id", "attempt", "state_sequence", "plan_fingerprint",
+)
+const _FINAL_FIXED_POINT_DESCRIPTION = "Versioned final fixed-point raw measurement record"
+
+function _final_audit_identity(identity)
+    all(key->haskey(identity,key), _FINAL_FIXED_POINT_IDENTITY) ||
+        throw(ArgumentError("final audit requires all six actual state identity fields"))
+    result=Dict{String,Any}(key=>identity[key] for key in _FINAL_FIXED_POINT_IDENTITY)
+    for key in ("execution_id","point_id","state_id")
+        value=result[key]
+        value isa String && 1<=ncodeunits(value)<=128 &&
+            occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]*$",value) ||
+            throw(ArgumentError("invalid final audit identity $key"))
+    end
+    for key in ("attempt","state_sequence")
+        value=result[key]
+        value isa Integer && !(value isa Bool) && 1<=value<=9007199254740991 ||
+            throw(ArgumentError("invalid final audit identity $key"))
+    end
+    value=result["plan_fingerprint"]
+    value isa String && occursin(r"^[0-9a-f]{64}$",value) ||
+        throw(ArgumentError("invalid final audit plan fingerprint"))
+    return result
+end
+
+function _final_audit_transport_value(value, depth=0, members=Ref(0))
+    depth<=9 || throw(ArgumentError("final audit exceeds depth budget"))
+    if value isa AbstractDict
+        members[]+=length(value)
+        members[]<=1024 || throw(ArgumentError("final audit exceeds member budget"))
+        all(key->key isa String,keys(value)) || throw(ArgumentError("final audit keys must be strings"))
+        if Set(keys(value))==Set(("status","value","nonfinite","reason"))
+            status,number,tag,reason=(value[key] for key in ("status","value","nonfinite","reason"))
+            numeric=number isa Real && !(number isa Bool) && isfinite(number)
+            valid = status=="measured" ? numeric && tag===nothing && reason===nothing :
+                status in ("unavailable","not_applicable") ? number===nothing && tag===nothing && reason isa String :
+                status=="error" ? (number===nothing || numeric) &&
+                    (tag===nothing || tag in ("nan","+inf","-inf")) && reason isa String &&
+                    (tag===nothing || (number===nothing && reason=="nonfinite_measurement")) : false
+            valid || throw(ArgumentError("invalid final audit measurement status/value"))
+        end
+        return Dict{String,Any}(key=>_final_audit_transport_value(item,depth+1,members) for (key,item) in value)
+    elseif value isa AbstractVector
+        length(value)<=1024 || throw(ArgumentError("final audit array exceeds budget"))
+        return [_final_audit_transport_value(item,depth+1,members) for item in value]
+    elseif value isa String
+        isvalid(value) && !occursin('\0',value) && ncodeunits(value)<=512 ||
+            throw(ArgumentError("invalid final audit UTF-8 string"))
+    elseif value isa Real && !(value isa Bool)
+        isfinite(value) || throw(ArgumentError("final audit JSON number must be finite"))
+        return value isa AbstractFloat && iszero(value) ? 0.0 : value
+    elseif value!==nothing && !(value isa Bool)
+        throw(ArgumentError("unsupported final audit JSON value"))
+    end
+    return value
+end
+
+function _final_audit_record(template, identity; bind=false)
+    template isa AbstractDict || throw(ArgumentError("final audit template must be an object"))
+    expected=Set(("schema","record_status","reason","detail","detail_truncated","shape","units",
+        "context","history","dyson","spectral","keldysh","selfenergy","charge","poisson"))
+    bind || push!(expected,"state_identity")
+    Set(keys(template))==expected || throw(ArgumentError("unexpected final audit template fields"))
+    record=_final_audit_transport_value(template)
+    record["schema"]==_FINAL_FIXED_POINT_SCHEMA || throw(ArgumentError("unknown final audit schema"))
+    record["units"]==Dict("native"=>"1","energy_scale"=>"eV","length_scale"=>"m","index"=>"1-based") ||
+        throw(ArgumentError("invalid final audit units"))
+    state=_final_audit_identity(identity)
+    if bind
+        record["state_identity"]=state
+    else
+        Set(keys(record["state_identity"]))==Set(_FINAL_FIXED_POINT_IDENTITY) &&
+            all(key->typeof(record["state_identity"][key])===typeof(state[key]) &&
+                     record["state_identity"][key]==state[key],_FINAL_FIXED_POINT_IDENTITY) ||
+            throw(ArgumentError("final audit state identity differs"))
+    end
+    status=record["record_status"]
+    expected_reason=status=="measured" ? nothing : status=="partial_error" ? "measurement_error" :
+                    status=="unavailable" ? "map_unavailable" : "invalid"
+    expected_reason!="invalid" && record["reason"]==expected_reason ||
+        throw(ArgumentError("invalid final audit record status/reason"))
+    mandatory=String[]
+    fresh=String[]
+    function statuses(value,path=())
+        if value isa AbstractDict
+            if Set(keys(value))==Set(("status","value","nonfinite","reason"))
+                path in (("history","previous_lambda"),("charge","lambda_change")) ||
+                    push!(mandatory,value["status"])
+                if !isempty(path) && (first(path) in ("dyson","spectral","keldysh","selfenergy") ||
+                        first(path)=="charge" && last(path) in ("candidate_raw_sheet","candidate_lambda","candidate_constraint"))
+                    push!(fresh,value["status"])
+                end
+            else
+                for (key,item) in value
+                    statuses(item,(path...,key))
+                end
+            end
+        elseif value isa AbstractVector
+            for item in value
+                statuses(item,path)
+            end
+        end
+    end
+    statuses(record)
+    if status!="unavailable"
+        all(s->s in ("measured","error"),mandatory) &&
+            ((status=="partial_error")==any(==("error"),mandatory)) ||
+            throw(ArgumentError("final audit status contradicts mandatory measurements"))
+    else
+        all(==("unavailable"),fresh) ||
+            throw(ArgumentError("unavailable final map contains fresh measured values"))
+    end
+    text=sprint(_light_json,record)
+    1<=ncodeunits(text)<=65536 || throw(ArgumentError("final audit exceeds JSON byte budget"))
+    return record
+end
+
+function _bound_final_audit(solution,identity;final_state)
+    final_state || return nothing
+    template=get(solution.observables,:final_fixed_point_audit,nothing)
+    # Legacy states have no template. A present but malformed new template fails.
+    if template===nothing
+        haskey(solution.observables,:acceptance_measurement_context) &&
+            throw(ArgumentError("new final state lacks its final audit template"))
+        return nothing
+    end
+    return _final_audit_record(template,identity;bind=true)
+end
+
+function _write_final_audit!(file,record)
+    record===nothing && return nothing
+    diagnostic=haskey(file,"diagnostics") ? file["diagnostics"] : create_group(file,"diagnostics")
+    group=create_group(diagnostic,"final_fixed_point_audit")
+    attributes(group)["schema"]=_FINAL_FIXED_POINT_SCHEMA
+    # Instance String dispatch in pinned HDF5.jl creates fixed UTF-8 scalar;
+    # datatype(String) and string vectors would instead create vlen strings.
+    group["record_json"]=sprint(_light_json,record)
+    dataset=group["record_json"]
+    attributes(dataset)["units"]="1"
+    attributes(dataset)["logical_axis_order"]="scalar"
+    attributes(dataset)["description"]=_FINAL_FIXED_POINT_DESCRIPTION
+    return nothing
+end
+
+function _verify_final_audit_pair(file,commit;role="physics.full")
+    assessment=get(commit,"stationary_assessment",Dict{String,Any}())
+    record_present=haskey(assessment,"final_fixed_point_audit")
+    record=get(assessment,"final_fixed_point_audit",nothing)
+    present=haskey(file,"diagnostics/final_fixed_point_audit")
+    final_state=get(commit,"storage_class",nothing)=="archive"
+    if !final_state
+        !present && !record_present || throw(ArgumentError("recovery cannot publish a final audit"))
+        return nothing
+    end
+    if role=="recovery"
+        !present || throw(ArgumentError("recovery payload cannot publish a final audit"))
+        return nothing
+    end
+    record_present && !(record isa AbstractDict) &&
+        throw(ArgumentError("present final audit must be an object"))
+    !present && !record_present && return nothing # Legacy final native4.
+    # The canonical full copy is required. An analysis owner may omit its copy;
+    # a present copy still has the complete binding and equality obligations.
+    !present && role=="physics.analysis" && return nothing
+    present && record_present || throw(ArgumentError("final audit presence differs"))
+    metadata=file["metadata"]
+    identity_key=role=="physics.analysis" ? "identity_json" : "point_identity_json"
+    haskey(metadata,identity_key) || throw(ArgumentError("final audit lacks native state identity"))
+    native_identity=YAML.load(String(read(metadata[identity_key]));dicttype=Dict{String,Any})
+    _final_audit_equal(_final_audit_identity(native_identity),_final_audit_identity(commit["identity"])) ||
+        throw(ArgumentError("final audit native state identity differs from commit"))
+    group=file["diagnostics/final_fixed_point_audit"]
+    Set(keys(group))==Set(["record_json"]) || throw(ArgumentError("invalid final audit native inventory"))
+    _require_final_audit_constant(group,"schema",_FINAL_FIXED_POINT_SCHEMA)
+    dataset=group["record_json"]
+    dtype=HDF5.datatype(dataset)
+    properties=HDF5.get_create_properties(dataset)
+    try
+        ndims(dataset)==0 && HDF5.API.h5t_get_class(dtype)==HDF5.API.H5T_STRING &&
+            !HDF5.API.h5t_is_variable_str(dtype) && 1<=sizeof(dtype)<=65536 &&
+            HDF5.API.h5t_get_cset(dtype)==HDF5.API.H5T_CSET_UTF8 &&
+            properties.layout in (:contiguous,:compact) &&
+            HDF5.API.h5p_get_nfilters(properties)==0 && HDF5.API.h5p_get_external_count(properties)==0 ||
+            throw(ArgumentError("invalid final audit scalar storage"))
+    finally
+        close(dtype)
+        close(properties)
+    end
+    for (name,expected) in (("units","1"),("logical_axis_order","scalar"),("description",_FINAL_FIXED_POINT_DESCRIPTION))
+        _require_final_audit_constant(dataset,name,expected)
+    end
+    text=String(read(dataset))
+    isvalid(text) && !occursin('\0',text) && 1<=ncodeunits(text)<=65536 ||
+        throw(ArgumentError("invalid final audit native payload"))
+    native=YAML.load(text;dicttype=Dict{String,Any})
+    _final_audit_equal(_final_audit_record(native,commit["identity"]),_final_audit_record(record,commit["identity"])) ||
+        throw(ArgumentError("native and commit final audit values differ"))
+    return nothing
+end
+
+function _require_final_audit_constant(parent,name,expected)
+    attribute=HDF5.open_attribute(parent,name)
+    dtype=HDF5.datatype(attribute)
+    space=HDF5.dataspace(attribute)
+    try
+        HDF5.API.h5t_get_class(dtype)==HDF5.API.H5T_STRING &&
+            !HDF5.API.h5t_is_variable_str(dtype) &&
+            ncodeunits(expected)<=sizeof(dtype)<=65536 &&
+            HDF5.API.h5t_get_cset(dtype) in (HDF5.API.H5T_CSET_ASCII,HDF5.API.H5T_CSET_UTF8) &&
+            HDF5.API.h5s_get_simple_extent_type(space)==HDF5.API.H5S_SCALAR ||
+            throw(ArgumentError("invalid final audit constant storage $name"))
+        # This readback verifies Runner's just-written fixed scalar constants;
+        # independent hostile-input padding/JSON policy belongs to Results.
+        read(attribute)==expected || throw(ArgumentError("invalid final audit native $name"))
+    finally
+        close(space)
+        close(dtype)
+        close(attribute)
+    end
+    return nothing
+end
+
+function _final_audit_equal(left,right)
+    if left isa AbstractDict && right isa AbstractDict
+        return Set(keys(left))==Set(keys(right)) && all(key->_final_audit_equal(left[key],right[key]),keys(left))
+    elseif left isa AbstractVector && right isa AbstractVector
+        return length(left)==length(right) && all(_final_audit_equal(a,b) for (a,b) in zip(left,right))
+    elseif left isa Bool || right isa Bool || left isa Integer || right isa Integer
+        return typeof(left)===typeof(right) && left==right
+    elseif left isa AbstractFloat && right isa AbstractFloat
+        return Float64(left)==Float64(right)
+    end
+    return typeof(left)===typeof(right) && left==right
 end

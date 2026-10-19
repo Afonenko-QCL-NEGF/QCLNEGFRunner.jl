@@ -278,6 +278,7 @@ function save_analysis_physics(
     path::AbstractString,
     solution::NEGFSolution;
     identity = Dict{String,Any}(),
+    final_fixed_point_audit = nothing,
 )
     problem=solution.problem
     grids=problem.grids
@@ -488,6 +489,7 @@ function save_analysis_physics(
         haskey(solution.observables, :optical_response) &&
             _write_optical_group!(file, solution.observables[:optical_response])
         _analysis_history!(file, solution)
+        _write_final_audit!(file, final_fixed_point_audit)
         _annotate_physics_tree!(file)
         _attach_native_dimensions!(file)
     end
@@ -794,6 +796,10 @@ function commit_point_artifacts(
         "state_sequence"=>sequence,
         "state_id"=>bytes2hex(sha256(canonical_bytes(Dict("identity"=>identity,"sequence"=>sequence,"nonce"=>string(time_ns()))))),
     ))
+    final_audit=_bound_final_audit(solution,identity;final_state=storage_class===:archive)
+    assessment=solution_scientific_assessment(solution)
+    pop!(assessment,"final_fixed_point_audit",nothing)
+    final_audit===nothing || (assessment["final_fixed_point_audit"]=final_audit)
     name=storage_class===:archive ? "final" : "generation-"*lpad(string(generation), 6, '0')
     final=joinpath(root, name)
     ispath(final) && throw(ArgumentError("immutable final already exists"))
@@ -810,6 +816,7 @@ function commit_point_artifacts(
                 algorithms,
                 identity,
                 artifact_role = role,
+                final_fixed_point_audit = final_audit,
             )
             push!(
                 artifacts,
@@ -844,7 +851,7 @@ function commit_point_artifacts(
         push!(artifacts, recovery)
         if analysis
             path=joinpath(stage, "analysis.h5")
-            save_analysis_physics(path, solution; identity)
+            save_analysis_physics(path, solution; identity, final_fixed_point_audit=final_audit)
             push!(
                 artifacts,
                 _artifact_record(
@@ -922,8 +929,8 @@ function commit_point_artifacts(
             "checkpoint_ready"=>recoverable,
             "presentation_ready"=>false,
             "terminal_status"=>terminal_status,
-            "scientific_accepted"=>solution_scientific_assessment(solution)["scientific_accepted"],
-            "stationary_assessment"=>solution_scientific_assessment(solution),
+            "scientific_accepted"=>assessment["scientific_accepted"],
+            "stationary_assessment"=>assessment,
             "storage_class"=>String(storage_class),
             "state_id"=>identity["state_id"],
             "state_sequence"=>sequence,
@@ -1176,8 +1183,10 @@ function verify_point_artifacts(commit_path::AbstractString)
                     end
                 end
                 if schema in ("qcl-negf-checkpoint-v4", "qcl-negf-physics-v4")
+                    _verify_final_audit_pair(file,commit;role=artifact["role"])
                     _require_native_scba_tables(file["convergence"])
                 elseif schema=="qcl-negf-physics-analysis-v4"
+                    _verify_final_audit_pair(file,commit;role=artifact["role"])
                     _require_native_scba_tables(file["diagnostics"])
                 elseif schema=="qcl-negf-scientific-history-v4"
                     _require_native_scba_tables(file)

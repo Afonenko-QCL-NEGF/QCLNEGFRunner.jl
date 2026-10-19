@@ -271,6 +271,7 @@ function _write_checkpoint(
     algorithms::Union{Nothing,AlgorithmOptions} = nothing,
     artifact_role::String = "recovery",
     identity::AbstractDict = Dict{String,Any}(),
+    final_fixed_point_audit = nothing,
 )
     recorded=get(solution.observables,:restart_contract,nothing)
     recorded===nothing && (recorded=solution.scba.restart_contract)
@@ -632,6 +633,7 @@ function _write_checkpoint(
                 end
             end
         end
+        _write_final_audit!(file, final_fixed_point_audit)
         _annotate_physics_tree!(file)
         _attach_native_dimensions!(file)
     end
