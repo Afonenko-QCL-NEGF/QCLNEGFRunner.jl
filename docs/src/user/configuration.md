@@ -6,6 +6,12 @@ ordered files with `load_run_configuration`; later files override explicit field
 The schema is `schema/run.schema.json`. The checked example is
 `examples/config/reference-2019-70k.yaml`.
 
+## [Developer route: inspect the value and its source](@id developer-configuration-route)
+
+Start with an ordered configuration input, not a current default. The goal is to
+report both the resolved leaf and what the recorded history actually identifies.
+The following route loads/inspects configuration only; it does not solve transport.
+
 ## Recorded assignments and value origins
 
 `configuration_source(configuration, dotted_path)` returns the last
@@ -16,11 +22,62 @@ assignments override earlier assignments. The lookup returns `nothing` when
 the history is absent or empty, even if a typed field has a value. It reads
 the recorded history; it does not load or validate source files.
 
-The [merge-order fixture](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/0c53c6d0f68e0b25fce79388db831da6fc3ae856/test/application/configuration_merge_order_and_fail_closed_validation.jl)
+The [merge-order fixture](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/23860d9e660a3cddf6cb5203d449d1b62f3745a1/test/application/configuration_merge_order_and_fail_closed_validation.jl)
 starts with a base file and applies `first.yaml` with `energy_chunk: 17`, then
 `second.yaml` with `energy_chunk: 23`. The resolved value is 23 and the assigning
 source is `second.yaml`. Reversing those two overrides gives 17 and `first.yaml`.
 These are fixture expectations; the source example is not a production-run receipt.
+
+To follow that exact input order in a Runner checkout, use
+`test/fixtures/configurations/base.yaml` as the complete base and the two small
+files below. The snippets reproduce the synthetic inputs of the fixture; the
+files are created by that fixture in a temporary directory.
+
+```yaml
+# first.yaml
+production:
+  energy_chunk: 17
+output:
+  directory: results/first
+```
+
+```yaml
+# second.yaml
+production:
+  energy_chunk: 23
+output:
+  directory: results/second
+```
+
+```julia
+# Inspection example; ordinary fenced text, not a docs-build execution.
+base = "test/fixtures/configurations/base.yaml"
+configured = load_run_configuration([base, "first.yaml", "second.yaml"])
+configured.production.energy_chunk                            # 23
+configuration_source(configured, "production.energy_chunk")  # path ending in second.yaml
+reversed = load_run_configuration([base, "second.yaml", "first.yaml"])
+reversed.production.energy_chunk                             # 17
+configuration_source(reversed, "production.energy_chunk")     # path ending in first.yaml
+```
+
+The expected result distinguishes four facts:
+
+| Fact | What this example establishes | What to inspect for another run |
+| --- | --- | --- |
+| Model/formula meaning | `energy_chunk` bounds scheduling work in energy-node counts; it is not an energy spacing or a physical NEGF parameter. No physical formula is inferred from its name. | The [owning schema](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts/blob/02a564b78dc9c5e19eacf496bc8c891361eafaab/src/qcl_negf_contracts/schemas/run.schema.json) and [Core formula-to-function reference](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/f5b73369a96d1225bd96fb34f5262c8dcf965f86/docs/src/developer/traceability.md) for physical leaves; a scheduling leaf does not supply a physical formula. |
+| Numeric value | The merged input has positive integer 23 (or 17 in reverse order). | The exact resolved input retained with that attempt. |
+| Assigning-source origin | [`configuration_source`](@ref) names the last recorded assignment, `second.yaml` (or `first.yaml`). | The same leaf's recorded history; absent/empty history returns `nothing`, even while the value remains 23. |
+| Effective execution origin | This load example has not selected a resource execution plan. | The effective configuration **and** retained [`ExecutionPlan`](@ref); this lookup alone cannot reconstruct the complete planning chain. |
+
+[`resolve_execution_strategy`](@ref) can apply a selected plan. For the
+`auto_exact` production path, its recorded assigning policy is
+`application:auto_exact`; the selected plan supplies effective chunk/worker
+values. Other paths need not add that marker. Preserve the plan's hardware,
+strategy and reasons separately; a marker is not a measurement receipt or the
+full causal origin of a value. The [implementation](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/23860d9e660a3cddf6cb5203d449d1b62f3745a1/src/application/auto_strategy.jl)
+and [resource limits](@ref resource-planning) define this boundary.
+Missing effective-plan provenance is unknown; do not infer it from 23, 17 or a
+constructor default.
 
 The merged declarative input requires a positive integer `production.energy_chunk`
 and assigns no schema default. It sets the maximum number of energy points per
@@ -28,7 +85,7 @@ execution chunk for work scheduling; it does not set energy-grid spacing. The
 Core `ProductionOptions` constructor has its own default of 64. The base fixture
 also explicitly assigns 64. Equal values do not establish the same assigning
 source, and an absent history does not identify that constructor as an origin.
-The existing [generated-provenance fixture](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/0c53c6d0f68e0b25fce79388db831da6fc3ae856/test/contracts/generated_scientific_configuration_provenance.jl)
+The existing [generated-provenance fixture](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/23860d9e660a3cddf6cb5203d449d1b62f3745a1/test/contracts/generated_scientific_configuration_provenance.jl)
 expects `configuration_source(configuration, "physical.lattice_temperature")`
 to return `definition_path * "#generated:temperature-axis"`. That recorded
 identifier names the generated assigning policy; it does not identify a physical
@@ -36,7 +93,7 @@ data source. Freeze/load preserves such recorded histories. The lookup returns
 these markers when present; it does not reconstruct the complete effective-value
 origin chain, including any further resource-planning decisions.
 
-The owning [schema provenance contract](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/main/docs/schema-provenance.md) defines
+The owning [schema provenance contract](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/23860d9e660a3cddf6cb5203d449d1b62f3745a1/docs/schema-provenance.md) defines
 packaged-byte verification and comparison with a selected workspace Contracts copy.
 
 ## [Scientific plans](@id scientific-plans)

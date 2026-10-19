@@ -4,6 +4,19 @@ CurrentModule = QCLNEGFRunner
 
 # Public API
 
+## [Choose an entry point by task](@id reader-api-routes)
+
+| Reader goal | Start here | Expected boundary |
+| --- | --- | --- |
+| Explain a resolved field and its assignment | [Configuration route](@ref developer-configuration-route), [`load_run_configuration`](@ref), [`configuration_source`](@ref), [`resolve_execution_strategy`](@ref) | Loading and provenance lookup do not run transport; assignment history and an effective execution plan remain distinct. |
+| Interpret a saved point | [Quality contract](@ref solver-quality-contract) and [Core criterion reference](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/f5b73369a96d1225bd96fb34f5262c8dcf965f86/docs/src/theory/12_validation.md) | Read status, applicability, measured/missing metrics and exact attempt identity; saved analysis cannot create scientific evidence. |
+| Continue an interrupted execution | [Recovery route](@ref operator-recovery-route), [`load_production_restart`](@ref), [`QCLNEGFRunner.main`](@ref) | The restart reader requires compatible verified state; `run-plan` with a recovery bundle executes a new attempt. |
+
+The tables below retain the full expert API, including explicit optical
+operators. Their presence does not promise quantitative gain/absorption
+validation in this release. Schema ownership stays in Contracts, numerical
+criteria in Core, and file/recovery orchestration in Runner.
+
 ## Types and operations
 
 ```@docs
