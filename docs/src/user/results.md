@@ -221,3 +221,37 @@ Legacy warnings and historical attempts remain unchanged; an unknown legacy
 reason is not inferred from prose. Raw conflicting or incomplete provenance is
 refused before normalization or result replacement. These metadata checks do not
 establish native recovery, discretization or experimental validation.
+
+## Final fixed-point raw measurements
+
+New final archive publications bind Core's internal final-audit template once to
+actual execution, point, attempt, plan fingerprint, state ID and sequence. The
+same semantic object is stored in `commit.json` at
+`stationary_assessment.final_fixed_point_audit` and in the `physics.full` owner
+at `/diagnostics/final_fixed_point_audit/record_json`; an optional analysis copy
+is identical. Native readback checks values as well as owner hashes before
+publication. This is a measurement record, not a scientific acceptance verdict.
+The canonical full copy is required when the commit key is present; the analysis
+owner may omit its copy. A present copy requires its own native identity even
+when legacy top-level commit markers are absent. Present `null` is malformed,
+and attempt/sequence must be integers in `1..9007199254740991`.
+
+The dataset is fixed-width UTF-8 scalar JSON of at most 65536 bytes, with no
+chunking, filters or external storage. Its group schema is
+`qcl-negf-final-fixed-point-audit-v1`; its exact attributes are `units="1"`,
+`logical_axis_order="scalar"` and
+`description="Versioned final fixed-point raw measurement record"`. These four
+constant attributes use fixed-width scalar strings, with the bounded consumer
+profile permitting ASCII or UTF-8 and widths from the constant byte length to
+65536. The authoritative portable structural policy belongs to
+[qcl-negf-contracts](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts/blob/12fc26462bbab3df76904c6deb01f8c6596de7be/src/qcl_negf_contracts/final_audit.py).
+Runner applies private producer transport guards; it does not recalculate
+physical maps or thresholds. Missing candidate Dyson, spectral or charge gates
+cannot produce a passed stationary summary.
+
+Legacy final native4 states without either copy remain readable as
+`not_recorded`. Recovery publications omit both copies even if the supplied
+solution carries an audit: their record is `not_applicable`, with reason
+`not_a_final_state`. Neither absence means a passed measurement.
+An HDF5 owner with role `recovery` also omits the audit group when carried
+inside a final archive; it does not participate in canonical record equality.
