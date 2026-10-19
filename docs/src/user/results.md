@@ -21,6 +21,52 @@ Periodic checkpoints require explicit checkpoint/output settings. A process kill
 checkpoint is committed cannot promise exact recovery. Use a separate output directory for each
 independent execution.
 
+## [Operator route: recover an interrupted execution](@id operator-recovery-route)
+
+The goal is to recover compatible acknowledged state while preserving the failed
+attempt's evidence. Start with a frozen plan, the exact execution/point and source
+attempt, and the complete recovery tree or self-contained copied generation.
+A `pending-*` directory or a progress snapshot is not that state.
+
+1. Preserve original pointers, generations, receipts, failed logs and request/
+   attempt identity. Inventory the available metadata and byte budget before
+   copying or verifying numerical payloads; leave raw results unchanged.
+2. For a recovery tree, the reader tries `current.json` first and verifies its
+   pointer digest, commit, receipt and every declared artifact. If that choice
+   is corrupt, it tries `previous.json` with the same checks. A directory name
+   or receipt with `status: verified` alone does not bypass readback verification.
+3. Use only the resulting verified generation and its required archive closure
+   as the input to an explicitly authorized new attempt. The existing CLI route
+   is `qcl-negf run-plan PLAN OUTPUT --execution-id ID --attempt N --recovery-bundle DIRECTORY`;
+   use a separate output for this import, `N` exceeds the source attempt, and plan/model/runtime
+   compatibility and cumulative budget checks still apply. This execution
+   command is not a read-only diagnostic.
+4. Record which source generation/attempt was used and retain the failed one.
+   If neither acknowledged generation exists or verifies, expect the explicit
+   error `no valid acknowledged recovery generation`. Preserve the failure
+   evidence; no cold start, pointer repair or deletion is implied by that error.
+
+| Available input | Expected selection/result | Limit |
+| --- | --- | --- |
+| `pending-*` only | No acknowledged recovery generation; error. | Pending publication is never resumable. |
+| Corrupt current, valid previous | Verified previous generation. | Its identity and consumed work remain the source; do not describe it as the latest state. |
+| Both pointers missing, or both candidates invalid | Explicit error. | A fresh calculation requires its own authorized identity; do not overwrite the failed attempt. |
+| A verified copied generation | Import through `--recovery-bundle`, after compatibility and prior-final dependency verification. | A successful import is operational recovery, not scientific acceptance. |
+
+Canonical entry points are [CLI execution](@ref QCLNEGFRunner.main) and the
+[native restart reader](@ref load_production_restart); the internal
+[selection implementation](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/23860d9e660a3cddf6cb5203d449d1b62f3745a1/src/infrastructure/persistence/point_artifacts.jl#L682)
+is linked for its verification order, without promoting it to a new public API.
+The [artifact contract](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts/blob/02a564b78dc9c5e19eacf496bc8c891361eafaab/src/qcl_negf_contracts/artifacts.py)
+and [output policy schema](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts/blob/02a564b78dc9c5e19eacf496bc8c891361eafaab/src/qcl_negf_contracts/schemas/output-policy.schema.json)
+own formats; the [bounded recovery fixture](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/23860d9e660a3cddf6cb5203d449d1b62f3745a1/test/infrastructure/bounded_portable_recovery.jl)
+is a synthetic test contract, not evidence that any installation recovered a
+real run. This route supplies no immutable production artifact locator.
+Cross-node/LAN durability and full restore require infrastructure evidence.
+For interpreting a returned point, follow Core's
+[final-state and criterion route](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/f5b73369a96d1225bd96fb34f5262c8dcf965f86/docs/src/theory/12_validation.md);
+Runner does not redefine those formulas or criteria.
+
 ## Postprocessing
 
 `qcl-negf analyze RESULT_DIRECTORY ANALYSIS_DIRECTORY` reads saved results without rerunning
