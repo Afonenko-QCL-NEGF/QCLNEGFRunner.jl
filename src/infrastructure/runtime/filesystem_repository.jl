@@ -15,8 +15,9 @@ mutable struct FilesystemRunRepository <: AbstractRunRepository
     root::String
     lock::ReentrantLock
     event_sequences::Dict{String,Int}
+    _checkpoint_active::Bool
     function FilesystemRunRepository(root::AbstractString)
-        new(abspath(root), ReentrantLock(), Dict{String,Int}())
+        new(abspath(root), ReentrantLock(), Dict{String,Int}(), false)
     end
 end
 
@@ -466,6 +467,9 @@ function _validate_checkpoint_envelope(
         _checkpoint_integrity(metadata_path, "attempt must be an integer")
     generation = Int(raw["generation"])
     generation >= 1 || _checkpoint_integrity(metadata_path, "generation must be positive")
+    occursin(r"^[0-9]{12}\.metadata\.yaml$", basename(metadata_path)) &&
+    basename(metadata_path) == lpad(string(generation), 12, '0') * ".metadata.yaml" ||
+        _checkpoint_integrity(metadata_path, "metadata filename does not match generation")
     Int(raw["attempt"]) >= 1 ||
         _checkpoint_integrity(metadata_path, "attempt must be positive")
     iteration = raw["iteration"]
@@ -502,9 +506,153 @@ function _validate_checkpoint_envelope(
     return raw
 end
 
+# These barriers belong only to generic runtime checkpoints. A successful
+# sequence is conditional on the local POSIX filesystem honouring fsync.
+function _sync_runtime_checkpoint_file(path::String)::Nothing
+    Sys.isunix() || throw(ArgumentError("runtime checkpoint fsync requires Unix"))
+    open(path, "r") do stream
+        ccall(:fsync, Cint, (Cint,), fd(stream)) == 0 ||
+            throw(SystemError("fsync $path", Libc.errno()))
+    end
+    return nothing
+end
+
+function _sync_runtime_checkpoint_directory(path::String)::Nothing
+    Sys.isunix() || throw(ArgumentError("runtime checkpoint directory fsync requires Unix"))
+    isdir(path) && !islink(path) || throw(ArgumentError("not a real directory: $path"))
+    descriptor = ccall(:open, Cint, (Cstring, Cint), path, 0)
+    descriptor >= 0 || throw(SystemError("open directory $path", Libc.errno()))
+    result = ccall(:fsync, Cint, (Cint,), descriptor)
+    sync_errno = result == 0 ? 0 : Libc.errno()
+    close_result = ccall(:close, Cint, (Cint,), descriptor)
+    close_errno = close_result == 0 ? 0 : Libc.errno()
+    # Preserve the first error even if closing the descriptor also failed.
+    result == 0 || throw(SystemError("fsync directory $path", sync_errno))
+    close_result == 0 || throw(SystemError("close directory $path", close_errno))
+    return nothing
+end
+
+function _publish_runtime_checkpoint_file(
+    source::AbstractString,
+    destination::AbstractString,
+)::String
+    source_absolute, destination_absolute = abspath(source), abspath(destination)
+    dirname(source_absolute) == dirname(destination_absolute) ||
+        throw(ArgumentError("checkpoint publication requires the same directory"))
+    isfile(source_absolute) && !islink(source_absolute) ||
+        throw(ArgumentError("checkpoint publication source is not regular: $source_absolute"))
+    (ispath(destination_absolute) || islink(destination_absolute)) &&
+        throw(ArgumentError("immutable checkpoint destination exists: $destination_absolute"))
+    # No chmod after fsync, overwrite, copy/delete fallback, or retry. The
+    # single-writer precondition and object lock exclude concurrent publishers.
+    error_code = ccall(:jl_fs_rename, Int32, (Cstring, Cstring),
+        source_absolute, destination_absolute)
+    error_code < 0 && Base.uv_error(
+        "checkpoint publish $(repr(source_absolute)) -> $(repr(destination_absolute))",
+        error_code,
+    )
+    return destination_absolute
+end
+
+function _write_runtime_checkpoint_metadata(path::String, envelope::Dict{String,Any})::Nothing
+    YAML.write_file(path, envelope)
+    return nothing
+end
+
+struct _RuntimeCheckpointIO
+    sync_file::Function
+    sync_directory::Function
+    publish_file::Function
+    write_metadata::Function
+    cut::Function
+end
+
+_runtime_checkpoint_io()::_RuntimeCheckpointIO = _RuntimeCheckpointIO(
+    _sync_runtime_checkpoint_file,
+    _sync_runtime_checkpoint_directory,
+    _publish_runtime_checkpoint_file,
+    _write_runtime_checkpoint_metadata,
+    (stage, context) -> nothing,
+)
+
+function _runtime_checkpoint_integer(value, name::AbstractString)
+    value isa Integer && !(value isa Bool) && value >= 1 ||
+        throw(ArgumentError("$name must be a positive non-Bool integer"))
+    return try
+        Int(value)
+    catch error
+        error isa InterruptException && rethrow()
+        throw(ArgumentError("$name must be representable as Int"))
+    end
+end
+
+function _runtime_checkpoint_anchor(repository::FilesystemRunRepository)
+    # Compute before mkpath: existence of newly-created ancestors is not an
+    # assertion that their entries have already reached stable storage.
+    anchor = dirname(repository.root)
+    while !isdir(anchor)
+        (ispath(anchor) || islink(anchor)) &&
+            throw(ArgumentError("checkpoint ancestor is not a directory: $anchor"))
+        parent = dirname(anchor)
+        parent == anchor && throw(ArgumentError("checkpoint directory has no existing anchor"))
+        anchor = parent
+    end
+    islink(anchor) && throw(ArgumentError("checkpoint anchor is a symlink: $anchor"))
+    return anchor
+end
+
+function _runtime_checkpoint_read(f, path::AbstractString; preserve_error::Bool = false)
+    try
+        return f()
+    catch error
+        error isa InterruptException && rethrow()
+        error isa CheckpointIntegrityError && rethrow()
+        preserve_error && rethrow()
+        _checkpoint_integrity(path, sprint(showerror, error))
+    end
+end
+
+function _read_runtime_checkpoint_envelope(
+    codec::AbstractCheckpointCodec,
+    metadata_path::String,
+    run_id::AbstractString,
+    point_id::AbstractString;
+    expected_attempt = nothing,
+    preserve_read_errors::Bool = false,
+)
+    return _runtime_checkpoint_read(metadata_path; preserve_error = preserve_read_errors) do
+        isfile(metadata_path) && !islink(metadata_path) ||
+            _checkpoint_integrity(metadata_path, "metadata must be a regular non-symlink file")
+        envelope = _validate_checkpoint_envelope(
+            _load_yaml(metadata_path), metadata_path, codec, run_id, point_id,
+        )
+        expected_attempt === nothing || envelope["attempt"] == expected_attempt ||
+            _checkpoint_integrity(metadata_path, "attempt mismatch")
+        envelope
+    end
+end
+
+function _verify_runtime_checkpoint_payload(
+    envelope::Dict{String,Any}, metadata_path::String;
+    preserve_read_errors::Bool = false,
+)
+    reference = _runtime_checkpoint_read(metadata_path; preserve_error = preserve_read_errors) do
+        _checkpoint_reference(envelope, metadata_path)
+    end
+    _runtime_checkpoint_read(reference.payload_path; preserve_error = preserve_read_errors) do
+        isfile(reference.payload_path) && !islink(reference.payload_path) ||
+            _checkpoint_integrity(reference.payload_path, "payload must be a regular non-symlink file")
+        filesize(reference.payload_path) == Int(envelope["payload_bytes"]) ||
+            _checkpoint_integrity(reference.payload_path, "payload byte count does not match envelope")
+        file_sha256(reference.payload_path) == reference.sha256 ||
+            _checkpoint_integrity(reference.payload_path, "SHA-256 digest does not match envelope")
+    end
+    return reference
+end
+
 """
-Write payload first and its immutable envelope last. A crash before the
-envelope leaves an ignored orphan, never a falsely valid restart.
+Publish and verify an immutable runtime checkpoint. Return acknowledges the
+checkpoint-scoped local POSIX barriers; it is not a native NFS/power-loss receipt.
 """
 function save_runtime_checkpoint!(
     repository::FilesystemRunRepository,
@@ -517,82 +665,132 @@ function save_runtime_checkpoint!(
     iteration = nothing,
     metadata = Dict{String,Any}(),
 )
-    attempt >= 1 || throw(ArgumentError("checkpoint attempt must be positive"))
-    iteration === nothing ||
-        iteration >= 1 ||
-        throw(ArgumentError("checkpoint iteration must be positive"))
-    _portable_name(kind, "checkpoint kind")
-    directory = _checkpoint_directory(repository, run_id, point_id)
-    mkpath(directory)
-    generation = _next_checkpoint_generation(repository, run_id, point_id)
-    stem = lpad(string(generation), 12, '0')
-    extension = _checkpoint_extension(codec)
-    payload_path = joinpath(directory, "$stem.payload.$extension")
-    metadata_path = joinpath(directory, "$stem.metadata.yaml")
-    temporary, stream = mktemp(directory)
-    close(stream)
-    try
-        _write_checkpoint_payload(codec, temporary, state)
-        checksum = file_sha256(temporary)
-        bytes = filesize(temporary)
-        chmod(temporary, 0o640)
-        mv(temporary, payload_path; force = false)
-        envelope = Dict{String,Any}(
-            "schema" => RUNTIME_CHECKPOINT_SCHEMA,
-            "run_id" => String(run_id),
-            "point_id" => String(point_id),
-            "generation" => generation,
-            "attempt" => Int(attempt),
-            "kind" => String(kind),
-            "iteration" => iteration === nothing ? nothing : Int(iteration),
-            "payload_file" => basename(payload_path),
-            "payload_extension" => extension,
-            "payload_bytes" => bytes,
-            "sha256" => checksum,
-            "metadata" => portable_metadata(metadata),
-        )
-        _immutable_yaml(metadata_path, envelope)
-        return _checkpoint_reference(envelope, metadata_path)
-    catch
-        isfile(temporary) && rm(temporary; force = true)
-        rethrow()
-    end
+    return _save_runtime_checkpoint!(repository, codec, run_id, point_id,
+        attempt, state, _runtime_checkpoint_io(); kind = kind,
+        iteration = iteration, metadata = metadata)
 end
 
-"""Load and checksum the newest committed checkpoint envelope."""
-function load_latest_checkpoint(
+function _save_runtime_checkpoint!(
     repository::FilesystemRunRepository,
     codec::AbstractCheckpointCodec,
     run_id::AbstractString,
     point_id::AbstractString,
+    attempt::Integer,
+    state,
+    io::_RuntimeCheckpointIO;
+    kind::AbstractString = "iteration",
+    iteration = nothing,
+    metadata = Dict{String,Any}(),
 )
-    paths = _checkpoint_metadata_paths(repository, run_id, point_id)
+    Sys.isunix() || throw(ArgumentError("runtime checkpoint persistence requires Unix"))
+    directory = _checkpoint_directory(repository, run_id, point_id)
+    attempt_value = _runtime_checkpoint_integer(attempt, "checkpoint attempt")
+    iteration_value = iteration === nothing ? nothing :
+        _runtime_checkpoint_integer(iteration, "checkpoint iteration")
+    kind_value = _portable_name(kind, "checkpoint kind")
+    safe_metadata = portable_metadata(metadata)
+    safe_metadata isa Dict{String,Any} ||
+        throw(ArgumentError("checkpoint metadata must be a mapping"))
+    return lock(repository.lock) do
+        repository._checkpoint_active &&
+            throw(ArgumentError("nested checkpoint save on the same repository is not allowed"))
+        repository._checkpoint_active = true
+        try
+            anchor = _runtime_checkpoint_anchor(repository)
+            mkpath(directory)
+            generation = _next_checkpoint_generation(repository, run_id, point_id)
+            stem = lpad(string(generation), 12, '0')
+            extension = _checkpoint_extension(codec)
+            payload_path = joinpath(directory, "$stem.payload.$extension")
+            metadata_path = joinpath(directory, "$stem.metadata.yaml")
+            payload_temporary, stream = mktemp(directory)
+            close(stream)
+            metadata_temporary = nothing
+            context() = (run_id = String(run_id), point_id = String(point_id),
+                attempt = attempt_value, generation = generation, directory = directory,
+                payload_temporary = payload_temporary, payload_path = payload_path,
+                metadata_temporary = metadata_temporary, metadata_path = metadata_path)
+
+            _write_checkpoint_payload(codec, payload_temporary, state)
+            isfile(payload_temporary) && !islink(payload_temporary) ||
+                throw(ArgumentError("checkpoint writer did not leave a regular payload"))
+            chmod(payload_temporary, 0o640)
+            io.cut(:payload_closed, context())
+            checksum = file_sha256(payload_temporary)
+            bytes = filesize(payload_temporary)
+            envelope = Dict{String,Any}(
+                "schema" => RUNTIME_CHECKPOINT_SCHEMA, "run_id" => String(run_id),
+                "point_id" => String(point_id), "generation" => generation,
+                "attempt" => attempt_value, "kind" => kind_value,
+                "iteration" => iteration_value, "payload_file" => basename(payload_path),
+                "payload_extension" => extension, "payload_bytes" => bytes,
+                "sha256" => checksum, "metadata" => safe_metadata,
+            )
+            io.cut(:payload_hashed, context())
+            io.sync_file(payload_temporary)
+            io.cut(:payload_synced, context())
+            io.publish_file(payload_temporary, payload_path)
+            io.cut(:payload_published, context())
+            current = directory
+            while true
+                io.sync_directory(current)
+                current == anchor && break
+                current = dirname(current)
+            end
+            io.cut(:payload_ancestry_synced, context())
+
+            metadata_temporary, metadata_stream = mktemp(directory)
+            close(metadata_stream)
+            io.write_metadata(metadata_temporary, envelope)
+            isfile(metadata_temporary) && !islink(metadata_temporary) ||
+                throw(ArgumentError("checkpoint metadata writer did not leave a regular file"))
+            chmod(metadata_temporary, 0o640)
+            io.cut(:metadata_closed, context())
+            io.sync_file(metadata_temporary)
+            io.cut(:metadata_synced, context())
+            io.publish_file(metadata_temporary, metadata_path)
+            io.cut(:metadata_published, context())
+            io.sync_directory(directory)
+            io.cut(:metadata_directory_synced, context())
+
+            published = _read_runtime_checkpoint_envelope(codec, metadata_path,
+                run_id, point_id; expected_attempt = attempt_value, preserve_read_errors = true)
+            canonical_bytes(published) == canonical_bytes(envelope) ||
+                _checkpoint_integrity(metadata_path, "published envelope differs from expected")
+            reference = _verify_runtime_checkpoint_payload(published, metadata_path;
+                preserve_read_errors = true)
+            io.cut(:publication_verified, context())
+            return reference
+        finally
+            # Raw temporary/orphan/published files survive every failure. No
+            # cleanup operation may mask the original write/sync/rename error.
+            repository._checkpoint_active = false
+        end
+    end
+end
+
+"""Load the latest immutable envelope, failing closed without fallback or repair."""
+function load_latest_checkpoint(
+    repository::FilesystemRunRepository,
+    codec::AbstractCheckpointCodec,
+    run_id::AbstractString,
+    point_id::AbstractString;
+    expected_attempt::Union{Nothing,Integer} = nothing,
+)
+    attempt_value = expected_attempt === nothing ? nothing :
+        _runtime_checkpoint_integer(expected_attempt, "expected checkpoint attempt")
+    directory = _checkpoint_directory(repository, run_id, point_id)
+    paths = _runtime_checkpoint_read(directory) do
+        _checkpoint_metadata_paths(repository, run_id, point_id)
+    end
     isempty(paths) && return nothing
     metadata_path = last(paths)
-    metadata = _validate_checkpoint_envelope(
-        _load_yaml(metadata_path),
-        metadata_path,
-        codec,
-        run_id,
-        point_id,
-    )
-    reference = _checkpoint_reference(metadata, metadata_path)
-    isfile(reference.payload_path) ||
-        throw(CheckpointIntegrityError(reference.payload_path, "payload is missing"))
-    filesize(reference.payload_path) == Int(metadata["payload_bytes"]) || throw(
-        CheckpointIntegrityError(
-            reference.payload_path,
-            "payload byte count does not match envelope",
-        ),
-    )
-    actual = file_sha256(reference.payload_path)
-    actual == reference.sha256 || throw(
-        CheckpointIntegrityError(
-            reference.payload_path,
-            "SHA-256 digest does not match envelope",
-        ),
-    )
-    state = _read_checkpoint_payload(codec, reference.payload_path)
+    metadata = _read_runtime_checkpoint_envelope(codec, metadata_path, run_id,
+        point_id; expected_attempt = attempt_value)
+    reference = _verify_runtime_checkpoint_payload(metadata, metadata_path)
+    state = _runtime_checkpoint_read(reference.payload_path) do
+        _read_checkpoint_payload(codec, reference.payload_path)
+    end
     return LoadedCheckpoint(reference, state, metadata)
 end
 
