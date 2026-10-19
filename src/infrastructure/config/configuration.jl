@@ -1754,7 +1754,11 @@ function _parse_study(mapping)
     )
 end
 
-function _resolve_configuration(mapping::Dict{String,Any}, provenance)
+function _resolve_configuration(
+    mapping::Dict{String,Any}, provenance;
+    schema_provenance_root::AbstractString = _package_path(),
+)
+    _verify_configuration_schema_provenance(schema_provenance_root)
     _expect_keys(
         mapping,
         "root";

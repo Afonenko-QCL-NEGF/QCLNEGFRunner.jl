@@ -1436,7 +1436,8 @@
       "properties": {
         "energy_chunk": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "description": "Positive integer maximum number of energy points per execution chunk for work scheduling. Required in the merged declarative configuration; no schema default is assigned here. The Core typed constructor has its own default, which must not be inferred as configuration-source provenance. This option does not define energy-grid spacing."
         },
         "hilbert_columns": {
           "type": "integer",

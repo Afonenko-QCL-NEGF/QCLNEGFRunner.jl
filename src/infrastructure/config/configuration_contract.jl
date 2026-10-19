@@ -1,3 +1,17 @@
+# Shared CLI/runtime implementation; including this module performs no verification.
+include(_package_path("tools", "verify_schema_provenance.jl"))
+
+function _verify_configuration_schema_provenance(
+    runner_root::AbstractString = _package_path(),
+)
+    try
+        return QCLSchemaProvenance.verify_schema_provenance(runner_root)
+    catch error
+        error isa QCLSchemaProvenance.SchemaProvenanceError || rethrow()
+        _configuration_error(error.path, "schema provenance: $(error.message)")
+    end
+end
+
 """
     default_configuration_schema()
 
@@ -28,9 +42,29 @@ struct ValidatedConfigurationDocument
     schema_path::String
 end
 
-function _load_configuration_schema(path::AbstractString)
-    isfile(path) || _configuration_error(path, "configuration JSON Schema does not exist")
-    schema = _load_yaml_mapping(path) # JSON is a strict YAML subset.
+function _load_configuration_schema(
+    path::AbstractString;
+    schema_provenance_root::AbstractString = _package_path(),
+)
+    snapshot = _verify_configuration_schema_provenance(schema_provenance_root)
+    packaged_path = joinpath(snapshot.runner_root, "schema", "run.schema.json")
+    bytes = if abspath(path) == packaged_path || (isfile(path) && realpath(path) == packaged_path)
+        snapshot.files["run.schema.json"]
+    else
+        isfile(path) || _configuration_error(path, "configuration JSON Schema does not exist")
+        try
+            QCLSchemaProvenance._capture_file(path)
+        catch error
+            error isa QCLSchemaProvenance.SchemaProvenanceError || rethrow()
+            _configuration_error(path, error.message)
+        end
+    end
+    schema = try
+        _string_keyed_yaml(QCLSchemaProvenance._strict_mapping_from_bytes(bytes, path), "")
+    catch error
+        error isa QCLSchemaProvenance.SchemaProvenanceError || rethrow()
+        _configuration_error(path, error.message)
+    end
     get(schema, "\$schema", nothing) == "https://json-schema.org/draft/2020-12/schema" ||
         _configuration_error(path, "schema must declare JSON Schema draft 2020-12")
     try
