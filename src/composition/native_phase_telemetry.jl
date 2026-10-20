@@ -17,11 +17,11 @@ end
 Base.showerror(io::IO, error::_NativePhasePressure) =
     print(io, "phase memory envelope denied before allocation: ", error.evidence["phase"])
 
-function _native_phase_journal(directory::String)
+function _native_phase_journal(directory::String;proc_root::String="/proc")
     return get!(_NATIVE_PHASE_JOURNALS, directory) do
         session = string(getpid(), "-", time_ns())
         boot = try
-            strip(read("/proc/sys/kernel/random/boot_id", String))
+            strip(read(joinpath(proc_root,"sys","kernel","random","boot_id"), String))
         catch
             "boot_unknown"
         end
@@ -37,11 +37,12 @@ function _native_phase_journal(directory::String)
     end
 end
 
-function _record_native_phase!(directory::Union{Nothing,String}, event::SolverEvent)
+function _record_native_phase!(directory::Union{Nothing,String}, event::SolverEvent;
+    proc_root::String="/proc")
     directory === nothing && return nothing
     event.action in (:phase_begin, :phase_end) || return nothing
     mkpath(directory)
-    journal = _native_phase_journal(directory)
+    journal = _native_phase_journal(directory;proc_root)
     journal.sequence += 1
     metrics = Dict(String(metric.name) => metric.value for metric in event.metrics)
     phase = event.label
@@ -139,45 +140,68 @@ function _native_phase_request(
     directory::Union{Nothing,String};
     proc_root::String = "/proc",
     cgroup_root::String = "/sys/fs/cgroup",
+    resource_policy::Symbol = :standalone,
 )
-    groups = _cgroup_ancestors(cgroup_root, _process_cgroup_path(proc_root))
+    _resource_policy(resource_policy)
+    groups = resource_policy===:campaign_strict ?
+        _strict_cgroup_ancestors(proc_root,cgroup_root) :
+        _cgroup_ancestors(cgroup_root, _process_cgroup_path(proc_root))
     return function (request)
-        maximum = Int(request.task_width)
-        maximum >= 1 || throw(ArgumentError("phase task width must be positive"))
-        _native_phase_memory_permit!(directory, groups, request)
+        maximum = _checked_resource_integer(request.task_width,"phase task width";minimum=1)
+        _native_phase_memory_permit!(directory, groups, request;resource_policy)
         return min(maximum, Threads.nthreads(:default))
     end
 end
 
-function _native_phase_memory_permit!(directory, groups::Vector{String}, request)
-    directory === nothing && return nothing
-    decision = Dict{String,Any}("memory_admission_mode" => "unavailable")
-    _NATIVE_PHASE_ADMISSIONS[directory] = decision
+function _native_phase_memory_permit!(directory, groups::Vector{String}, request;
+    resource_policy::Symbol=:standalone)
+    _resource_policy(resource_policy)
+    strict=resource_policy===:campaign_strict
+    if directory===nothing
+        strict && throw(ArgumentError("strict phase admission requires a telemetry directory"))
+        return nothing
+    end
     burst = get(request, :memory_burst_bytes, nothing)
-    burst === nothing && return nothing
-    burst isa Integer && !(burst isa Bool) && burst >= 0 ||
-        throw(ArgumentError("invalid incremental phase memory estimate"))
-    limits = [(group, _resource_integer(_resource_read(joinpath(group, "memory.max"))))
-              for group in groups]
-    filter!(entry -> last(entry) != typemax(Int), limits)
-    isempty(limits) && return nothing
+    if burst===nothing
+        strict && throw(ArgumentError("strict phase admission requires a known memory burst"))
+        _NATIVE_PHASE_ADMISSIONS[directory]=Dict{String,Any}("memory_admission_mode"=>"unavailable")
+        return nothing
+    end
+    burst=_checked_resource_integer(burst,"incremental phase memory estimate")
+    limits = strict ? _strict_memory_bounds(groups) :
+        [(group, _resource_integer(_resource_read(joinpath(group, "memory.max"))))
+         for group in groups]
+    strict || filter!(entry -> last(entry) != typemax(Int), limits)
+    if isempty(limits)
+        _NATIVE_PHASE_ADMISSIONS[directory]=Dict{String,Any}("memory_admission_mode"=>"unavailable")
+        return nothing
+    end
     function available()
-        snapshots = [(group, limit, _resource_integer(_resource_read(joinpath(group, "memory.current"))))
-                     for (group, limit) in limits]
-        all(last(item) != typemax(Int) for item in snapshots) ||
+        snapshots = [(group, limit, strict ?
+            _strict_finite(_resource_read(joinpath(group,"memory.current")),"memory.current") :
+            _resource_integer(_resource_read(joinpath(group,"memory.current"))))
+            for (group,limit) in limits]
+        strict || all(last(item) != typemax(Int) for item in snapshots) ||
             throw(ArgumentError("finite cgroup limit has unreadable memory.current"))
+        # Check every applicable sum before choosing the tightest ancestor.
+        for (_,_,current) in snapshots
+            Base.checked_add(current,burst)
+        end
         return snapshots[argmin([limit - current for (_, limit, current) in snapshots])]
     end
     _, limit, before = available()
     current = before
     gc_seconds = 0.0
-    if current > limit - burst
+    if Base.checked_add(current,burst) > limit
         started = time_ns()
         GC.gc(true)
         gc_seconds = (time_ns() - started) * 1e-9
         _, limit, current = available()
     end
-    permitted = current <= limit - burst
+    required=Base.checked_add(current,burst)
+    permitted = required <= limit
+    decision = Dict{String,Any}()
+    _NATIVE_PHASE_ADMISSIONS[directory] = decision
     merge!(decision, Dict(
         "memory_admission_mode" => "cgroup_v2",
         "memory_current_before_bytes" => before,
@@ -197,7 +221,7 @@ function _native_phase_memory_permit!(directory, groups::Vector{String}, request
         "iteration" => get(request, :iteration, 0),
         "current_bytes" => current,
         "incremental_estimate_bytes" => Int(burst),
-        "required_memory_bytes" => current + Int(burst),
+        "required_memory_bytes" => required,
         "limit_bytes" => limit,
         "action" => "pause_before_allocation_restore_last_committed_state",
         "requested_unix" => time(),
@@ -208,4 +232,15 @@ function _native_phase_memory_permit!(directory, groups::Vector{String}, request
         println(io)
     end
     throw(_NativePhasePressure(evidence))
+end
+
+function _scientific_resource_preflight(resource_policy,envelope)
+    _resource_policy(resource_policy)
+    envelope===nothing || envelope isa ExecutionEnvelope ||
+        throw(ArgumentError("invalid execution envelope"))
+    if resource_policy===:campaign_strict
+        envelope===nothing && throw(ArgumentError("campaign_strict needs_admission: explicit envelope required"))
+        throw(ArgumentError("campaign_strict needs_guard/needs_admission: R2/R3/P1/P2/A1/C1 bindings pending"))
+    end
+    return nothing
 end

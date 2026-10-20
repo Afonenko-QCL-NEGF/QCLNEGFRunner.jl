@@ -520,29 +520,67 @@ function _storage_bytes(paths)
             islink(path) && throw(ArgumentError("operational storage rejects symbolic links"))
             path in visited && continue
             push!(visited,path)
-            total=Base.checked_add(total,filesize(path))
+            total=Base.checked_add(total,_checked_resource_integer(filesize(path),"file size"))
         end
     end
     return total
 end
+# Share the envelope's exact non-Bool Int validation without duplicating policy.
+_checked_resource_integer(value, name; minimum=0) =
+    QCLExecutionPolicy._grant_integer(value, name; minimum)
+
+function _checkpoint_storage_forecast_bytes(N_E,N_k,N_b,kernel_sizes,F_size)
+    ne=_checked_resource_integer(N_E,"N_E";minimum=1)
+    nk=_checked_resource_integer(N_k,"N_k";minimum=1)
+    nb=_checked_resource_integer(N_b,"N_b";minimum=1)
+    f=_checked_resource_integer(F_size,"F size")
+    arrays=Base.checked_mul(Base.checked_mul(Base.checked_mul(128,ne),nk),
+        Base.checked_mul(nb,nb))
+    kernels=0
+    for size in kernel_sizes
+        kernels=Base.checked_add(kernels,_checked_resource_integer(size,"kernel size"))
+    end
+    kernels=Base.checked_add(kernels,f)
+    return Base.checked_add(16*1024^2,
+        Base.checked_mul(4,Base.checked_add(arrays,kernels)))
+end
 function _checkpoint_storage_forecast(solution)
     n=solution.problem.numerical
-    # Conservative allowance for Green/selfenergy, kernels, typed histories,
-    # native analysis and HDF5 metadata. Actual staged bytes are checked too.
-    arrays=128*n.N_E*n.N_k*n.N_b^2
-    kernels=sum(sizeof(value) for value in values(solution.problem.kernels.K);init=0)+sizeof(solution.problem.kernels.Fᴸᴼ)
-    return Base.checked_add(16*1024^2,Base.checked_mul(4,arrays+kernels))
+    # Preserve the existing heuristic allowance; this is not a proven HDF5 bound.
+    return _checkpoint_storage_forecast_bytes(n.N_E,n.N_k,n.N_b,
+        (sizeof(value) for value in values(solution.problem.kernels.K)),
+        sizeof(solution.problem.kernels.Fᴸᴼ))
 end
-function _check_storage_budget(paths,budget,reserve,additional)
-    used=_storage_bytes(paths)
+function _checkpoint_storage_preflight(solution,reserve)
+    reserve=_checked_resource_integer(reserve,"storage reserve")
+    forecast=_checkpoint_storage_forecast(solution)
+    return (forecast_bytes=forecast,required_bytes=Base.checked_add(forecast,reserve))
+end
+function _storage_budget_used(used,budget,reserve,additional)
+    used=_checked_resource_integer(used,"storage used")
+    budget=_checked_resource_integer(budget,"storage budget";minimum=1)
+    reserve=_checked_resource_integer(reserve,"storage reserve")
+    additional=_checked_resource_integer(additional,"storage additional")
     Base.checked_add(Base.checked_add(used,reserve),additional)<=budget ||
         throw(ArgumentError("operational storage byte budget exhausted: used=$used reserve=$reserve additional=$additional budget=$budget"))
     return used
 end
-function _check_storage_free(path,required)
-    available=Int(Base.Filesystem.diskstat(path).available)
+function _check_storage_budget(paths,budget,reserve,additional;storage_reader=_storage_bytes)
+    budget=_checked_resource_integer(budget,"storage budget";minimum=1)
+    reserve=_checked_resource_integer(reserve,"storage reserve")
+    additional=_checked_resource_integer(additional,"storage additional")
+    return _storage_budget_used(storage_reader(paths),budget,reserve,additional)
+end
+function _storage_free_permit(available,required)
+    available=_checked_resource_integer(available,"storage available")
+    required=_checked_resource_integer(required,"storage required")
     available>=required || throw(ArgumentError("publication storage reserve unavailable: required=$required available=$available"))
     return available
+end
+_storage_available(path)=Base.Filesystem.diskstat(path).available
+function _check_storage_free(path,required;available_reader=_storage_available)
+    required=_checked_resource_integer(required,"storage required")
+    return _storage_free_permit(available_reader(path),required)
 end
 function _bundle_receipt_document(commit_path,commit;verified_unix=time())
     return Dict("schema"=>"qcl-negf-recovery-receipt-v1","status"=>"verified",
@@ -758,8 +796,8 @@ function commit_point_artifacts(
     checkpoint_metadata = Dict{String,Any}(),
     storage_class::Symbol = :recovery,
     retain_generations::Int = 2,
-    byte_budget::Int = 8*1024^3,
-    reserve_bytes::Int = 64*1024^2,
+    byte_budget = 8*1024^3,
+    reserve_bytes = 64*1024^2,
     recovery_root::Union{Nothing,AbstractString} = nothing,
     archive_root::Union{Nothing,AbstractString} = nothing,
     operational_roots = String[],
@@ -775,16 +813,18 @@ function commit_point_artifacts(
         throw(ArgumentError("recovery requires the actual executed algorithm contract; unknown provenance can only be archived"))
     storage_class in (:archive,:recovery) || throw(ArgumentError("unknown storage class"))
     retain_generations>=2 || throw(ArgumentError("retention needs latest and previous"))
-    byte_budget>0 && 0<=reserve_bytes<byte_budget || throw(ArgumentError("invalid operational byte budget"))
+    byte_budget=_checked_resource_integer(byte_budget,"storage budget";minimum=1)
+    reserve_bytes=_checked_resource_integer(reserve_bytes,"storage reserve")
+    reserve_bytes<byte_budget || throw(ArgumentError("invalid operational byte budget"))
     storage_class===:archive && terminal_status in ("running","running_scba","snapshot","paused","crashed","cancelled") &&
         throw(ArgumentError("an interrupted point has recovery, not a final state"))
     root=storage_class===:archive ? something(archive_root,joinpath(directory,"archive")) :
         something(recovery_root,joinpath(directory,"artifacts"))
     mkpath(root)
     accounted=isempty(operational_roots) ? [storage_class===:recovery ? root : something(recovery_root,joinpath(directory,"artifacts"))] : operational_roots
-    forecast=_checkpoint_storage_forecast(solution)
-    storage_class===:recovery && _check_storage_budget(accounted,byte_budget,reserve_bytes,forecast)
-    _check_storage_free(root,forecast+reserve_bytes)
+    storage=_checkpoint_storage_preflight(solution,reserve_bytes)
+    storage_class===:recovery && _check_storage_budget(accounted,byte_budget,reserve_bytes,storage.forecast_bytes)
+    _check_storage_free(root,storage.required_bytes)
     generations=[
         parse(Int, match(r"^generation-(\d+)$", name).captures[1]) for
         name in readdir(root) if occursin(r"^generation-\d+$", name)

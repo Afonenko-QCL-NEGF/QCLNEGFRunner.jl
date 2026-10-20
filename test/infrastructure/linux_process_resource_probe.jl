@@ -97,6 +97,15 @@ include("../support/resource_probe.jl")
         @test hardware.available_memory_bytes == 6gib
         @test hardware.cgroup_memory_max_bytes == typemax(Int)
         @test hardware.cgroup_path == "."
+        # L3 legacy current fallback remains; strict S5/S9 refuse these inputs.
+        _write_resource_fixture(joinpath(cgroup_root, "memory.current"), "broken")
+        legacy_unknown_current = probe_hardware(;
+            proc_root, cgroup_root, physical_memory_override = 8gib,
+            available_memory_override = 6gib, host_logical_cpus = 8,
+            julia_threads = 8, blas_vendor_override = "fixture-blas")
+        @test legacy_unknown_current.cgroup_memory_current_bytes == 0
+        @test QCLNEGFRunner._resource_integer("max") == typemax(Int)
+        @test QCLNEGFRunner._resource_integer("broken") == typemax(Int)
     end
 
     @test QCLNEGFRunner._cpuset_count("0-3,8,10-11") == 7

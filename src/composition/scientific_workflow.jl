@@ -25,6 +25,8 @@ import ..QCLNEGFRunner:
     _software_version,
     resolve_execution_strategy,
     default_execution_envelope,
+    ExecutionEnvelope,
+    _scientific_resource_preflight,
     configure_execution!,
     save_execution_plan,
     build_configured_problem,
