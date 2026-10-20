@@ -13,13 +13,19 @@ const N=QCLNEGFRunner.QCLNumerics
         width=Threads.nthreads(:default)
         proc = mkpath(joinpath(root, "proc", "self"))
         write(joinpath(proc, "cgroup"), "0::/group")
-        let
-            callback=QCLNEGFRunner._native_phase_request(root; proc_root = dirname(proc), cgroup_root = root)
+        fake_proc = dirname(proc)
+        boot_A = "00000000-0000-4000-8000-000000000001"
+        boot_B = "00000000-0000-4000-8000-000000000002"
+        boot_file = joinpath(fake_proc, "sys", "kernel", "random", "boot_id")
+        mkpath(dirname(boot_file))
+        write(boot_file, boot_A * "\n")
+        try
+            callback=QCLNEGFRunner._native_phase_request(root; proc_root = fake_proc, cgroup_root = root)
             @test callback((task_width = 1, elastic = true))==1
             options=ProductionOptions(
                 worker_count = width,
                 phase_timing = true,
-                event_sink = event->QCLNEGFRunner._record_native_phase!(root, event),
+                event_sink = event->QCLNEGFRunner._record_native_phase!(root, event; proc_root = fake_proc),
                 phase_request = callback,
             )
             outer=N._production_phase_begin(
@@ -53,6 +59,14 @@ const N=QCLNEGFRunner.QCLNumerics
             @test rows[4]["memory_granted_additional_bytes"]==1024
             @test rows[3]["memory_admission_mode"]=="unavailable"
             @test rows[1]["clock_domain_id"]==rows[4]["clock_domain_id"]
+            # D3: real lazy initialization reads literal fake boot A; a cache
+            # hit after replacing A with B preserves directory-owned identity.
+            @test startswith(rows[1]["clock_domain_id"], boot_A * ":julia:")
+            @test haskey(QCLNEGFRunner._NATIVE_PHASE_JOURNALS, root)
+            journal = QCLNEGFRunner._NATIVE_PHASE_JOURNALS[root]
+            write(boot_file, boot_B * "\n")
+            @test QCLNEGFRunner._native_phase_journal(root; proc_root = fake_proc) === journal
+            @test journal.clock_domain == rows[1]["clock_domain_id"]
             write(joinpath(group, "memory.current"), "999999")
             request=(
                 name = :mixing,
@@ -66,6 +80,9 @@ const N=QCLNEGFRunner.QCLNumerics
             @test pressure["reason"]=="phase_memory_bound"
             @test pressure["incremental_estimate_bytes"]==2
             @test length(readlines(joinpath(root, "phases.jsonl")))==4
+        finally
+            pop!(QCLNEGFRunner._NATIVE_PHASE_JOURNALS, root, nothing)
+            pop!(QCLNEGFRunner._NATIVE_PHASE_ADMISSIONS, root, nothing)
         end
     end
 end

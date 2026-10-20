@@ -172,10 +172,10 @@ function _scientific_attempt_directory(parent::AbstractString, first_attempt::In
     end
 end
 
-function _scientific_memory_reservation(config, resource_plan)
+function _scientific_memory_reservation(config, resource_plan,
+    envelope=default_execution_envelope())
     required=scientific_memory_estimate(FilesystemScientificDefinitions(), config)
     hardware=resource_plan.hardware
-    envelope=default_execution_envelope()
     budget=envelope === nothing ?
            min(
         resource_plan.memory_budget_bytes,
@@ -443,7 +443,10 @@ function execute_scientific_plan(
     telemetry_sink::Union{Nothing,Function} = nothing,
     archive_bundle::Union{Nothing,AbstractString} = nothing,
     archive_byte_budget::Int = 64*1024^3,
+    resource_policy::Symbol = :standalone,
+    envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
 )
+    _scientific_resource_preflight(resource_policy,envelope)
     archive_byte_budget>0 || throw(ArgumentError("archive byte budget must be positive"))
     # Re-decode the frozen raw contract, rejecting mutation and stale typed aliases.
     plan=load_scientific_plan(scientific_plan_dict(plan))
@@ -666,14 +669,14 @@ function execute_scientific_plan(
         base_cache=nothing
         preparation_error=nothing
         try
-            config, resource_plan=resolve_execution_strategy(config)
+            config, resource_plan=resolve_execution_strategy(config;envelope)
             configure_execution!(config)
             BLAS.set_num_threads(1)
             save_execution_plan(
                 joinpath(execution_dir, "execution_plan.yaml"),
                 resource_plan,
             )
-            reservation=_scientific_memory_reservation(config, resource_plan)
+            reservation=_scientific_memory_reservation(config, resource_plan, envelope)
             _scientific_json(
                 joinpath(execution_dir, "scientific_memory_reservation.json"),
                 reservation,
@@ -963,7 +966,7 @@ function execute_scientific_plan(
                 runtime_options=with_production_options(
                     config.production;
                     event_sink,
-                    phase_request = _native_phase_request(reporter.machine_directory),
+                    phase_request = _native_phase_request(reporter.machine_directory;resource_policy),
                 )
                 problem=retarget_problem(
                     configured.problem;

@@ -132,11 +132,32 @@ end
 end
 
 @testset "Phase width respects the fixed Julia pool" begin
-    request = QCLNEGFRunner._native_phase_request(nothing)
-    pool = Threads.nthreads(:default)
-    @test request((task_width = 1, elastic = true)) == 1
-    @test request((task_width = pool, elastic = false)) == pool
-    @test request((task_width = pool + 1, elastic = true)) == pool
-    @test_throws ArgumentError request((task_width = 0, elastic = true))
+    # L2: literal membership and both explicit roots prevent default /proc reads.
+    mktempdir() do root
+        fake_proc = mkpath(joinpath(root, "fake_proc"))
+        fake_cgroup = mkpath(joinpath(root, "fake_cgroup"))
+        mkpath(joinpath(fake_proc, "self"))
+        write(joinpath(fake_proc, "self", "cgroup"), "0::/fixture.slice/solver.scope\n")
+        mkpath(joinpath(fake_cgroup, "fixture.slice", "solver.scope"))
+        request = QCLNEGFRunner._native_phase_request(nothing;
+            proc_root = fake_proc, cgroup_root = fake_cgroup)
+        pool = Threads.nthreads(:default)
+        attempted = Ref(0)
+        completed = Ref(0)
+        function continuation(req)
+            attempted[] += 1
+            width = request(req)
+            completed[] += 1
+            return width
+        end
+        @test continuation((task_width = 1, elastic = true)) == 1
+        @test continuation((task_width = pool, elastic = false)) == pool
+        @test continuation((task_width = pool + 1, elastic = true)) == pool
+        @test attempted[] == 3
+        @test completed[] == 3
+        @test_throws ArgumentError continuation((task_width = 0, elastic = true))
+        @test attempted[] == 4
+        @test completed[] == 3
+    end
 end
 end
