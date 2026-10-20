@@ -1,0 +1,77 @@
+{
+  "format": "qcl-negf.declared-input-map.v1",
+  "rows": [
+    {
+      "phase": "declared",
+      "path": "physical.impurity_screening_wavenumber",
+      "base": "execution_configuration",
+      "pointer": "/physical/impurity_screening_wavenumber",
+      "atom_kind": "quantity",
+      "unit": "nm^-1",
+      "rule": "canonical_quantity_literal"
+    },
+    {
+      "phase": "declared",
+      "path": "physical.interface_correlation_length",
+      "base": "execution_configuration",
+      "pointer": "/physical/interface_correlation_length",
+      "atom_kind": "quantity",
+      "unit": "nm",
+      "rule": "canonical_quantity_literal"
+    },
+    {
+      "phase": "declared",
+      "path": "physical.interface_roughness_height",
+      "base": "execution_configuration",
+      "pointer": "/physical/interface_roughness_height",
+      "atom_kind": "quantity",
+      "unit": "nm",
+      "rule": "canonical_quantity_literal"
+    },
+    {
+      "phase": "declared",
+      "path": "physical.lattice_temperature",
+      "base": "point",
+      "pointer": "/temperature_K",
+      "atom_kind": "quantity",
+      "unit": "K",
+      "rule": "json_number"
+    },
+    {
+      "phase": "declared",
+      "path": "physical.lo_phonon_energy",
+      "base": "execution_configuration",
+      "pointer": "/physical/lo_phonon_energy",
+      "atom_kind": "quantity",
+      "unit": "meV",
+      "rule": "canonical_quantity_literal"
+    },
+    {
+      "phase": "declared",
+      "path": "physical.lo_screening_wavenumber",
+      "base": "execution_configuration",
+      "pointer": "/physical/lo_screening_wavenumber",
+      "atom_kind": "quantity",
+      "unit": "nm^-1",
+      "rule": "canonical_quantity_literal"
+    },
+    {
+      "phase": "declared",
+      "path": "physical.lo_temperature",
+      "base": "point",
+      "pointer": "/temperature_K",
+      "atom_kind": "quantity",
+      "unit": "K",
+      "rule": "json_number"
+    },
+    {
+      "phase": "declared",
+      "path": "production.energy_chunk",
+      "base": "execution_configuration",
+      "pointer": "/production/energy_chunk",
+      "atom_kind": "integer",
+      "unit": "1",
+      "rule": "json_integer"
+    }
+  ]
+}
