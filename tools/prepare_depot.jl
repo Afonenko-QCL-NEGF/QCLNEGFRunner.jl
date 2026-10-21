@@ -2,7 +2,10 @@
 using Pkg
 
 VERSION == v"1.13.0" || error("Prepared depots require the pinned Julia 1.13.0 runtime")
-Pkg.instantiate(; allow_autoprecomp=false, julia_version_strict=true)
+ctx = Pkg.Types.Context()
+isfile(ctx.env.project_file) || error("Prepared depots require an existing Project file: $(ctx.env.project_file)")
+isfile(ctx.env.manifest_file) || error("Prepared depots require an existing Manifest file: $(ctx.env.manifest_file)")
+Pkg.instantiate(ctx; manifest=true, allow_build=false, allow_autoprecomp=false, julia_version_strict=true)
 
 # Instantiate omits lazy artifacts. Capture the full selection for this host now,
 # while downloads are allowed, so a later sandbox build has no deferred fetches.
