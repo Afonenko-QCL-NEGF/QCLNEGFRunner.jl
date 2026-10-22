@@ -32,30 +32,34 @@ Copy a closed result tree, verify its bytes and native commits, then publish one
 This guard is not an OS quota and does not reserve space against other writers.
 """
 function stage_result_tree(source::AbstractString, destination::AbstractString;
-    byte_budget::Int=8*1024^3, reserve_bytes::Int=64*1024^2)
-    source = abspath(source)
-    destination = abspath(destination)
-    isdir(source) || throw(ArgumentError("result source is not a directory"))
-    byte_budget>0 && 0<=reserve_bytes<byte_budget ||
-        throw(ArgumentError("invalid staging byte budget or reserve"))
-    ispath(destination) || islink(destination) ?
-        throw(ArgumentError("staged output must not already exist")) : nothing
-    relative = relpath(destination, source)
-    (relative == "." || !(relative == ".." || startswith(relative, ".." * string(Base.Filesystem.path_separator)))) &&
-        throw(ArgumentError("staged output must be outside the source tree"))
-    _validate_staging_tree(source)
-    source_bytes = _storage_bytes([source])
-    _check_storage_budget([source],byte_budget,reserve_bytes,source_bytes)
-    storage_parent=dirname(destination)
-    while !isdir(storage_parent)
-        storage_parent=dirname(storage_parent)
-    end
-    _check_storage_free(storage_parent,Base.checked_add(source_bytes,reserve_bytes))
-    before = _tree_digests(source)
-    mkpath(dirname(destination))
-    temporary = mktempdir(dirname(destination); prefix=".qcl-negf-stage-", cleanup=false)
-    staged = joinpath(temporary, "result")
+    byte_budget::Int=8*1024^3, reserve_bytes::Int=64*1024^2,
+    resource_policy::Symbol = :standalone, storage_context=nothing)
+    temporary = nothing
     try
+        _resident_writer_preflight(resource_policy, :stage, storage_context, destination; payload=source)
+        source = abspath(source)
+        destination = abspath(destination)
+        isdir(source) || throw(ArgumentError("result source is not a directory"))
+        byte_budget>0 && 0<=reserve_bytes<byte_budget ||
+            throw(ArgumentError("invalid staging byte budget or reserve"))
+        ispath(destination) || islink(destination) ?
+            throw(ArgumentError("staged output must not already exist")) : nothing
+        relative = relpath(destination, source)
+        (relative == "." || !(relative == ".." || startswith(relative, ".." * string(Base.Filesystem.path_separator)))) &&
+            throw(ArgumentError("staged output must be outside the source tree"))
+        _validate_staging_tree(source)
+        source_bytes = _storage_bytes([source])
+        _check_storage_budget([source],byte_budget,reserve_bytes,source_bytes)
+        storage_parent=dirname(destination)
+        while !isdir(storage_parent)
+            storage_parent=dirname(storage_parent)
+        end
+        _check_storage_free(storage_parent,Base.checked_add(source_bytes,reserve_bytes))
+        before = _tree_digests(source)
+        mkpath(dirname(destination))
+        temporary = mktempdir(dirname(destination); prefix=".qcl-negf-stage-", cleanup=false)
+        resident_created!(storage_context, temporary)
+        staged = joinpath(temporary, "result")
         mkpath(staged)
         copied_bytes=0
         for (directory,directories,files) in walkdir(source;follow_symlinks=false)
@@ -104,11 +108,24 @@ function stage_result_tree(source::AbstractString, destination::AbstractString;
         end
         # Staged and final directories are on the same filesystem; never merge trees.
         ispath(destination) && throw(ArgumentError("staged output was created concurrently"))
-        Base.Filesystem.rename(staged, destination)
+        if _resident_preserve(resource_policy, storage_context)
+            lock(storage_context.permit.ledger.guard) do
+                _resident_live_ancestry!(storage_context.permit)
+                Base.Filesystem.rename(staged, destination)
+                resident_renamed!(storage_context, staged, destination)
+            end
+        else
+            Base.Filesystem.rename(staged, destination)
+        end
         _sync_artifact_directory(dirname(destination))
+        resident_acknowledged!(storage_context, destination)
         return destination
+    catch failure
+        canonical = _resident_failure!(storage_context, failure)
+        canonical === nothing || canonical === failure || throw(canonical)
+        rethrow()
     finally
-        isdir(temporary) && rm(temporary; recursive=true, force=true)
+        resource_policy === :standalone && temporary !== nothing && isdir(temporary) && rm(temporary; recursive=true, force=true)
     end
 end
 
@@ -130,10 +147,15 @@ function execute_scientific_plan_staged(
     telemetry_sink::Union{Nothing,Function}=nothing,
     archive_bundle::Union{Nothing,AbstractString}=nothing,
     archive_byte_budget::Int=64*1024^3,
+    resource_policy::Symbol = :standalone,
+    envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
 )
+    # Dominates scratch mkdir, workspace create, delivery and success deletion.
+    # Strict must never create scratch and then fall back to standalone inside.
+    _scientific_resource_preflight(resource_policy, envelope)
     if scratch_root===nothing || any(e.outputs.recovery.enabled for e in plan.executions if execution_id===nothing || e.id==execution_id)
         scratch_root===nothing || @warn "portable recovery publishes directly to output storage; scratch staging is disabled for this execution"
-        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget)
+        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope)
     end
     selected=[e for e in plan.executions if execution_id===nothing || e.id==execution_id]
     isempty(selected) && throw(ArgumentError("unknown selected execution"))
@@ -151,8 +173,9 @@ function execute_scientific_plan_staged(
     workspace = mktempdir(scratch_root; prefix="qcl-negf-", cleanup=false)
     local_result = joinpath(workspace, "result")
     try
-        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget)
-        stage_result_tree(local_result, destination; byte_budget,reserve_bytes)
+        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope)
+        stage_result_tree(local_result, destination; byte_budget,reserve_bytes,resource_policy)
+        _resident_writer_preflight(resource_policy, :scratch_success_cleanup)
         rm(workspace; recursive=true)
         return result
     catch

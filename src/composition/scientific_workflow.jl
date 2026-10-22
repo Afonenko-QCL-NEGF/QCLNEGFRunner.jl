@@ -27,6 +27,8 @@ import ..QCLNEGFRunner:
     default_execution_envelope,
     ExecutionEnvelope,
     _scientific_resource_preflight,
+    _resident_writer_preflight,
+    flush_scientific_history_finalizer!,
     configure_execution!,
     save_execution_plan,
     build_configured_problem,

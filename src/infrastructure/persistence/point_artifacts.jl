@@ -588,14 +588,15 @@ function _bundle_receipt_document(commit_path,commit;verified_unix=time())
         "state_id"=>commit["state_id"],"state_sequence"=>commit["state_sequence"],
         "verified_unix"=>verified_unix,"publication_scope"=>"local_filesystem")
 end
-function _write_bundle_receipt(commit_path;maximum_bytes::Union{Nothing,Int}=nothing)
+function _write_bundle_receipt(commit_path;maximum_bytes::Union{Nothing,Int}=nothing,
+    resource_policy::Symbol=:standalone, storage_context=nothing)
     commit=verify_point_artifacts(commit_path)
     receipt=_bundle_receipt_document(commit_path,commit)
     encoded=sprint(_light_json,receipt)
     maximum_bytes===nothing || ncodeunits(encoded)<=maximum_bytes ||
         throw(ArgumentError("recovery receipt exceeds its reserved metadata byte budget"))
     path=joinpath(dirname(commit_path),"receipt.json")
-    _observability_atomic_text(path) do io
+    _observability_atomic_text(path; resource_policy, storage_context) do io
         write(io,encoded)
     end
     _sync_artifact_file(path)
@@ -804,47 +805,52 @@ function commit_point_artifacts(
     state_sequence::Union{Nothing,Int} = nothing,
     publication_hook::Function = stage -> nothing,
     execution_progress::Union{Nothing,AbstractDict} = nothing,
+    resource_policy::Symbol = :standalone,
+    storage_context=nothing,
 )
-    checkpoint_started=time_ns()
-    actual_contract=get(solution.observables,:restart_contract,nothing)
-    actual_contract===nothing && (actual_contract=solution.scba.restart_contract)
-    recoverable=algorithms!==nothing || actual_contract!==nothing
-    storage_class===:recovery && !recoverable &&
-        throw(ArgumentError("recovery requires the actual executed algorithm contract; unknown provenance can only be archived"))
-    storage_class in (:archive,:recovery) || throw(ArgumentError("unknown storage class"))
-    retain_generations>=2 || throw(ArgumentError("retention needs latest and previous"))
-    byte_budget=_checked_resource_integer(byte_budget,"storage budget";minimum=1)
-    reserve_bytes=_checked_resource_integer(reserve_bytes,"storage reserve")
-    reserve_bytes<byte_budget || throw(ArgumentError("invalid operational byte budget"))
-    storage_class===:archive && terminal_status in ("running","running_scba","snapshot","paused","crashed","cancelled") &&
-        throw(ArgumentError("an interrupted point has recovery, not a final state"))
-    root=storage_class===:archive ? something(archive_root,joinpath(directory,"archive")) :
-        something(recovery_root,joinpath(directory,"artifacts"))
-    mkpath(root)
-    accounted=isempty(operational_roots) ? [storage_class===:recovery ? root : something(recovery_root,joinpath(directory,"artifacts"))] : operational_roots
-    storage=_checkpoint_storage_preflight(solution,reserve_bytes)
-    storage_class===:recovery && _check_storage_budget(accounted,byte_budget,reserve_bytes,storage.forecast_bytes)
-    _check_storage_free(root,storage.required_bytes)
-    generations=[
-        parse(Int, match(r"^generation-(\d+)$", name).captures[1]) for
-        name in readdir(root) if occursin(r"^generation-\d+$", name)
-    ]
-    generation=isempty(generations) ? 1 : maximum(generations)+1
-    generation=max(generation,something(state_sequence,generation))
-    sequence=generation
-    identity=merge(Dict{String,Any}(String(k)=>v for (k,v) in identity),Dict(
-        "state_sequence"=>sequence,
-        "state_id"=>bytes2hex(sha256(canonical_bytes(Dict("identity"=>identity,"sequence"=>sequence,"nonce"=>string(time_ns()))))),
-    ))
-    final_audit=_bound_final_audit(solution,identity;final_state=storage_class===:archive)
-    assessment=solution_scientific_assessment(solution)
-    pop!(assessment,"final_fixed_point_audit",nothing)
-    final_audit===nothing || (assessment["final_fixed_point_audit"]=final_audit)
-    name=storage_class===:archive ? "final" : "generation-"*lpad(string(generation), 6, '0')
-    final=joinpath(root, name)
-    ispath(final) && throw(ArgumentError("immutable final already exists"))
-    stage=mktempdir(root; prefix = "pending-")
+    stage = nothing
     try
+        _resident_writer_preflight(resource_policy, :point, storage_context, directory; payload=(solution, identity))
+        checkpoint_started=time_ns()
+        actual_contract=get(solution.observables,:restart_contract,nothing)
+        actual_contract===nothing && (actual_contract=solution.scba.restart_contract)
+        recoverable=algorithms!==nothing || actual_contract!==nothing
+        storage_class===:recovery && !recoverable &&
+            throw(ArgumentError("recovery requires the actual executed algorithm contract; unknown provenance can only be archived"))
+        storage_class in (:archive,:recovery) || throw(ArgumentError("unknown storage class"))
+        retain_generations>=2 || throw(ArgumentError("retention needs latest and previous"))
+        byte_budget=_checked_resource_integer(byte_budget,"storage budget";minimum=1)
+        reserve_bytes=_checked_resource_integer(reserve_bytes,"storage reserve")
+        reserve_bytes<byte_budget || throw(ArgumentError("invalid operational byte budget"))
+        storage_class===:archive && terminal_status in ("running","running_scba","snapshot","paused","crashed","cancelled") &&
+            throw(ArgumentError("an interrupted point has recovery, not a final state"))
+        root=storage_class===:archive ? something(archive_root,joinpath(directory,"archive")) :
+            something(recovery_root,joinpath(directory,"artifacts"))
+        mkpath(root)
+        accounted=isempty(operational_roots) ? [storage_class===:recovery ? root : something(recovery_root,joinpath(directory,"artifacts"))] : operational_roots
+        storage=_checkpoint_storage_preflight(solution,reserve_bytes)
+        storage_class===:recovery && _check_storage_budget(accounted,byte_budget,reserve_bytes,storage.forecast_bytes)
+        _check_storage_free(root,storage.required_bytes)
+        generations=[
+            parse(Int, match(r"^generation-(\d+)$", name).captures[1]) for
+            name in readdir(root) if occursin(r"^generation-\d+$", name)
+        ]
+        generation=isempty(generations) ? 1 : maximum(generations)+1
+        generation=max(generation,something(state_sequence,generation))
+        sequence=generation
+        identity=merge(Dict{String,Any}(String(k)=>v for (k,v) in identity),Dict(
+            "state_sequence"=>sequence,
+            "state_id"=>bytes2hex(sha256(canonical_bytes(Dict("identity"=>identity,"sequence"=>sequence,"nonce"=>string(time_ns()))))),
+        ))
+        final_audit=_bound_final_audit(solution,identity;final_state=storage_class===:archive)
+        assessment=solution_scientific_assessment(solution)
+        pop!(assessment,"final_fixed_point_audit",nothing)
+        final_audit===nothing || (assessment["final_fixed_point_audit"]=final_audit)
+        name=storage_class===:archive ? "final" : "generation-"*lpad(string(generation), 6, '0')
+        final=joinpath(root, name)
+        ispath(final) && throw(ArgumentError("immutable final already exists"))
+        stage=mktempdir(root; prefix = "pending-", cleanup=resource_policy === :standalone)
+        resident_created!(storage_context, stage)
         artifacts=Dict{String,Any}[]
         for (filename, role, schema) in
             (("physics.h5", "physics.full", "qcl-negf-physics-v4"),)
@@ -867,7 +873,7 @@ function commit_point_artifacts(
         # Recovery is an immutable, hash-bound reference within the generation.
         physical=only(filter(item->item["role"]=="physics.full", artifacts))
         recovery_path=joinpath(stage, "recovery.json")
-        _observability_atomic_text(recovery_path) do io
+        _observability_atomic_text(recovery_path; resource_policy, storage_context) do io
             _light_json(
                 io,
                 Dict(
@@ -936,7 +942,7 @@ function commit_point_artifacts(
                 _kelvin(solution.problem.physical.Tᴸᴼ),
             )*" K"
             path=joinpath(stage, "resolved_configuration.json")
-            _observability_atomic_text(path) do io
+            _observability_atomic_text(path; resource_policy, storage_context) do io
                 _light_json(io, _resolved_configuration_envelope(resolved))
             end
             push!(
@@ -955,7 +961,7 @@ function commit_point_artifacts(
             progress["contract_set"]=_RESULT_CONTRACT_SET
             progress["identity"]=identity
             path=joinpath(stage,"execution_progress.json")
-            _observability_atomic_text(path) do io
+            _observability_atomic_text(path; resource_policy, storage_context) do io
                 _light_json(io,progress)
             end
             push!(artifacts,_artifact_record(path,"execution.progress","qcl-negf-execution-progress-v1",identity))
@@ -1020,7 +1026,7 @@ function commit_point_artifacts(
             "includes_commit_publication"=>false,
             "jit_separately_measured"=>false,
         )
-        _observability_atomic_text(joinpath(stage, "commit.json")) do io
+        _observability_atomic_text(joinpath(stage, "commit.json"); resource_policy, storage_context) do io
             _light_json(io, commit)
         end
         _prepare_generation!(stage)
@@ -1062,7 +1068,15 @@ function commit_point_artifacts(
             _check_storage_budget(accounted,byte_budget,reserve_bytes,metadata_tail)
             _check_storage_free(root,Base.checked_add(metadata_tail,reserve_bytes))
         end
-        mv(stage, final; force = false)
+        if _resident_preserve(resource_policy, storage_context)
+            lock(storage_context.permit.ledger.guard) do
+                _resident_live_ancestry!(storage_context.permit)
+                mv(stage, final; force = false)
+                resident_renamed!(storage_context, stage, final)
+            end
+        else
+            mv(stage, final; force = false)
+        end
         _sync_artifact_directory(root)
         commit_path=joinpath(final, "commit.json")
         publication_hook(:after_publish)
@@ -1074,7 +1088,7 @@ function commit_point_artifacts(
             _check_storage_budget(accounted,byte_budget,reserve_bytes,metadata_tail)
             _check_storage_free(root,Base.checked_add(metadata_tail,reserve_bytes))
         end
-        _write_bundle_receipt(commit_path;maximum_bytes=receipt_bound)
+        _write_bundle_receipt(commit_path;maximum_bytes=receipt_bound,resource_policy,storage_context)
         publication_hook(:after_verify)
         if storage_class===:recovery
             current=joinpath(root,"current.json")
@@ -1084,21 +1098,26 @@ function commit_point_artifacts(
             _check_storage_free(root,Base.checked_add(pointer_tail,reserve_bytes))
             if previous_payload!==nothing
                 # Only the verified prior pointer can become previous.
-                _observability_atomic_text(joinpath(root,"previous.json")) do io
+                _observability_atomic_text(joinpath(root,"previous.json"); resource_policy, storage_context) do io
                     write(io,previous_payload)
                 end
                 _sync_artifact_file(joinpath(root,"previous.json"))
             end
-            _observability_atomic_text(current) do io
+            _observability_atomic_text(current; resource_policy, storage_context) do io
                 write(io,pointer_payload)
             end
             _sync_artifact_file(current)
             _sync_artifact_directory(root)
-            _prune_recovery_generations!(root,retain_generations)
+            resource_policy === :standalone && _prune_recovery_generations!(root,retain_generations)
         end
+        resident_acknowledged!(storage_context, commit_path)
         return commit_path
+    catch failure
+        canonical = _resident_failure!(storage_context, failure)
+        canonical === nothing || canonical === failure || throw(canonical)
+        rethrow()
     finally
-        isdir(stage) && rm(stage; recursive = true, force = true)
+        resource_policy === :standalone && stage !== nothing && isdir(stage) && rm(stage; recursive = true, force = true)
     end
 end
 
@@ -1259,15 +1278,20 @@ function commit_operator_artifacts(
     identity,
     operation,
     accepted,
+    resource_policy::Symbol = :standalone,
+    storage_context=nothing,
 )
-    root=joinpath(directory, "artifacts")
-    mkpath(root)
-    final=joinpath(root, "generation-000001")
-    ispath(final) && throw(ArgumentError("operator generation already exists"))
-    stage=mktempdir(root; prefix = "pending-")
+    stage = nothing
     try
+        _resident_writer_preflight(resource_policy, :operator, storage_context, directory; payload=(checks, identity, operation, accepted))
+        root=joinpath(directory, "artifacts")
+        mkpath(root)
+        final=joinpath(root, "generation-000001")
+        ispath(final) && throw(ArgumentError("operator generation already exists"))
+        stage=mktempdir(root; prefix = "pending-", cleanup=resource_policy === :standalone)
+        resident_created!(storage_context, stage)
         path=joinpath(stage, "operator_checks.json")
-        _observability_atomic_text(path) do io
+        _observability_atomic_text(path; resource_policy, storage_context) do io
             _light_json(
                 io,
                 Dict(
@@ -1298,14 +1322,22 @@ function commit_operator_artifacts(
             "quality"=>accepted ? "strict" : "unconverged",
             "artifacts"=>[record],
         )
-        _observability_atomic_text(joinpath(stage, "commit.json")) do io
+        _observability_atomic_text(joinpath(stage, "commit.json"); resource_policy, storage_context) do io
             _light_json(io, commit)
         end
         _prepare_generation!(stage)
-        mv(stage, final; force = false)
+        if _resident_preserve(resource_policy, storage_context)
+            lock(storage_context.permit.ledger.guard) do
+                _resident_live_ancestry!(storage_context.permit)
+                mv(stage, final; force = false)
+                resident_renamed!(storage_context, stage, final)
+            end
+        else
+            mv(stage, final; force = false)
+        end
         _sync_artifact_directory(root)
         path=joinpath(final, "commit.json")
-        _observability_atomic_text(joinpath(root, "current.json")) do io
+        _observability_atomic_text(joinpath(root, "current.json"); resource_policy, storage_context) do io
             _light_json(
                 io,
                 Dict(
@@ -1319,9 +1351,16 @@ function commit_operator_artifacts(
         end
         _sync_artifact_file(joinpath(root, "current.json"))
         _sync_artifact_directory(root)
+        # Operator publication has no independent durable replacement verifier.
+        # Keep it unacknowledged and retain the entire conservative tail.
+        storage_context === nothing || resident_settle!(storage_context)
         return path
+    catch failure
+        canonical = _resident_failure!(storage_context, failure)
+        canonical === nothing || canonical === failure || throw(canonical)
+        rethrow()
     finally
-        isdir(stage) && rm(stage; recursive = true, force = true)
+        resource_policy === :standalone && stage !== nothing && isdir(stage) && rm(stage; recursive = true, force = true)
     end
 end
 

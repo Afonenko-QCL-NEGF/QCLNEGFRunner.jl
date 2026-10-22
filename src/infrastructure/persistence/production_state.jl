@@ -1,6 +1,8 @@
 # Optional production checkpoint and summary persistence adapter.
 
-function _atomic_checkpoint(path::AbstractString, solution::NEGFSolution)
+function _atomic_checkpoint(path::AbstractString, solution::NEGFSolution;
+    resource_policy::Symbol = :standalone)
+    _resident_writer_preflight(resource_policy, :atomic_checkpoint)
     directory = dirname(abspath(path))
     mkpath(directory)
     temporary, stream = mktemp(directory)
