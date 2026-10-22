@@ -385,7 +385,9 @@ function _scientific_execution_progress(records,active,root,fingerprint)
         "plan_fingerprint"=>fingerprint,"execution_id"=>active.execution_id,"active_point_id"=>active.id,
         "completed_points"=>completed)
 end
-function _import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget::Int=64*1024^3)
+function _import_completed_archives!(progress,archive_bundle,root,policy;
+    archive_byte_budget::Int=64*1024^3, resource_policy::Symbol = :standalone)
+    _resident_writer_preflight(resource_policy, :import_archives)
     entries=get(progress,"completed_points",nothing)
     entries isa AbstractVector || throw(ArgumentError("execution progress has no completed-point index"))
     if isempty(entries)
@@ -508,7 +510,7 @@ function execute_scientific_plan(
         progress=YAML.load_file(progress_path;dicttype=Dict{String,Any})
         get(progress,"identity",nothing)==identity && get(progress,"active_point_id",nothing)==point.id &&
         get(progress,"plan_fingerprint",nothing)==plan.fingerprint || throw(ArgumentError("portable recovery progress identity differs"))
-        imported_records=_import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget)
+        imported_records=_import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget,resource_policy)
         for record in imported_records
             haskey(existing,record.id) && throw(ArgumentError("imported completed point already exists"))
             existing[record.id]=record
@@ -638,6 +640,7 @@ function execute_scientific_plan(
                     identity,
                     operation = String(execution.operation),
                     accepted,
+                    resource_policy,
                 )
                 ledger=joinpath(dirname(commit), "operator_checks.json")
                 record=_point_result(
@@ -933,6 +936,7 @@ function execute_scientific_plan(
                 joinpath(root, old.data["result_commit"]) : nothing,
             )
             terminal_status=:failed
+            point_primary=nothing
             _scientific_progress(root, point, attempt, :running, directory)
             try
                 reporter=ProgressReporter(;
@@ -1067,7 +1071,8 @@ function execute_scientific_plan(
                     directory,
                     identity,
                     scba_count,
-                    outer_count,
+                    outer_count;
+                    resource_policy,
                 )
                 history_observer=(kind, outer, row, source)->record_scientific_history!(
                     history_recorder,
@@ -1087,12 +1092,13 @@ function execute_scientific_plan(
                         state.problem,
                         config.algorithms,
                     )
-                    flush_scientific_history!(history_recorder)
+                    flush_scientific_history!(history_recorder; resource_policy)
                     history_paths=scientific_history_sources(haskey(inherited_history,point.id) ? directory : dirname(directory))
                     haskey(inherited_history,point.id) && pushfirst!(history_paths,inherited_history[point.id])
                     commit=commit_point_artifacts(
                         directory,
                         state;
+                        resource_policy,
                         identity,
                         algorithms = config.algorithms,
                         configuration = _point_resolved_raw(config, point),
@@ -1113,6 +1119,7 @@ function execute_scientific_plan(
                     )
                     checkpoint_completed!(checkpoint_clock)
                     latest_commit[]=commit
+                    _resident_writer_preflight(resource_policy, :checkpoint_import_cleanup)
                     for name in readdir(recovery_directory)
                         startswith(name,"imported-") && rm(joinpath(recovery_directory,name);recursive=true)
                     end
@@ -1261,12 +1268,13 @@ function execute_scientific_plan(
                     solution.problem,
                     config.algorithms,
                 )
-                flush_scientific_history!(history_recorder)
+                flush_scientific_history!(history_recorder; resource_policy)
                 history_paths=scientific_history_sources(haskey(inherited_history,point.id) ? directory : dirname(directory))
                 haskey(inherited_history,point.id) && pushfirst!(history_paths,inherited_history[point.id])
                 commit=commit_point_artifacts(
                     directory,
                     solution;
+                    resource_policy,
                     identity,
                     algorithms = config.algorithms,
                     configuration = _point_resolved_raw(config, point),
@@ -1332,6 +1340,7 @@ function execute_scientific_plan(
                             threaded = config.production.parallel_backend===:threads,
                         )
                         optical_path=joinpath(dirname(commit),"optical.h5")
+                        _resident_writer_preflight(resource_policy, :optical)
                         temporary_optical=optical_path*".pending"
                         source_receipt=verify_recovery_receipt(commit)
                         try
@@ -1377,6 +1386,7 @@ function execute_scientific_plan(
                     stop_campaign=true
                 end
             catch error
+                point_primary=error
                 resource_pressure = error isa _NativePhasePressure
                 pressure_message = resource_pressure ? sprint(showerror, error) : ""
                 if resource_pressure
@@ -1482,7 +1492,8 @@ function execute_scientific_plan(
                 execution.policies.on_child_failure===:stop && (stop_campaign=true)
             finally
                 telemetry_sender===nothing || close(telemetry_sender)
-                history_recorder===nothing || flush_scientific_history!(history_recorder)
+                history_recorder===nothing || flush_scientific_history_finalizer!(history_recorder;
+                    resource_policy, primary=point_primary)
                 if reporter!==nothing
                     try
                         while !isempty(reporter.stack)

@@ -594,17 +594,34 @@ function end_progress_stage!(
     return snapshot
 end
 
-function _observability_atomic_text(path::AbstractString, writer::Function)
-    target = abspath(path)
-    mkpath(dirname(target))
-    temporary, stream = mktemp(dirname(target))
+function _observability_atomic_text(path::AbstractString, writer::Function;
+    resource_policy::Symbol = :standalone, storage_context=nothing)
+    context = storage_context
+    temporary = stream = nothing
     try
+        context = _resident_nested_context(resource_policy, storage_context, :atomic_text)
+        _resident_writer_preflight(resource_policy, :atomic_text, context, path; payload=writer)
+        target = abspath(path)
+        mkpath(dirname(target))
+        temporary, stream = mktemp(dirname(target); cleanup=resource_policy === :standalone)
+        resident_created!(context, temporary)
         writer(stream)
         close(stream)
-        _atomic_replace_file(temporary, target)
-    catch
-        isopen(stream) && close(stream)
-        isfile(temporary) && rm(temporary; force = true)
+        _atomic_replace_file(temporary, target; resource_policy, storage_context=context)
+        context === nothing || resident_renamed!(context, temporary, target)
+    catch failure
+        if _resident_preserve(resource_policy, context)
+            canonical = _resident_failure!(context, failure)
+            try
+                stream === nothing || (isopen(stream) && close(stream))
+            catch secondary
+                _resident_failure!(context, secondary)
+            end
+            canonical === nothing || canonical === failure || throw(canonical)
+        else
+            stream === nothing || (isopen(stream) && close(stream))
+            temporary === nothing || (isfile(temporary) && rm(temporary; force = true))
+        end
         rethrow()
     end
     return target
@@ -613,8 +630,9 @@ end
 # Julia's `do` syntax passes the anonymous function as the first positional
 # argument. Keep the path-first method useful for explicit calls and provide
 # the natural `f(path) do ... end` order used by snapshot/report writers.
-_observability_atomic_text(writer::Function, path::AbstractString) =
-    _observability_atomic_text(path, writer)
+_observability_atomic_text(writer::Function, path::AbstractString;
+    resource_policy::Symbol = :standalone, storage_context=nothing) =
+    _observability_atomic_text(path, writer; resource_policy, storage_context)
 
 """
     save_progress_snapshot(path, snapshot)
