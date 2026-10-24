@@ -134,6 +134,7 @@ function flush_scientific_history!(recorder::ScientificHistoryRecorder;
     storage_context=get(_resident_history_contexts, recorder, nothing))
     context = storage_context
     temporary = io = nothing
+    local destination
     try
         if context !== nothing
             lock(context.permit.ledger.guard) do
