@@ -598,6 +598,7 @@ function _observability_atomic_text(path::AbstractString, writer::Function;
     resource_policy::Symbol = :standalone, storage_context=nothing)
     context = storage_context
     temporary = stream = nothing
+    local target
     try
         context = _resident_nested_context(resource_policy, storage_context, :atomic_text)
         _resident_writer_preflight(resource_policy, :atomic_text, context, path; payload=writer)
