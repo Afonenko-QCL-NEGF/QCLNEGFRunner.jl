@@ -661,6 +661,8 @@ function _cfg_effective(configuration)
     return result
 end
 
+include("structure_editor.jl")
+
 function _configurator_preview(bytes::AbstractString,root,source_id)
     request=_configurator_json(bytes)
     _cfg_keys(request,("mode","template_id","catalog_source_id","fields","yaml");required=("mode","template_id","catalog_source_id"))
@@ -727,6 +729,7 @@ function _configurator_preview(bytes::AbstractString,root,source_id)
     # YAML remains authoritative. Return a short projection only for exact
     # template equivalence; expert/variant drafts are explicitly read-only.
     lossless=canonical_bytes(draft)==canonical_bytes(template)
+    default_rules=_cfg_default_rule_sources()
     return Dict{String,Any}("status"=>"available","draft_sha256"=>_cfg_sha(bytes),
         "semantic_draft_sha256"=>_cfg_sha(canonical_bytes(semantic)),"catalog_source_id"=>source_id,
         "template"=>entry,"draft_yaml"=>YAML.write(draft),
@@ -735,7 +738,9 @@ function _configurator_preview(bytes::AbstractString,root,source_id)
             "controlled_paths"=>v.controlled_paths,"overrides"=>deepcopy(v.overrides)) for v in parsed.variants],
         "resolved_inputs"=>[Dict("execution_id"=>e.id,"configuration"=>deepcopy(e.configuration.raw),
             "assigning_sources"=>deepcopy(e.configuration.provenance.sources)) for e in plan.executions],
-        "effective_defaults"=>effective,"default_rule_sources"=>_cfg_default_rule_sources(),"plan"=>frozen,"plan_sha256"=>_cfg_sha(frozen),
+        "effective_defaults"=>effective,"default_rule_sources"=>default_rules,
+        "structure_editor"=>_cfg_structure_editor(plan,entry,source_id,default_rules),
+        "plan"=>frozen,"plan_sha256"=>_cfg_sha(frozen),
         "fingerprint"=>data["fingerprint"],"scientific_fingerprint"=>data["scientific_fingerprint"],
         "counts"=>Dict("points"=>length(plan.points),"executions"=>length(plan.executions)),
         "estimates"=>data["resources"])
@@ -756,6 +761,11 @@ function configurator_preview(bytes::AbstractString,root::AbstractString,source_
         Dict("status"=>"error","error"=>Dict("code"=>code,"path"=>path,"message"=>"Preview refused: "*code))
     end
     response=_cfg_dto(response)
+    # An additive editor must not invalidate an otherwise valid bounded preview.
+    if get(response,"status",nothing)=="available" &&
+       ncodeunits(_cfg_json(response))>CONFIGURATOR_RESPONSE_BYTES
+        response["structure_editor"]=_cfg_structure_unavailable()
+    end
     ncodeunits(_cfg_json(response))<=CONFIGURATOR_RESPONSE_BYTES || return Dict(
         "status"=>"error","error"=>Dict("code"=>"response_limit","path"=>"response","message"=>"Preview response exceeds bound"))
     return response
