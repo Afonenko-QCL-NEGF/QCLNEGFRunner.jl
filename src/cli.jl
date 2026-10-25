@@ -140,7 +140,12 @@ function _cli_heavy(arguments)
             haskey(options, flag) && throw(ArgumentError("duplicate option $flag"))
             options[flag] = arguments[index+1]
         end
-        result = execute_scientific_plan_staged(load_scientific_plan(arguments[2]), arguments[3];
+        plan=load_scientific_plan(arguments[2])
+        capture_context=_capture_context(plan,arguments[3],get(options,"--execution-id",nothing),
+            haskey(options,"--attempt") ? parse(Int,options["--attempt"]) : nothing;
+            scratch_root=get(options,"--scratch-root",nothing))
+        result = execute_scientific_plan_staged(plan, arguments[3];
+            capture_context,
             execution_id=get(options, "--execution-id", nothing),
             scratch_root=get(options, "--scratch-root", nothing),
             attempt=haskey(options,"--attempt") ? parse(Int,options["--attempt"]) : nothing,

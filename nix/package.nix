@@ -1,6 +1,8 @@
 # Native Julia manifest and Git submodule inputs are supplied by the root project.
-{ pkgs, julia, preparedDepot, coreSrc, runnerSrc, environmentSrc, testProfile ? "production-build" }:
+{ pkgs, julia, preparedDepot, coreSrc, runnerSrc, environmentSrc, testProfile ? "production-build",
+  captureExecutable ? null }:
 assert builtins.elem testProfile [ "production-build" "local-debug" ];
+assert captureExecutable == null || pkgs.lib.hasPrefix "/nix/store/" (toString captureExecutable);
 let caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 in
 pkgs.stdenvNoCC.mkDerivation {
@@ -30,12 +32,17 @@ pkgs.stdenvNoCC.mkDerivation {
     export JULIA_NUM_PRECOMPILE_TASKS=${if testProfile == "local-debug" then "2" else ''"$NIX_BUILD_CORES"''} OPENBLAS_NUM_THREADS=1
     ${julia}/bin/julia --startup-file=no --project="$runtime/julia" \
       -e 'using Pkg; Pkg.instantiate(; update_registry=false); using QCLNEGFRunner'
-    makeWrapper ${julia}/bin/julia $out/bin/qcl-negf \
+    makeWrapper ${julia}/bin/julia $out/bin/.qcl-negf-julia \
       --add-flags "--startup-file=no --project=$runtime/julia $runtime/components/QCLNEGFRunner.jl/scripts/scientific_workflow.jl" \
       --set JULIA_DEPOT_PATH "$out/share/depot:${preparedDepot}" \
       --set JULIA_PKG_OFFLINE true \
       --set JULIA_SSL_CA_ROOTS_PATH "${caBundle}" \
       --set OPENBLAS_NUM_THREADS 1
+    substitute ${./launcher.sh} $out/bin/qcl-negf \
+      --subst-var-by bash ${pkgs.runtimeShell} \
+      --subst-var-by solver "$out/bin/.qcl-negf-julia" \
+      --subst-var-by capture ${pkgs.lib.escapeShellArg (if captureExecutable == null then "" else toString captureExecutable)}
+    chmod +x $out/bin/qcl-negf
     runHook postInstall
   '';
   doInstallCheck = true;

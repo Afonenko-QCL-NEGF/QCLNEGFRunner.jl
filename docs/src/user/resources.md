@@ -1,5 +1,9 @@
 # [Resource limits](@id resource-planning)
 
+Optional ordinary [live/performance capture](capture.md) reserves its finite
+storage forecast inside the existing operational credit; it grants no new CPU,
+RAM or scientific storage capacity.
+
 Run one Julia process per Slurm task and set `JULIA_NUM_THREADS` to allocated CPUs
 per task before process launch. Julia's task pool is fixed at startup. Scheduled
 scientific execution uses one BLAS thread to avoid nested oversubscription.
