@@ -77,6 +77,29 @@ function _cli_configure(arguments)
     return get(response,"status",nothing)=="available" ? 0 : 2
 end
 
+function _cli_resource_proposal(arguments)
+    length(arguments) in (5,11) || throw(ArgumentError("resource-proposal expects --runner-source-id ID --core-source-id ID [--runtime-id ID --margin-policy-file FILE --margin-policy-sha256 SHA]"))
+    arguments[2]=="--runner-source-id" && arguments[4]=="--core-source-id" ||
+        throw(ArgumentError("invalid trusted resource-proposal arguments"))
+    bytes=read(stdin,QCLScientificWorkflow.RESOURCE_PROPOSAL_REQUEST_BYTES+1)
+    trusted_policy=nothing;runtime_id=nothing;policy_failure=nothing
+    if length(arguments)==11
+        arguments[6]=="--runtime-id" && arguments[8]=="--margin-policy-file" && arguments[10]=="--margin-policy-sha256" ||
+            throw(ArgumentError("invalid trusted margin-policy arguments"))
+        runtime_id=arguments[7]
+        try
+            trusted_policy=QCLScientificWorkflow._resource_load_policy(arguments[9],arguments[11],runtime_id,arguments[3],arguments[5])
+        catch error
+            error isa QCLScientificWorkflow.ResourceForecastUnavailable || rethrow()
+            policy_failure=error.detail
+        end
+    end
+    response=QCLScientificWorkflow.resource_proposal(String(bytes),arguments[3],arguments[5];trusted_policy,runtime_id,policy_failure)
+    _light_json(stdout,response)
+    println()
+    return get(response,"status",nothing)=="available" ? 0 : 2
+end
+
 function _cli_heavy(arguments)
     command=first(arguments)
     if command == "plan"
@@ -126,6 +149,7 @@ function main(arguments::AbstractVector{<:AbstractString}=ARGS)
         # Keep operational commands outside the solver handler's inference graph.
         # The process status remains independent of scientific gates in artifacts.
         handler=command=="configure" ? _cli_configure :
+            command=="resource-proposal" ? _cli_resource_proposal :
             command=="compare" ? _cli_compare :
             command=="self-check" ? _cli_self_check :
             command in ("pause","verify-pause","verify-stop") ? _cli_pause_verify : _cli_heavy

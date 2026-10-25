@@ -473,8 +473,12 @@ function _scientific_single_study(study, definition, provenance)
 end
 function scientific_memory_estimate(
     ::FilesystemScientificDefinitions,
-    c::ResolvedRunConfiguration,
+    c::ResolvedRunConfiguration;
+    worker_capacity=Sys.CPU_THREADS,
 )
+    worker_capacity isa Integer && !(worker_capacity isa Bool) &&
+        1<=worker_capacity<=typemax(Int) ||
+        throw(ArgumentError("worker_capacity must be a positive representable integer"))
     mechanisms=count(name->getfield(c.scattering, name), fieldnames(typeof(c.scattering)))
     mechanisms+=c.physical_models.electron_electron.mode===:none ? 0 : 1
     estimate(n) = estimate_production_memory(
@@ -483,7 +487,7 @@ function scientific_memory_estimate(
         dense_mechanism_count = mechanisms,
         lo_kernel = c.scattering.LO ? :dense : :absent,
         options = c.production,
-        worker_capacity = Sys.CPU_THREADS,
+        worker_capacity = Int(worker_capacity),
     )
     initial=estimate(c.numerical)
     policy=c.domain_adaptation

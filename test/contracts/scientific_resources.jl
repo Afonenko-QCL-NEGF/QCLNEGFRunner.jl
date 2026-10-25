@@ -28,6 +28,8 @@ using QCLNEGFRunner
     unlimited=(
         memory_budget_bytes = typemax(Int),
         hardware = (
+            julia_threads = Sys.CPU_THREADS,
+            logical_cpus = Sys.CPU_THREADS,
             total_memory_bytes = typemax(Int),
             available_memory_bytes = typemax(Int),
         ),
@@ -40,7 +42,7 @@ using QCLNEGFRunner
     @test reservation["maximum_energy_nodes"]==cap
     limited=(
         memory_budget_bytes = typemax(Int),
-        hardware = (total_memory_bytes = typemax(Int), available_memory_bytes = reserved-1),
+        hardware = (julia_threads = Sys.CPU_THREADS, logical_cpus = Sys.CPU_THREADS, total_memory_bytes = typemax(Int), available_memory_bytes = reserved-1),
     )
     @test_throws ArgumentError QCLNEGFRunner.QCLScientificWorkflow._scientific_memory_reservation(
         adaptive,
