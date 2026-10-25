@@ -26,6 +26,12 @@ import ..QCLNEGFRunner:
     resolve_execution_strategy,
     default_execution_envelope,
     ExecutionEnvelope,
+    HardwareProfile,
+    execution_budget,
+    _effective_memory_budget,
+    execution_plan_candidates,
+    _configuration_with_execution_plan,
+    default_hardware_profile,
     _scientific_resource_preflight,
     _resident_writer_preflight,
     flush_scientific_history_finalizer!,
@@ -105,6 +111,7 @@ include("../application/scientific/postprocessing.jl")
 include("../infrastructure/scientific/definitions.jl")
 include("../infrastructure/scientific/configurator.jl")
 include("../infrastructure/scientific/snapshots.jl")
+include("../infrastructure/scientific/resource_proposal.jl")
 include("operator_diagnostics.jl")
 include("scientific_execution.jl")
 include("../presentation/scientific/heatmap.jl")

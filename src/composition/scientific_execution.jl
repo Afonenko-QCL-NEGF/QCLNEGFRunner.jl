@@ -173,9 +173,10 @@ function _scientific_attempt_directory(parent::AbstractString, first_attempt::In
 end
 
 function _scientific_memory_reservation(config, resource_plan,
-    envelope=default_execution_envelope())
-    required=scientific_memory_estimate(FilesystemScientificDefinitions(), config)
+    envelope=default_execution_envelope();margin_context=nothing)
     hardware=resource_plan.hardware
+    capacity=envelope===nothing ? max(min(hardware.julia_threads,hardware.logical_cpus),1) : envelope.thread_pool_size
+    required=scientific_memory_estimate(FilesystemScientificDefinitions(), config;worker_capacity=capacity)
     budget=envelope === nothing ?
            min(
         resource_plan.memory_budget_bytes,
@@ -187,8 +188,9 @@ function _scientific_memory_reservation(config, resource_plan,
             "scientific execution requires $(required) bytes including declared adaptive domains and retained states; available budget is $(budget) bytes",
         ),
     )
-    return Dict(
+    result=Dict{String,Any}(
         "estimated_peak_bytes"=>required,
+        "worker_capacity"=>capacity,
         "memory_budget_bytes"=>budget,
         "resource_authority"=>envelope === nothing ? "operating_system" : "explicit",
         "runtime_reserve_applied_again"=>false,
@@ -200,6 +202,11 @@ function _scientific_memory_reservation(config, resource_plan,
         ),
         "basis"=>"full estimator at declared node cap plus retained initial, voltage and domain residents",
     )
+    if margin_context!==nothing
+        policy=_resource_entry_policy(margin_context)
+        result["margin"]=_resource_margin_budget(config,resource_plan,hardware,policy;envelope,numerical_required_bytes=required)
+    end
+    return result
 end
 
 """Record Hamiltonian coverage before allocating production iteration workspaces.
@@ -447,13 +454,16 @@ function execute_scientific_plan(
     archive_byte_budget::Int = 64*1024^3,
     resource_policy::Symbol = :standalone,
     envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
+    margin_context=nothing,
 )
     _scientific_resource_preflight(resource_policy,envelope)
     archive_byte_budget>0 || throw(ArgumentError("archive byte budget must be positive"))
     # Re-decode the frozen raw contract, rejecting mutation and stale typed aliases.
-    plan=load_scientific_plan(scientific_plan_dict(plan))
+    plan=_resource_execution_plan(plan,margin_context)
     selected_executions=execution_id===nothing ? plan.executions :
                         [e for e in plan.executions if e.id==execution_id]
+    margin_context!==nothing && any(e->e.operation!==:stationary,selected_executions) &&
+        _resource_unavailable("runtime_margin_operation_unsupported")
     isempty(selected_executions) && throw(ArgumentError("unknown selected execution"))
     selected_ids=Set(e.id for e in selected_executions)
     selected_points=[p for p in plan.points if p.execution_id in selected_ids]
@@ -672,14 +682,20 @@ function execute_scientific_plan(
         base_cache=nothing
         preparation_error=nothing
         try
-            config, resource_plan=resolve_execution_strategy(config;envelope)
+            if margin_context===nothing
+                config, resource_plan=resolve_execution_strategy(config;envelope)
+            else
+                policy=_resource_entry_policy(margin_context)
+                candidate=_resource_candidate(config,default_hardware_profile(),policy;envelope)
+                config=candidate.configuration;resource_plan=candidate.resource_plan
+            end
             configure_execution!(config)
             BLAS.set_num_threads(1)
             save_execution_plan(
                 joinpath(execution_dir, "execution_plan.yaml"),
                 resource_plan,
             )
-            reservation=_scientific_memory_reservation(config, resource_plan, envelope)
+            reservation=_scientific_memory_reservation(config, resource_plan, envelope;margin_context)
             _scientific_json(
                 joinpath(execution_dir, "scientific_memory_reservation.json"),
                 reservation,

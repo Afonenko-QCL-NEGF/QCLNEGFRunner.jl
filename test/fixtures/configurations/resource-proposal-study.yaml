@@ -1,0 +1,32 @@
+# Synthetic metadata/forecast fixture; no solve or scientific acceptance.
+schema: qcl-negf-study-v2
+kind: study
+id: resource-proposal-fixture
+name: Resource forecast fixture
+purpose: diagnostic
+operation: stationary
+configuration:
+  sources:
+    - ../research-inputs/model/reference-2019-70k.yaml
+  overrides:
+    numerical:
+      spatial_nodes: 48
+      basis_states: 3
+      basis_periods: 1
+      energy_nodes: 49
+      momentum_nodes: 5
+      angular_nodes: 8
+      longitudinal_momentum_nodes: 25
+axes:
+  temperatures:
+    values: [70]
+    unit: K
+  voltages:
+    values: [0]
+    unit: mV
+policies:
+  scba_to_poisson: strict_fail_fast
+  voltage:
+    mode: independent
+    invalid_predecessor: stop_branch
+  on_child_failure: stop
