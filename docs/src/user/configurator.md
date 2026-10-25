@@ -108,3 +108,63 @@ one-shot command introduces no service or background queue.
 The focused contract entry is `test/focused/configurator_preview.jl`. Run only
 with a prepared existing environment, within the shared verification budget;
 no bootstrap, package install or solver is part of this gate.
+
+## Structure editor metadata
+
+The additive `structure_editor` response uses `qcl-negf.structure-editor.v1` and
+`status: available` with an `executions` array. Every entry binds `execution_id`
+and `variant_id` to normalized **typed** `inputs`:
+
+- `layers`: `thickness_nm`, `material`, `aluminium_fraction`,
+  `conduction_band_edge_eV`, `longitudinal_relative_mass`,
+  `transverse_relative_mass`, `relative_permittivity`, and `doped`.
+- `interfaces_nm`, `donor_sheet_density_per_m2`, `ionization_fraction`,
+  `position_origin_nm`, and `reference_energy_eV`.
+
+`geometry` contains `period_nm` and per-layer `index_1based`, `left_nm`,
+`right_nm`. Its coordinate scope is one structural period before position-origin
+or bias sampling. These rectangles show submitted piecewise layer properties;
+they are not a computed potential, normalized volume doping, energy levels or
+wavefunctions. Interfaces remain explicitly authored and are not replaced by
+layer edges. The existing loader checks their order and period bounds.
+
+`material_presets` deduplicates complete material tuples from the current
+execution, excluding thickness and doping mask. Present these as “набор выбранной
+модели”. Copy the complete tuple when selecting one; changing aluminium fraction
+does not imply recomputed masses or band edge. Presets and execution entries carry
+`source_binding`: `execution_id`, `variant_id`, `catalog_source_id`, `template_id`, `template_sha256`, `model`
+(with its catalog path/name/SHA), `execution_provenance.sources`,
+`default_rule_sources`, `physical_rule_source`, and `input_assigning_histories`.
+Histories describe actual resolving inputs, not per-constant experimental
+attribution or evidence that a catalog identity was published. Preserve unknown
+or fixture source identity as supplied by the trusted caller.
+
+There is no new request grammar. Use existing `fields.variant` with a unique ID,
+`comparison_kind: physical_parameter`, and explicit whole-leaf controlled paths:
+`physical.layers`, `physical.interfaces`, `physical.donor_sheet_density`,
+`physical.ionization_fraction`, `physical.position_origin`,
+`physical.reference_energy`. Its `overrides.physical` contains the complete chosen
+values using existing quantity strings, such as `2 nm`, `0.2 eV`, `1e14 m^-2`.
+Baseline and unspecified template fields remain present. Indexed layer paths are
+not supported. Changing geometry is a physical variant; the existing loader may
+derive a changed field from voltage and period. This is not a resource shortcut.
+
+Editor quantities must be finite browser-safe scalars. At most 256 layers and
+256 interfaces per execution, material labels up to 256 UTF-8 bytes, and a 1 MiB
+editor projection are supported. Oversize or unsupported editor metadata returns
+`{schema:"qcl-negf.structure-editor.v1",status:"unavailable",reason:"unsupported_structure_editor"}`.
+It preserves the existing preview, full semantic YAML and frozen plan. If adding
+the editor would exceed the existing complete-response cap, only that additive
+projection becomes unavailable. Invalid configurations still use the existing
+whole-preview refusal; limits do not silently alter the structure.
+
+An older producer without `structure_editor` remains usable with unavailable
+editor capability. Editing invalidates any prior plan/resource confirmation;
+expert YAML preservation and `short_form.lossless` semantics still apply. Preview
+never calls grid/profile/basis construction, solve, submission or artifact writers;
+all scientific acceptance axes remain unknown. New-structure energy levels and
+wavefunctions require a separate explicit bounded owning operation.
+
+The additional prepared-environment focused entry is
+`test/focused/structure_editor.jl`. Run it together with the existing configurator
+preview contract only within the assigned finite verification envelope.
