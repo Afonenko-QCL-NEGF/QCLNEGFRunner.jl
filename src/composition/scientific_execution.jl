@@ -393,7 +393,7 @@ function _scientific_execution_progress(records,active,root,fingerprint)
         "completed_points"=>completed)
 end
 function _import_completed_archives!(progress,archive_bundle,root,policy;
-    archive_byte_budget::Int=64*1024^3, resource_policy::Symbol = :standalone)
+    archive_byte_budget::Int=64*1024^3, resource_policy::Symbol = :standalone,capture_reserve_bytes::Int=0)
     _resident_writer_preflight(resource_policy, :import_archives)
     entries=get(progress,"completed_points",nothing)
     entries isa AbstractVector || throw(ArgumentError("execution progress has no completed-point index"))
@@ -413,7 +413,7 @@ function _import_completed_archives!(progress,archive_bundle,root,policy;
         push!(records,_scientific_resume_result(dependency.entry["point"]))
     end
     mkpath(root)
-    _check_storage_free(root,closure.bytes+policy.reserve_bytes)
+    _check_storage_free(root,Base.checked_add(Base.checked_add(closure.bytes,policy.reserve_bytes),capture_reserve_bytes))
     for (source,target,entry) in validated
         mkpath(dirname(target))
         temporary=mktempdir(dirname(target);prefix="pending-import-")
@@ -452,11 +452,13 @@ function execute_scientific_plan(
     telemetry_sink::Union{Nothing,Function} = nothing,
     archive_bundle::Union{Nothing,AbstractString} = nothing,
     archive_byte_budget::Int = 64*1024^3,
+    capture_reserve_bytes::Int = 0,
     resource_policy::Symbol = :standalone,
     envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
     margin_context=nothing,
 )
     _scientific_resource_preflight(resource_policy,envelope)
+    capture_reserve_bytes>=0 || throw(ArgumentError("capture reserve must be nonnegative"))
     archive_byte_budget>0 || throw(ArgumentError("archive byte budget must be positive"))
     # Re-decode the frozen raw contract, rejecting mutation and stale typed aliases.
     plan=_resource_execution_plan(plan,margin_context)
@@ -471,7 +473,7 @@ function execute_scientific_plan(
     mkpath(root)
     attempt===nothing || attempt>0 || throw(ArgumentError("attempt must be positive"))
     requested_attempt=attempt
-    _check_storage_free(root,_minimum_scientific_output_bytes(plan)+maximum(e.outputs.recovery.reserve_bytes for e in selected_executions))
+    _check_storage_free(root,Base.checked_add(_minimum_scientific_output_bytes(plan)+maximum(e.outputs.recovery.reserve_bytes for e in selected_executions),capture_reserve_bytes))
     plan_path=joinpath(root, "scientific_plan.json")
     if isfile(plan_path)
         stored=load_scientific_plan(plan_path)
@@ -520,13 +522,15 @@ function execute_scientific_plan(
         progress=YAML.load_file(progress_path;dicttype=Dict{String,Any})
         get(progress,"identity",nothing)==identity && get(progress,"active_point_id",nothing)==point.id &&
         get(progress,"plan_fingerprint",nothing)==plan.fingerprint || throw(ArgumentError("portable recovery progress identity differs"))
-        imported_records=_import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget,resource_policy)
+        imported_records=_import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget,resource_policy,capture_reserve_bytes)
         for record in imported_records
             haskey(existing,record.id) && throw(ArgumentError("imported completed point already exists"))
             existing[record.id]=record
             push!(history,record)
         end
-        _check_storage_budget([joinpath(root,"executions"),joinpath(root,"recovery")],policy.byte_budget,policy.reserve_bytes,_storage_bytes([source]))
+        imported_bytes=_storage_bytes([source])
+        _check_storage_budget([joinpath(root,"executions"),joinpath(root,"recovery")],policy.byte_budget,policy.reserve_bytes,Base.checked_add(imported_bytes,capture_reserve_bytes))
+        capture_reserve_bytes==0 || _check_storage_free(root,Base.checked_add(imported_bytes,Base.checked_add(policy.reserve_bytes,capture_reserve_bytes)))
         mkpath(dirname(target))
         _copy_regular_tree_buffered(source,target)
         verify_recovery_receipt(joinpath(target,"commit.json"))
@@ -1128,6 +1132,7 @@ function execute_scientific_plan(
                         recovery_root = recovery_directory,
                         retain_generations = recovery_policy.retain_generations,
                         byte_budget = recovery_policy.byte_budget,
+                        capture_reserve_bytes,
                         reserve_bytes = recovery_policy.reserve_bytes,
                         operational_roots = operational_directories,
                         state_sequence = _scientific_next_state_sequence(recovery_directory),
@@ -1301,6 +1306,7 @@ function execute_scientific_plan(
                     recovery_root = recovery_directory,
                     state_sequence = _scientific_next_state_sequence(recovery_directory),
                     reserve_bytes = recovery_policy.reserve_bytes,
+                    capture_reserve_bytes,
                     execution_progress = _scientific_execution_progress(results,point,root,plan.fingerprint),
                 )
                 checkpoint_completed!(checkpoint_clock)

@@ -799,6 +799,7 @@ function commit_point_artifacts(
     retain_generations::Int = 2,
     byte_budget = 8*1024^3,
     reserve_bytes = 64*1024^2,
+    capture_reserve_bytes::Int = 0,
     recovery_root::Union{Nothing,AbstractString} = nothing,
     archive_root::Union{Nothing,AbstractString} = nothing,
     operational_roots = String[],
@@ -821,6 +822,7 @@ function commit_point_artifacts(
         retain_generations>=2 || throw(ArgumentError("retention needs latest and previous"))
         byte_budget=_checked_resource_integer(byte_budget,"storage budget";minimum=1)
         reserve_bytes=_checked_resource_integer(reserve_bytes,"storage reserve")
+        capture_reserve_bytes=_checked_resource_integer(capture_reserve_bytes,"capture storage reserve")
         reserve_bytes<byte_budget || throw(ArgumentError("invalid operational byte budget"))
         storage_class===:archive && terminal_status in ("running","running_scba","snapshot","paused","crashed","cancelled") &&
             throw(ArgumentError("an interrupted point has recovery, not a final state"))
@@ -829,8 +831,8 @@ function commit_point_artifacts(
         mkpath(root)
         accounted=isempty(operational_roots) ? [storage_class===:recovery ? root : something(recovery_root,joinpath(directory,"artifacts"))] : operational_roots
         storage=_checkpoint_storage_preflight(solution,reserve_bytes)
-        storage_class===:recovery && _check_storage_budget(accounted,byte_budget,reserve_bytes,storage.forecast_bytes)
-        _check_storage_free(root,storage.required_bytes)
+        storage_class===:recovery && _check_storage_budget(accounted,byte_budget,reserve_bytes,Base.checked_add(storage.forecast_bytes,capture_reserve_bytes))
+        _check_storage_free(root,Base.checked_add(storage.required_bytes,capture_reserve_bytes))
         generations=[
             parse(Int, match(r"^generation-(\d+)$", name).captures[1]) for
             name in readdir(root) if occursin(r"^generation-\d+$", name)
@@ -1065,8 +1067,8 @@ function commit_point_artifacts(
         end
         publication_hook(:before_publish)
         if storage_class===:recovery
-            _check_storage_budget(accounted,byte_budget,reserve_bytes,metadata_tail)
-            _check_storage_free(root,Base.checked_add(metadata_tail,reserve_bytes))
+            _check_storage_budget(accounted,byte_budget,reserve_bytes,Base.checked_add(metadata_tail,capture_reserve_bytes))
+            _check_storage_free(root,Base.checked_add(Base.checked_add(metadata_tail,reserve_bytes),capture_reserve_bytes))
         end
         if _resident_preserve(resource_policy, storage_context)
             lock(storage_context.permit.ledger.guard) do
@@ -1085,8 +1087,8 @@ function commit_point_artifacts(
             pointer=YAML.load(pointer_payload;dicttype=Dict{String,Any})
             bytes2hex(open(sha256,commit_path))==pointer["sha256"] ||
                 throw(ArgumentError("published recovery commit changed before acknowledgement"))
-            _check_storage_budget(accounted,byte_budget,reserve_bytes,metadata_tail)
-            _check_storage_free(root,Base.checked_add(metadata_tail,reserve_bytes))
+            _check_storage_budget(accounted,byte_budget,reserve_bytes,Base.checked_add(metadata_tail,capture_reserve_bytes))
+            _check_storage_free(root,Base.checked_add(Base.checked_add(metadata_tail,reserve_bytes),capture_reserve_bytes))
         end
         _write_bundle_receipt(commit_path;maximum_bytes=receipt_bound,resource_policy,storage_context)
         publication_hook(:after_verify)
@@ -1094,8 +1096,8 @@ function commit_point_artifacts(
             current=joinpath(root,"current.json")
             pointer_tail=Base.checked_add(ncodeunits(pointer_payload),
                 previous_payload===nothing ? 0 : ncodeunits(previous_payload))
-            _check_storage_budget(accounted,byte_budget,reserve_bytes,pointer_tail)
-            _check_storage_free(root,Base.checked_add(pointer_tail,reserve_bytes))
+            _check_storage_budget(accounted,byte_budget,reserve_bytes,Base.checked_add(pointer_tail,capture_reserve_bytes))
+            _check_storage_free(root,Base.checked_add(Base.checked_add(pointer_tail,reserve_bytes),capture_reserve_bytes))
             if previous_payload!==nothing
                 # Only the verified prior pointer can become previous.
                 _observability_atomic_text(joinpath(root,"previous.json"); resource_policy, storage_context) do io
