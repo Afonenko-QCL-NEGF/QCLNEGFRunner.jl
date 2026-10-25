@@ -199,8 +199,13 @@ end
 function read_scientific_definition(::FilesystemScientificDefinitions, requested::String)
     isfile(requested) || throw(ArgumentError("scientific definition not found: $requested"))
     source=realpath(requested)
+    return _parse_scientific_definition(source, YAML.load_file(source; dicttype = Dict{String,Any}))
+end
+
+# Shared grammar: bounded transports supply an already captured strict mapping.
+function _parse_scientific_definition(source::String, mapping::AbstractDict)
     data=_keys_input(
-        _mapping_input(YAML.load_file(source; dicttype = Dict{String,Any}), source),
+        _mapping_input(mapping, source),
         (
             "schema",
             "kind",
@@ -391,6 +396,10 @@ function resolve_scientific_configuration(
     inherited_overrides,
 )
     base=load_run_configuration(definition.configuration_sources)
+    return _resolve_scientific_configuration(base, definition, variant, inherited_overrides)
+end
+
+function _resolve_scientific_configuration(base, definition, variant, inherited_overrides)
     raw=deepcopy(base.raw)
     provenance=deepcopy(base.provenance.sources)
     for (override, origin) in (

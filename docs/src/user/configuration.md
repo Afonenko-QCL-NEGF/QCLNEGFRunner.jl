@@ -162,3 +162,5 @@ On computation or transfer failure, the local workspace is retained and its path
 reported on stderr. This option starts a fresh execution; explicit restart uses the
 normal execution path and compatible checkpoint state. It does not merge results
 or turn an incomplete calculation into an accepted one.
+
+The [bounded configurator preview](configurator.md) exposes the same scientific resolver to short forms and full study YAML without executing a run.
