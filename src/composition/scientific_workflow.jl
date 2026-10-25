@@ -56,6 +56,7 @@ import ..QCLNEGFRunner:
     _check_storage_budget,
     _check_storage_free,
     _checkpoint_storage_forecast,
+    _copy_regular_tree_buffered,
     _sync_artifact_file,
     _sync_artifact_directory,
     ScalarTelemetrySender,

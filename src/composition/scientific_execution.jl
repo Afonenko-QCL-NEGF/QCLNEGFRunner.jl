@@ -518,7 +518,7 @@ function execute_scientific_plan(
         end
         _check_storage_budget([joinpath(root,"executions"),joinpath(root,"recovery")],policy.byte_budget,policy.reserve_bytes,_storage_bytes([source]))
         mkpath(dirname(target))
-        cp(source,target;follow_symlinks=false)
+        _copy_regular_tree_buffered(source,target)
         verify_recovery_receipt(joinpath(target,"commit.json"))
         commit_relative=replace(relpath(joinpath(target,"commit.json"),root),'\\'=>'/')
         data=Dict{String,Any}("result_commit"=>commit_relative,"full_state"=>replace(relpath(joinpath(target,"physics.h5"),root),'\\'=>'/'))
