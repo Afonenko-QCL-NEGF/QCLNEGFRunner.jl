@@ -130,11 +130,12 @@ function _record_native_phase!(directory::Union{Nothing,String}, event::SolverEv
     return nothing
 end
 
-"""Bound task width by Julia's fixed pool and observe cgroup v2 memory headroom.
+"""Bound task width by Julia's fixed pool; strict policy also checks memory headroom.
 
 Slurm owns allocations. This callback neither reallocates CPUs nor exchanges
-resource leases with another process. A denied allocation preserves the most
-recent committed scientific state through the normal exception boundary.
+resource leases with another process. Ordinary phases rely on external memory
+controls without predicting fit. A strict denial uses the normal exception
+boundary and the most recent verified checkpoint remains the recovery authority.
 """
 function _native_phase_request(
     directory::Union{Nothing,String};
@@ -145,7 +146,7 @@ function _native_phase_request(
     _resource_policy(resource_policy)
     groups = resource_policy===:campaign_strict ?
         _strict_cgroup_ancestors(proc_root,cgroup_root) :
-        _cgroup_ancestors(cgroup_root, _process_cgroup_path(proc_root))
+        String[]
     return function (request)
         maximum = _checked_resource_integer(request.task_width,"phase task width";minimum=1)
         _native_phase_memory_permit!(directory, groups, request;resource_policy)
@@ -156,6 +157,15 @@ end
 function _native_phase_memory_permit!(directory, groups::Vector{String}, request;
     resource_policy::Symbol=:standalone)
     _resource_policy(resource_policy)
+    if resource_policy===:standalone
+        directory===nothing && return nothing
+        burst = get(request, :memory_burst_bytes, nothing)
+        burst===nothing || _checked_resource_integer(burst,"incremental phase memory estimate")
+        _NATIVE_PHASE_ADMISSIONS[directory]=Dict{String,Any}(
+            "memory_admission_mode"=>"external_controls_not_predicted_fit",
+        )
+        return nothing
+    end
     strict=resource_policy===:campaign_strict
     if directory===nothing
         strict && throw(ArgumentError("strict phase admission requires a telemetry directory"))
