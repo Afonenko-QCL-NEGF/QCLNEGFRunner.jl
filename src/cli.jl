@@ -61,6 +61,22 @@ function _cli_pause_verify(arguments)
     return 0
 end
 
+function _cli_configure(arguments)
+    length(arguments) in (5,6) || throw(ArgumentError("configure expects --catalog-root ROOT --catalog-source-id ID [--catalog]"))
+    arguments[2]=="--catalog-root" && arguments[4]=="--catalog-source-id" || throw(ArgumentError("invalid trusted configure arguments"))
+    catalog=length(arguments)==6
+    catalog && arguments[6]!="--catalog" && throw(ArgumentError("unknown configure option"))
+    response=if catalog
+        QCLScientificWorkflow.configurator_catalog(arguments[3],arguments[5])
+    else
+        bytes=read(stdin,QCLScientificWorkflow.CONFIGURATOR_REQUEST_BYTES+1)
+        QCLScientificWorkflow.configurator_preview(String(bytes),arguments[3],arguments[5])
+    end
+    _light_json(stdout,response)
+    println()
+    return get(response,"status",nothing)=="available" ? 0 : 2
+end
+
 function _cli_heavy(arguments)
     command=first(arguments)
     if command == "plan"
@@ -109,7 +125,8 @@ function main(arguments::AbstractVector{<:AbstractString}=ARGS)
         command=first(arguments)
         # Keep operational commands outside the solver handler's inference graph.
         # The process status remains independent of scientific gates in artifacts.
-        handler=command=="compare" ? _cli_compare :
+        handler=command=="configure" ? _cli_configure :
+            command=="compare" ? _cli_compare :
             command=="self-check" ? _cli_self_check :
             command in ("pause","verify-pause","verify-stop") ? _cli_pause_verify : _cli_heavy
         return Base.invokelatest(handler,arguments)
