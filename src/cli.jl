@@ -100,6 +100,26 @@ function _cli_resource_proposal(arguments)
     return get(response,"status",nothing)=="available" ? 0 : 2
 end
 
+function _cli_quantum_preview(arguments)
+    length(arguments) in (5,7) || throw(ArgumentError("quantum-preview expects --runner-source-id ID --core-source-id ID [--output FILE]"))
+    arguments[2]=="--runner-source-id" && arguments[4]=="--core-source-id" ||
+        throw(ArgumentError("invalid trusted quantum-preview arguments"))
+    output=nothing
+    if length(arguments)==7
+        arguments[6]=="--output" || throw(ArgumentError("unknown quantum-preview option"))
+        output=arguments[7]
+    end
+    bytes=read(stdin,QCLScientificWorkflow.QUANTUM_REQUEST_BYTES+1)
+    response=QCLScientificWorkflow.quantum_preview(String(bytes),arguments[3],arguments[5])
+    try
+        QCLScientificWorkflow.write_quantum_preview(stdout,response;output)
+    catch failure
+        failure isa QCLScientificWorkflow.QuantumPreviewRefusal || rethrow()
+        throw(ArgumentError("Quantum preview output refused: "*failure.code))
+    end
+    return get(response,"status",nothing)=="available" ? 0 : 2
+end
+
 function _cli_heavy(arguments)
     command=first(arguments)
     if command == "plan"
@@ -149,6 +169,7 @@ function main(arguments::AbstractVector{<:AbstractString}=ARGS)
         # Keep operational commands outside the solver handler's inference graph.
         # The process status remains independent of scientific gates in artifacts.
         handler=command=="configure" ? _cli_configure :
+            command=="quantum-preview" ? _cli_quantum_preview :
             command=="resource-proposal" ? _cli_resource_proposal :
             command=="compare" ? _cli_compare :
             command=="self-check" ? _cli_self_check :
