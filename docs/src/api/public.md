@@ -10,7 +10,7 @@ CurrentModule = QCLNEGFRunner
 | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Explain a resolved field and its assignment | [Configuration route](@ref developer-configuration-route), [`load_run_configuration`](@ref), [`configuration_source`](@ref), [`resolve_execution_strategy`](@ref)                                               | Loading and provenance lookup do not run transport; assignment history and an effective execution plan remain distinct.            |
 | Interpret a saved point                     | [Quality contract](@ref solver-quality-contract) and [Core criterion reference](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/f5b73369a96d1225bd96fb34f5262c8dcf965f86/docs/src/theory/12_validation.md) | Read status, applicability, measured/missing metrics and exact attempt identity; saved analysis cannot create scientific evidence. |
-| Continue an interrupted execution           | [Recovery route](@ref operator-recovery-route), [`load_production_restart`](@ref), [`QCLNEGFRunner.main`](@ref)                                                                                                 | The restart reader requires compatible verified state; `run-plan` with a recovery bundle executes a new attempt.                   |
+| Continue an interrupted execution           | [Recovery route](@ref operator-recovery-route), `open_exact_checkpoint`, `load_exact_solver_state`                                                                                                              | The typed reader verifies result-v2/native5 state; Core admits the reconstructed state. Solver/CLI migration belongs to P05.       |
 
 The tables below retain the full expert API, including explicit optical operators. Their presence
 does not promise quantitative gain/absorption validation in this release. Schema ownership stays in
@@ -246,3 +246,41 @@ resolved_snapshot_dict
 resolved_configuration_diff
 scientific_resource_estimate
 ```
+
+## Typed scientific persistence (result v2 / native5)
+
+These operations consume the public Core state types. They perform persistence only and do not
+invoke a solve, completed-map evaluation or scientific acceptance. Schema/registry ownership remains
+in Contracts; exact numerical admission remains in Core. See [Results and restart](@ref
+native-result-formats) for pins, ordered catalogs and pointer semantics.
+
+```julia
+ScientificHistoryRecorder(directory; artifact_root, identity, source_epoch, provenance, status,
+    maximum_scba_rows, parent_checkpoint=nothing, maximum_buffer_records=1000,
+    maximum_buffer_bytes=1048576, flush_interval_seconds=30, clock_ns=time_ns,
+    resource_policy=:standalone, storage_context=nothing)
+record_scientific_history!(recorder, snapshot::QCLNEGF.ScientificHistorySnapshot)::Nothing
+flush_scientific_history!(recorder)::Dict{String,Any} # detached canonical HistoryPin
+commit_exact_checkpoint!(recorder, problem::QCLNEGF.NEGFProblem, state::QCLNEGF.ExactSolverState;
+    options, production_options, execution, domain_adaptation, kernel_options, status,
+    closed=false, publication_hook=stage->nothing)::VerifiedExactCheckpoint
+open_exact_checkpoint(artifact_root, state_ref; maximum_metadata_bytes)::VerifiedExactCheckpoint
+checkpoint_reference(checkpoint)::Dict{String,Any} # detached canonical StateRef
+load_exact_solver_state(checkpoint)::QCLNEGF.ExactSolverState
+```
+
+`VerifiedExactCheckpoint` is created by commit/open, not by a caller-supplied proof dictionary. The
+artifact root must already exist. Recorder metadata is frozen at construction; each invocation owns
+a fresh namespace. `maximum_scba_rows` bounds compact current-stage RowKey/locator entries; buffer
+limits bound current pending rows, not the complete exact-state payload. Strict resident
+storage-policy integration belongs to its owning stage; this API currently admits standalone owning
+storage and fails explicitly for other contexts.
+
+The required `status` carries independent process, convergence, physics, discretization and
+experimental evidence states. It cannot be synthesized from process exit. `closed=true` requires a
+terminal public final state and terminal process status. The full exact state and its histories
+remain mandatory. After opening/loading, the consumer passes the actual problem, options and runtime
+identity to Core's public restore API.
+
+The production callback migration and native4/private bridge removal are P05 work. Existing legacy
+production entry points do not forward into a fallback of this typed API.
