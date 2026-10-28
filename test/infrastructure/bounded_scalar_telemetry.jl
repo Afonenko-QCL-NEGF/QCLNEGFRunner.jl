@@ -45,4 +45,23 @@ end
     @test timedwait(()->R.telemetry_statistics(failing)["failed"]==1,2;pollint=0.01)==:ok
     close(failing)
 end
+@testset "Sender admission never serializes and close accounts queued loss" begin
+    serialized=Threads.Atomic{Int}(0)
+    @eval R function _light_json(io::IO,value::Int128)
+        Threads.atomic_add!($serialized,1)
+        invoke(_light_json,Tuple{IO,Any},io,value)
+    end
+    entered=Channel{Nothing}(1);release=Channel{Nothing}(1)
+    sender=R.ScalarTelemetrySender(event->begin
+        put!(entered,nothing);take!(release)
+    end;capacity=4,poll_seconds=0.001)
+    @test R.emit_telemetry!(sender,Dict("value"=>1))
+    take!(entered)
+    @test serialized[]==0
+    @test R.emit_telemetry!(sender,Dict("value"=>2))
+    @test R.emit_telemetry!(sender,Dict("value"=>3))
+    close(sender);put!(release,nothing);wait(sender.task)
+    @test R.telemetry_statistics(sender)["dropped"]==2
+    @test R.telemetry_statistics(sender)["queued"]==0
+end
 end

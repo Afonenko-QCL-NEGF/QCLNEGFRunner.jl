@@ -4,7 +4,10 @@ mutable struct ScalarTelemetrySender
     capacity::Int
     maximum_event_bytes::Int
     poll_seconds::Float64
-    buffer::Vector{Dict{String,Any}}
+    buffer::Vector{Union{Nothing,Dict{String,Any}}}
+    head::Int
+    tail::Int
+    queued::Threads.Atomic{Int}
     lock::ReentrantLock
     closed::Threads.Atomic{Bool}
     dropped::Threads.Atomic{Int}
@@ -52,12 +55,21 @@ function ScalarTelemetrySender(sink::Function;capacity::Int=256,maximum_event_by
     capacity>0 && maximum_event_bytes>0 && isfinite(poll_seconds) && poll_seconds>0 ||
         throw(ArgumentError("telemetry bounds must be positive"))
     sender=ScalarTelemetrySender(sink,capacity,maximum_event_bytes,Float64(poll_seconds),
-        Dict{String,Any}[],ReentrantLock(),Threads.Atomic{Bool}(false),Threads.Atomic{Int}(0),
+        Vector{Union{Nothing,Dict{String,Any}}}(nothing,capacity),1,1,Threads.Atomic{Int}(0),
+        ReentrantLock(),Threads.Atomic{Bool}(false),Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0),Threads.Atomic{Int}(0),nothing)
     sender.task=Threads.@spawn begin
         while !sender.closed[]
             event=lock(sender.lock) do
-                isempty(sender.buffer) ? nothing : popfirst!(sender.buffer)
+                if sender.queued[]==0
+                    nothing
+                else
+                    event=sender.buffer[sender.head]
+                    sender.buffer[sender.head]=nothing
+                    sender.head=mod1(sender.head+1,sender.capacity)
+                    Threads.atomic_add!(sender.queued,-1)
+                    event
+                end
             end
             if event===nothing
                 sleep(sender.poll_seconds)
@@ -71,7 +83,9 @@ function ScalarTelemetrySender(sink::Function;capacity::Int=256,maximum_event_by
             end
         end
         lock(sender.lock) do
-            empty!(sender.buffer)
+            Threads.atomic_add!(sender.dropped,sender.queued[])
+            fill!(sender.buffer,nothing)
+            sender.queued[]=0
         end
     end
     return sender
@@ -84,42 +98,46 @@ function emit_telemetry!(sender::ScalarTelemetrySender,event::AbstractDict)
         Threads.atomic_add!(sender.dropped,1)
         return false
     end
-    ncodeunits(sprint(_light_json,copied))<=sender.maximum_event_bytes || begin
-        Threads.atomic_add!(sender.dropped,1)
-        return false
-    end
     if !trylock(sender.lock)
         Threads.atomic_add!(sender.dropped,1)
         return false
     end
     try
-        if sender.closed[] || length(sender.buffer)>=sender.capacity
+        if sender.closed[] || sender.queued[]>=sender.capacity
             Threads.atomic_add!(sender.dropped,1)
             return false
         end
-        push!(sender.buffer,copied)
+        sender.buffer[sender.tail]=copied
+        sender.tail=mod1(sender.tail+1,sender.capacity)
+        Threads.atomic_add!(sender.queued,1)
         return true
     finally
         unlock(sender.lock)
     end
 end
 function telemetry_statistics(sender::ScalarTelemetrySender)
-    queued=lock(sender.lock) do
-        length(sender.buffer)
-    end
-    return Dict("queued"=>queued,"dropped"=>sender.dropped[],"sent"=>sender.sent[],"failed"=>sender.failed[])
+    return Dict("queued"=>sender.queued[],"dropped"=>sender.dropped[],"sent"=>sender.sent[],"failed"=>sender.failed[])
 end
 Base.close(sender::ScalarTelemetrySender) = (sender.closed[]=true;nothing)
 
-"""Opt-in HTTP JSON transport, called exclusively from the sender task."""
+"""A prepared-byte transport. Dict input encodes once; sealed bytes are never re-encoded."""
+struct _PreparedJSONSink <: Function
+    send_bytes::Function
+end
+(sink::_PreparedJSONSink)(bytes::Vector{UInt8})=sink.send_bytes(bytes)
+function (sink::_PreparedJSONSink)(event::AbstractDict)
+    io=IOBuffer();_light_json(io,event)
+    sink.send_bytes(take!(io))
+end
+
+"""Opt-in HTTP JSON transport, called exclusively from a background sender/writer."""
 function http_telemetry_sink(endpoint::AbstractString;timeout_seconds::Real=5)
     occursin(r"^https?://",endpoint) || throw(ArgumentError("telemetry endpoint must be HTTP(S)"))
     isfinite(timeout_seconds) && timeout_seconds>0 || throw(ArgumentError("telemetry timeout must be positive"))
-    return event->begin
-        bytes=sprint(_light_json,event)
+    return _PreparedJSONSink(bytes->begin
         response=Downloads.request(String(endpoint);method="POST",headers=["Content-Type"=>"application/json"],
             input=IOBuffer(bytes),output=devnull,timeout=Float64(timeout_seconds))
         200<=response.status<300 || throw(ArgumentError("telemetry collector rejected event"))
         nothing
-    end
+    end)
 end
