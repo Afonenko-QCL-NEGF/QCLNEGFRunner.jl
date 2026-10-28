@@ -146,6 +146,8 @@ include("presentation/configured_report.jl")
 include("composition/configured_execution.jl")
 include("composition/scientific_workflow.jl")
 using .QCLScientificWorkflow
+export ResolvedConfigurationSnapshot, resolved_configuration_snapshot, resolved_snapshot_dict,
+    resolved_configuration_diff, scientific_resource_estimate
 export ScientificPlan,
     ScientificPoint,
     ScientificExecution,

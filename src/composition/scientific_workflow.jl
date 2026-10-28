@@ -107,6 +107,7 @@ import ..QCLApplicationRuntime: canonical_bytes
 include("../application/scientific/contracts.jl")
 include("../application/scientific/voltage_continuation.jl")
 include("../application/scientific/branch_outcomes.jl")
+include("../application/scientific/resolved_configuration.jl")
 include("../application/scientific/planning.jl")
 include("../application/scientific/postprocessing.jl")
 include("../infrastructure/scientific/definitions.jl")
@@ -118,7 +119,12 @@ include("operator_diagnostics.jl")
 include("scientific_execution.jl")
 include("../presentation/scientific/heatmap.jl")
 include("../infrastructure/scientific/postprocessing.jl")
-export ScientificPlan,
+export ResolvedConfigurationSnapshot,
+    resolved_configuration_snapshot,
+    resolved_snapshot_dict,
+    resolved_configuration_diff,
+    scientific_resource_estimate,
+    ScientificPlan,
     ScientificPoint,
     ScientificExecution,
     ScientificInclusion,

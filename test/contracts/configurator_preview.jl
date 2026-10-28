@@ -91,6 +91,10 @@ json(x)=sprint(io->QCLNEGFRunner._light_json(io,x))
             @test yaml["plan"]==form["plan"]
             @test yaml["draft_sha256"]!=form["draft_sha256"]
             @test yaml["semantic_draft_sha256"]==form["semantic_draft_sha256"]
+            @test yaml["resolved_snapshots"]==form["resolved_snapshots"]
+            @test only(form["resolved_snapshots"])["snapshot"]["model_binding"]["sha256"]==
+                only(W._configurator_json(form["plan"];maximum=4*1024^2)["executions"])["resolved_snapshot"]["model_binding"]["sha256"]
+            @test only(form["resource_estimates"])["estimate"]["admitted_memory_bytes"]===nothing
             @test bytes2hex(sha256(form["plan"]))==form["plan_sha256"]
             # Compare the existing filesystem/public resolver, not just the same
             # captured adapter twice. Only known source-locator/full-FP deltas
@@ -101,7 +105,14 @@ json(x)=sprint(io->QCLNEGFRunner._light_json(io,x))
             @test public["scientific_fingerprint"]==preview["scientific_fingerprint"]
             for document in (public,preview)
                 delete!(document,"fingerprint")
-                for execution in document["executions"]; delete!(execution,"provenance"); end
+                for execution in document["executions"]
+                    delete!(execution,"provenance")
+                    # Capture labels differ between filesystem and bounded transport;
+                    # effective values/model/default rule identities must remain equal.
+                    for section in values(execution["resolved_snapshot"]["sections"])
+                        delete!(section,"input_assigning_histories")
+                    end
+                end
             end
             @test public==preview
             @test only(form["resolved_inputs"])["configuration"]["numerical"]["energy_nodes"]==201
@@ -143,6 +154,11 @@ json(x)=sprint(io->QCLNEGFRunner._light_json(io,x))
             @test cfg["physical_models"]["used"]["electron_electron"]["mode"]=="none"
             @test cfg["solver"]["used"]["convergence"]["mode"]=="strict_fail_fast"
             @test cfg["domain_adaptation"]["used"]["maximum_expansions"]==2
+            point_sections=only(only(form["effective_defaults"])["point_sections"])["sections"]
+            @test endswith(last(point_sections["physical"]["input_assigning_histories"]["physical.voltage_per_period"]),
+                "#generated:point-axes")
+            @test haskey(only(form["resolved_snapshots"])["snapshot"]["default_rule_sources"],
+                "Core:src/numerics/reference/scba.jl")
             @test !haskey(only(form["resolved_inputs"])["configuration"],"domain_adaptation")
             # The declared numerical variant passes; an extra physics change does not.
             variant=Dict("id"=>"grid","comparison_kind"=>"discretization",
@@ -152,6 +168,33 @@ json(x)=sprint(io->QCLNEGFRunner._light_json(io,x))
             request["yaml"]=YAML.write(changed)
             varied=W.configurator_preview(json(request),root,"fixture-v1")
             @test varied["status"]=="available"
+            grid_only=deepcopy(template);grid_only["variants"]=[deepcopy(variant)]
+            request["yaml"]=YAML.write(grid_only)
+            single=W.configurator_preview(json(request),root,"fixture-v1")
+            @test single["status"]=="available"
+            if single["status"]=="available"
+                single_diff=only(single["variant_diffs"])
+                @test single_diff["comparable"]===true
+                @test single_diff["base_model_sha256"]!=single_diff["candidate_model_sha256"]
+                node_diff=only(filter(row->row["path"]=="/sections/numerical/N_E",single_diff["changes"]))
+                @test node_diff["before"]==201
+                @test node_diff["after"]==101
+                reordered=deepcopy(changed);reverse!(reordered["variants"])
+                request["yaml"]=YAML.write(reordered)
+                order_preview=W.configurator_preview(json(request),root,"fixture-v1")
+                @test order_preview["status"]=="available"
+                if order_preview["status"]=="available"
+                    baseline_diff=only(filter(d->d["id"]=="baseline",order_preview["variant_diffs"]))
+                    @test baseline_diff["comparable"]===true
+                    @test isempty(baseline_diff["changes"])
+                    @test only(filter(d->d["id"]=="grid",order_preview["variant_diffs"]))==single_diff
+                end
+            end
+            invalid_axis=deepcopy(changed)
+            invalid_axis["variants"][2]["controlled_paths"]=["numerical.unknown"]
+            request["yaml"]=YAML.write(invalid_axis)
+            @test W.configurator_preview(json(request),root,"fixture-v1")["error"]["code"]=="invalid_controlled_path"
+            request["yaml"]=YAML.write(changed)
             if varied["status"]=="available"
                 grid=only(filter(e->e["variant_id"]=="grid",W._configurator_json(varied["plan"];maximum=4*1024^2)["executions"]))
                 @test grid["resolved_configuration"]["numerical"]["energy_nodes"]==101

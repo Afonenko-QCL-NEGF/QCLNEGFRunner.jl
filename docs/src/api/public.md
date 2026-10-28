@@ -6,16 +6,15 @@ CurrentModule = QCLNEGFRunner
 
 ## [Choose an entry point by task](@id reader-api-routes)
 
-| Reader goal | Start here | Expected boundary |
-| --- | --- | --- |
-| Explain a resolved field and its assignment | [Configuration route](@ref developer-configuration-route), [`load_run_configuration`](@ref), [`configuration_source`](@ref), [`resolve_execution_strategy`](@ref) | Loading and provenance lookup do not run transport; assignment history and an effective execution plan remain distinct. |
-| Interpret a saved point | [Quality contract](@ref solver-quality-contract) and [Core criterion reference](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/f5b73369a96d1225bd96fb34f5262c8dcf965f86/docs/src/theory/12_validation.md) | Read status, applicability, measured/missing metrics and exact attempt identity; saved analysis cannot create scientific evidence. |
-| Continue an interrupted execution | [Recovery route](@ref operator-recovery-route), [`load_production_restart`](@ref), [`QCLNEGFRunner.main`](@ref) | The restart reader requires compatible verified state; `run-plan` with a recovery bundle executes a new attempt. |
+| Reader goal                                 | Start here                                                                                                                                                                                                      | Expected boundary                                                                                                                  |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Explain a resolved field and its assignment | [Configuration route](@ref developer-configuration-route), [`load_run_configuration`](@ref), [`configuration_source`](@ref), [`resolve_execution_strategy`](@ref)                                               | Loading and provenance lookup do not run transport; assignment history and an effective execution plan remain distinct.            |
+| Interpret a saved point                     | [Quality contract](@ref solver-quality-contract) and [Core criterion reference](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/f5b73369a96d1225bd96fb34f5262c8dcf965f86/docs/src/theory/12_validation.md) | Read status, applicability, measured/missing metrics and exact attempt identity; saved analysis cannot create scientific evidence. |
+| Continue an interrupted execution           | [Recovery route](@ref operator-recovery-route), [`load_production_restart`](@ref), [`QCLNEGFRunner.main`](@ref)                                                                                                 | The restart reader requires compatible verified state; `run-plan` with a recovery bundle executes a new attempt.                   |
 
-The tables below retain the full expert API, including explicit optical
-operators. Their presence does not promise quantitative gain/absorption
-validation in this release. Schema ownership stays in Contracts, numerical
-criteria in Core, and file/recovery orchestration in Runner.
+The tables below retain the full expert API, including explicit optical operators. Their presence
+does not promise quantitative gain/absorption validation in this release. Schema ownership stays in
+Contracts, numerical criteria in Core, and file/recovery orchestration in Runner.
 
 ## Types and operations
 
@@ -230,8 +229,20 @@ scattering_options(::ResolvedRunConfiguration)
 QCLNEGFRunner.compare_saved_results
 ```
 
-This API reads bounded legacy report snapshots and returns descriptive differences,
-coverage, hashes and analysis status. It cannot supply native full identity or
-scientific acceptance. `run_comparison_study`, `run_convergence_study` and
-`run_production_study` execute computations; `plan`/`run-plan` are the explicit
-plan creation/execution CLI route. CLI `compare` performs saved analysis only.
+This API reads bounded legacy report snapshots and returns descriptive differences, coverage, hashes
+and analysis status. It cannot supply native full identity or scientific acceptance.
+`run_comparison_study`, `run_convergence_study` and `run_production_study` execute computations;
+`plan`/`run-plan` are the explicit plan creation/execution CLI route. CLI `compare` performs saved
+analysis only.
+
+## Resolved configuration snapshot
+
+The following Runner APIs perform configuration/metadata work only. They never solve or admit work.
+
+```@docs
+ResolvedConfigurationSnapshot
+resolved_configuration_snapshot
+resolved_snapshot_dict
+resolved_configuration_diff
+scientific_resource_estimate
+```

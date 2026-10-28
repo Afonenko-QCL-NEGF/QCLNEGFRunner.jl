@@ -6,6 +6,10 @@ end
 function load_scientific_plan(data::AbstractDict)
     get(data, "schema", nothing)=="qcl-negf-scientific-plan-v2" ||
         throw(ArgumentError("unsupported scientific plan schema"))
+    get(data,"resolved_snapshot_schema",nothing)==_RESOLVED_SNAPSHOT_SCHEMA ||
+        throw(ArgumentError("unsupported resolved snapshot schema"))
+    all(e->e isa AbstractDict && haskey(e,"resolved_snapshot"),get(data,"executions",Any[])) ||
+        throw(ArgumentError("missing resolved snapshot"))
     get(data, "fingerprint", nothing)==_plan_fingerprint(data) ||
         throw(ArgumentError("frozen scientific plan fingerprint mismatch"))
     get(data, "scientific_fingerprint", nothing)==_scientific_fingerprint(data) ||
@@ -31,12 +35,27 @@ function load_scientific_plan(data::AbstractDict)
             configuration,
             ConfigurationProvenance(String[], String[], sources),
         )
+        isequal(get(item,"resolved_snapshot",nothing),
+            resolved_snapshot_dict(resolved_configuration_snapshot(config))) ||
+            throw(ArgumentError("resolved snapshot differs from actual inputs/rules"))
         get(item, "effective_inputs", nothing)==_effective_scientific_inputs(config) ||
             throw(
                 ArgumentError(
                     "effective scientific inputs differ from resolved configuration",
                 ),
             )
+        operation=Symbol(item["operation"])
+        receipt=get(item,"resource_estimate",nothing)
+        receipt isa AbstractDict || throw(ArgumentError("missing scientific resource estimate"))
+        capacity=get(receipt,"worker_capacity",1)
+        capacity isa Integer && !(capacity isa Bool) && capacity>=1 ||
+            throw(ArgumentError("invalid estimate planning worker capacity"))
+        expected=_scientific_estimate_receipt(config,operation;worker_capacity=capacity)
+        isequal(receipt,expected) || throw(ArgumentError("scientific resource estimate differs from inputs/basis"))
+        if operation===:stationary
+            item["estimated_peak_bytes"]==receipt["estimated_numerical_peak_bytes"] ||
+                throw(ArgumentError("scientific numerical estimate differs"))
+        end
         push!(
             executions,
             ScientificExecution(
@@ -51,8 +70,9 @@ function load_scientific_plan(data::AbstractDict)
                 Int(item["estimated_peak_bytes"]),
                 Symbol(item["purpose"]),
                 Int(item["repetition"]),
-                Symbol(item["operation"]),
+                operation,
                 String(item["label"]),
+                deepcopy(receipt),
             ),
         )
     end

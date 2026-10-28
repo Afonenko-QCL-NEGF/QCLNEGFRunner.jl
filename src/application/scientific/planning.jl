@@ -51,16 +51,29 @@ function _effective_scientific_inputs(configuration)
 end
 
 """Resolve physical axes into a point passport; execution templates may span a branch."""
-function _point_resolved_raw(configuration, point::ScientificPoint)
+function _point_axis_inputs(point::ScientificPoint)
+    return Dict{String,Any}(
+        "physical"=>Dict{String,Any}(
+            "voltage_per_period"=>"$(point.voltage_per_period_V) V",
+            "field_bias"=>nothing,
+            "lattice_temperature"=>"$(point.temperature_K) K",
+            "lo_temperature"=>"$(point.temperature_K) K"),
+        "study"=>Dict{String,Any}(
+            "voltages_per_period"=>["$(point.voltage_per_period_V) V"],
+            "temperatures"=>["$(point.temperature_K) K"]))
+end
+function _point_resolved_raw(configuration,point::ScientificPoint)
     raw=deepcopy(configuration.raw)
-    physical=get!(raw, "physical", Dict{String,Any}())
-    physical["voltage_per_period"]="$(point.voltage_per_period_V) V"
-    physical["lattice_temperature"]="$(point.temperature_K) K"
-    physical["lo_temperature"]="$(point.temperature_K) K"
-    study=get!(raw, "study", Dict{String,Any}())
-    study["voltages_per_period"]=["$(point.voltage_per_period_V) V"]
-    study["temperatures"]=["$(point.temperature_K) K"]
+    _deep_merge!(raw,_point_axis_inputs(point),Dict{String,Vector{String}}(),
+        "point:"*point.id*"#generated:point-axes")
     return raw
+end
+function _point_resolved_configuration(configuration,point::ScientificPoint)
+    raw=deepcopy(configuration.raw)
+    sources=deepcopy(configuration.provenance.sources)
+    _deep_merge!(raw,_point_axis_inputs(point),sources,"point:"*point.id*"#generated:point-axes")
+    return _resolve_configuration(raw,ConfigurationProvenance(
+        copy(configuration.provenance.manifests),copy(configuration.provenance.files),sources))
 end
 function _point_passport(configuration, point::ScientificPoint)
     return Dict{String,Any}(
@@ -70,6 +83,8 @@ function _point_passport(configuration, point::ScientificPoint)
             sha256(canonical_bytes(_point_resolved_raw(configuration, point))),
         ),
         "hash_encoding"=>"qcl-negf-canonical-bytes-v1",
+        "model_sha256"=>bytes2hex(sha256(canonical_bytes(_snapshot_model(
+            _point_resolved_configuration(configuration,point))))),
         "axes_applied"=>true,
     )
 end
@@ -83,6 +98,8 @@ function scientific_plan_dict(plan::ScientificPlan)
             "method_id"=>e.method_id,
             "point_ids"=>e.point_ids,
             "resolved_configuration"=>deepcopy(e.configuration.raw),
+            "resolved_snapshot"=>resolved_snapshot_dict(resolved_configuration_snapshot(e.configuration)),
+            "resource_estimate"=>deepcopy(e.resource_estimate),
             "effective_inputs"=>_effective_scientific_inputs(e.configuration),
             "provenance"=>Dict("sources"=>e.configuration.provenance.sources),
             "policies"=>_policies_dict(e.policies),
@@ -106,6 +123,7 @@ function scientific_plan_dict(plan::ScientificPlan)
     )
     data=Dict{String,Any}(
         "schema"=>"qcl-negf-scientific-plan-v2",
+        "resolved_snapshot_schema"=>_RESOLVED_SNAPSHOT_SCHEMA,
         "model_revision"=>"transport-contract-v2",
         "root_definition_id"=>plan.root_definition_id,
         "root_kind"=>String(plan.root_kind),
@@ -143,47 +161,22 @@ function _plan_fingerprint(data::AbstractDict)
     return bytes2hex(sha256(canonical_bytes(canonical)))
 end
 
-function _comparison_inputs(configuration, controlled_paths::Vector{String})
-    data=deepcopy(configuration.raw)
-    for key in ("run", "output", "study")
-        pop!(data, key, nothing)
-    end
-    for path in controlled_paths
-        occursin(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$", path) ||
-            throw(ArgumentError("invalid controlled path: $path"))
-        parts=split(path, '.')
-        current=data
-        first(parts) in ("run", "output", "study") &&
-            throw(ArgumentError("presentation is not a scientific controlled axis"))
-        for part in parts[1:(end-1)]
-            current=get(current, part, nothing)
-            current isa AbstractDict || break
-        end
-        current isa AbstractDict && pop!(current, last(parts), nothing)
-    end
-    return data
+function _comparison_inputs(configuration,controlled_paths::Vector{String})
+    # Comparable fingerprint is explanatory only; validation uses the resolver
+    # counterfactual below so raw spelling/default differences cannot hide changes.
+    model=_snapshot_model(configuration)
+    return Dict("model"=>model,"controlled_paths"=>sort!(copy(controlled_paths)))
 end
-function _comparable_fingerprint(configuration, paths)
-    return bytes2hex(sha256(canonical_bytes(_comparison_inputs(configuration, paths))))
+function _comparable_fingerprint(configuration,paths)
+    return bytes2hex(sha256(canonical_bytes(_comparison_inputs(configuration,paths))))
 end
-function _validate_controlled_variant(base, config, variant)
-    variant.comparison_kind in (
-        :controlled_axis,
-        :discretization,
-        :representation,
-        :boundary_model,
-        :physical_model,
-        :physical_parameter,
-        :initialization,
-    ) || throw(ArgumentError("unknown variant comparison kind"))
-    _comparison_inputs(base, variant.controlled_paths)==_comparison_inputs(
-        config,
-        variant.controlled_paths,
-    ) || throw(
-        ArgumentError(
-            "variant $(variant.id) changes undeclared physical, numerical or acceptance inputs",
-        ),
-    )
+function _validate_controlled_variant(base,config,variant)
+    variant.comparison_kind in (:controlled_axis,:discretization,:representation,:boundary_model,
+        :physical_model,:physical_parameter,:initialization) ||
+        throw(ArgumentError("unknown variant comparison kind"))
+    result=resolved_configuration_diff(base,config;controlled_paths=variant.controlled_paths)
+    result["comparable"] || throw(ArgumentError(
+        "variant $(variant.id) changes undeclared physical, numerical or acceptance inputs"))
 end
 function _validate_execution_nodes(nodes, executions)
     ids=Set(e.id for e in executions)
@@ -287,7 +280,10 @@ function resolve_scientific_plan(
             )
             _validate_controlled_variant(base, config, variant)
             identity=Dict(
-                "configuration"=>deepcopy(config.raw),
+                "configuration"=>_snapshot_model(config),
+                "execution"=>_cfg_project(config.execution),
+                "production"=>_cfg_project(config.production),
+                "configured_output"=>_cfg_project(config.output),
                 "policies"=>_policies_dict(definition.policies),
                 "output"=>_outputs_dict(definition.outputs),
                 "branch"=>Dict("id"=>branch.id, "voltages"=>branch.voltages),
@@ -295,15 +291,8 @@ function resolve_scientific_plan(
                 "purpose"=>String(definition.purpose),
                 "operation"=>String(definition.operation),
             )
-            identity["configuration"]["run"]["name"]="scientific-execution"
-            identity["configuration"]["run"]["description"]=""
-            identity["configuration"]["output"]["directory"]="result"
+            identity["configured_output"]["directory"]="result"
             definition.repetitions>1 && (identity["explicit_repeat"]=[inclusion_id, repeat])
-            # Requested sub-grid seeds can name the same actual numerical state.
-            # Keep requested inputs in the frozen execution, but share work only
-            # after canonicalizing the effective seed used by the solver.
-            effective=effective_seed_parameters(config.numerical, config.scales)
-            identity["configuration"]["numerical"]["seed_broadening"]="$(effective.effective_eV) eV"
             fingerprint=bytes2hex(sha256(canonical_bytes(identity)))
             if haskey(owners, fingerprint)
                 push!(inclusion.execution_ids, owners[fingerprint])
@@ -439,16 +428,12 @@ end
 function _scientific_fingerprint(data::AbstractDict)
     executions=Any[]
     for execution in data["executions"]
-        inputs=deepcopy(execution["resolved_configuration"])
-        for key in ("run", "output", "study")
-            pop!(inputs, key, nothing)
-        end
+        inputs=execution["resolved_snapshot"]["model_binding"]
         push!(
             executions,
             Dict(
                 "id"=>execution["id"],
                 "inputs"=>inputs,
-                "effective_inputs"=>execution["effective_inputs"],
                 "policies"=>execution["policies"],
                 "purpose"=>execution["purpose"],
                 "repetition"=>execution["repetition"],
@@ -463,7 +448,11 @@ function _scientific_fingerprint(data::AbstractDict)
             Dict(k=>v for (k, v) in point if k!="effective_inputs") for
             point in data["points"]
         ],
-        "nodes"=>data["nodes"],
+        # Scientific comparison declarations belong here; scheduling/resource
+        # forecasts are bound by the full logical plan instead.
+        "nodes"=>[Dict(k=>node[k] for k in
+            ("execution_id","comparison_kind","controlled_paths","comparable_fingerprint"))
+            for node in data["nodes"]],
         "campaign"=>data["campaign"],
     )
     return bytes2hex(sha256(canonical_bytes(identity)))
