@@ -108,6 +108,10 @@ Deno.test("bootstrap writes to a Cyrillic checkout path with spaces and percent 
       fileURLToPath(new URL("./bootstrap.ts", import.meta.url)),
       `${checkout}/tools/bootstrap.ts`,
     );
+    await Deno.copyFile(
+      fileURLToPath(new URL("./bootstrap_tar.ts", import.meta.url)),
+      `${checkout}/tools/bootstrap_tar.ts`,
+    );
     const target = `${checkout}/.build/julia.tar.gz`;
     const pinnedHash = "8975da61c128a5e5ded3e719e868da8c8781deb7ad7913d37fb99be02a81904b";
     const digest = Array.from(
@@ -132,7 +136,13 @@ await import(${JSON.stringify(pathToFileURL(`${checkout}/tools/bootstrap.ts`).hr
 `,
     );
     const result = await new Deno.Command(Deno.execPath(), {
-      args: ["run", `--allow-read=${directory}`, `--allow-write=${directory}`, wrapper],
+      args: [
+        "run",
+        `--allow-read=${directory}`,
+        `--allow-write=${directory}`,
+        "--allow-env=PATH",
+        wrapper,
+      ],
       stdout: "piped",
       stderr: "piped",
     }).output();
