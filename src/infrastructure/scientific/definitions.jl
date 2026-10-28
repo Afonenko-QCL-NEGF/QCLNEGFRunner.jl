@@ -471,47 +471,54 @@ function _scientific_single_study(study, definition, provenance)
     ), provenance, definition.source*"#generated:single-study", "study")
     return value
 end
-function scientific_memory_estimate(
-    ::FilesystemScientificDefinitions,
-    c::ResolvedRunConfiguration;
-    worker_capacity=Sys.CPU_THREADS,
-)
-    worker_capacity isa Integer && !(worker_capacity isa Bool) &&
-        1<=worker_capacity<=typemax(Int) ||
+"""Analytical numerical memory receipt; unknown runtime overhead and grants remain null.
+
+The full declared adaptive cap and simultaneously retained domains are counted.
+`worker_capacity` is an explicit planning assumption, never a measured allocation.
+"""
+function scientific_resource_estimate(c::ResolvedRunConfiguration;
+    worker_capacity::Integer)::Dict{String,Any}
+    !(worker_capacity isa Bool) && 1<=worker_capacity<=typemax(Int) ||
         throw(ArgumentError("worker_capacity must be a positive representable integer"))
-    mechanisms=count(name->getfield(c.scattering, name), fieldnames(typeof(c.scattering)))
+    mechanisms=count(name->getfield(c.scattering,name),fieldnames(typeof(c.scattering)))
     mechanisms+=c.physical_models.electron_electron.mode===:none ? 0 : 1
-    estimate(n) = estimate_production_memory(
-        n,
-        mechanisms;
-        dense_mechanism_count = mechanisms,
-        lo_kernel = c.scattering.LO ? :dense : :absent,
-        options = c.production,
-        worker_capacity = Int(worker_capacity),
-    )
+    estimate(n)=estimate_production_memory(n,mechanisms;dense_mechanism_count=mechanisms,
+        lo_kernel=c.scattering.LO ? :dense : :absent,options=c.production,
+        worker_capacity=Int(worker_capacity))
     initial=estimate(c.numerical)
     policy=c.domain_adaptation
-    (policy.mode===:none || policy.maximum_expansions==0) && return initial.peak_bytes
-    # Preflight spectral coverage can request the entire declared node cap.
-    # Evaluate the estimator there: dense shifts are quadratic and FFT sizes jump.
-    n=c.numerical
-    nodes=max(n.N_E, policy.maximum_energy_nodes)
-    bounded=typeof(n)(;
-        (
-            name=>(name===:N_E ? nodes : getfield(n, name)) for
-            name in fieldnames(typeof(n))
-        )...,
-    )
-    largest=estimate(bounded)
-    # Retain initial problem/cache, preceding voltage problem and previous domain
-    # while the next domain is built. Counting full residents is conservative.
-    return Base.checked_add(
-        largest.peak_bytes,
-        Base.checked_add(
-            Base.checked_mul(2, largest.resident_bytes),
-            initial.resident_bytes,
-        ),
-    )
+    active=policy.mode!==:none && policy.maximum_expansions>0
+    nodes=active ? max(c.numerical.N_E,policy.maximum_energy_nodes) : c.numerical.N_E
+    bounded=typeof(c.numerical)(;(name=>(name===:N_E ? nodes : getfield(c.numerical,name))
+        for name in fieldnames(typeof(c.numerical)))...)
+    largest=active ? estimate(bounded) : initial
+    retained=active ? Base.checked_add(Base.checked_mul(2,largest.resident_bytes),initial.resident_bytes) : 0
+    row(e)=Dict("resident_bytes"=>e.resident_bytes,"peak_bytes"=>e.peak_bytes,
+        "breakdown"=>Dict(String(k)=>v for (k,v) in e.breakdown))
+    core=pathof(QCLNEGFRunner.QCLNEGF)
+    core===nothing && _snapshot_error("estimate","Core estimator source unavailable")
+    return Dict{String,Any}("schema"=>"qcl-negf-resource-estimate-v1",
+        "decision_kind"=>"planning_estimate","status"=>"available",
+        "confidence"=>"analytical_conservative_uncalibrated","worker_capacity"=>Int(worker_capacity),
+        "initial_energy_nodes"=>c.numerical.N_E,"declared_maximum_energy_nodes"=>nodes,
+        "adaptation_enabled"=>active,"initial"=>row(initial),"declared_cap"=>row(largest),
+        "retained_resident_bytes"=>retained,
+        "estimated_numerical_peak_bytes"=>Base.checked_add(largest.peak_bytes,retained),
+        "runtime_overhead_bytes"=>nothing,"allocator_overhead_bytes"=>nothing,
+        "measured_rss_bytes"=>nothing,"admitted_memory_bytes"=>nothing,"total_memory_request_bytes"=>nothing,
+        "unknown"=>["runtime_overhead","allocator_overhead","native_grant","measured_rss"],
+        "basis"=>Dict("core_estimator_sha256"=>bytes2hex(sha256(read(joinpath(dirname(core),"numerics","optimized","production_cache.jl")))),
+            "runner_formula_sha256"=>bytes2hex(sha256(read(_package_path("src","infrastructure","scientific","definitions.jl"))))))
+end
+function _scientific_estimate_receipt(c,operation;worker_capacity)
+    operation===:stationary && return scientific_resource_estimate(c;worker_capacity)
+    return Dict{String,Any}("schema"=>"qcl-negf-resource-estimate-v1","status"=>"not_applicable",
+        "decision_kind"=>"planning_estimate","estimated_numerical_peak_bytes"=>nothing)
+end
+function scientific_memory_estimate(::FilesystemScientificDefinitions,c::ResolvedRunConfiguration;
+    worker_capacity=Sys.CPU_THREADS)
+    worker_capacity isa Integer || throw(ArgumentError("worker_capacity must be a positive representable integer"))
+    return scientific_resource_estimate(c;worker_capacity)["estimated_numerical_peak_bytes"]
 end
 resolve_scientific_plan(source::AbstractString; kwargs...) =
     resolve_scientific_plan(FilesystemScientificDefinitions(), source; kwargs...)

@@ -142,7 +142,11 @@ struct ScientificExecution{C}
     repetition::Int
     operation::Symbol
     label::String
+    resource_estimate::Dict{String,Any}
 end
+# Preserve the prior typed constructor; capture its planning assumptions once.
+ScientificExecution(args::Vararg{Any,13}) = ScientificExecution(args...,
+    _scientific_estimate_receipt(args[6],args[12];worker_capacity=Sys.CPU_THREADS))
 
 struct ScientificInclusion
     id::String

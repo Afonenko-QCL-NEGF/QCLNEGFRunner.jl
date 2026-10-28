@@ -1,13 +1,13 @@
 {
   "schema": "qcl-negf.result-contract-set.v1",
-  "contract_set": "qcl-negf.results.v1",
-  "native_schema_version": "4.0",
-  "commit": "qcl-negf.artifact-commit.v2",
-  "pointer": "qcl-negf.artifact-pointer.v2",
+  "contract_set": "qcl-negf.results.v2",
+  "native_schema_version": "5.0",
+  "commit": "qcl-negf.result-manifest.v1",
+  "pointer": "qcl-negf.result-pointer.v1",
   "export": "qcl-negf.science-export.v3",
   "performance": "qcl-negf.performance.v2",
   "series": "qcl-negf-series-result-v3",
-  "history_index": "qcl-negf-scientific-history-index-v2",
+  "history_index": "qcl-negf.scientific-catalog.v1",
   "performance_index": "qcl-negf.performance-index.v2",
   "telemetry_catalog": "qcl-negf.telemetry-catalog.v2",
   "presentation": "qcl-negf.presentation-index.v3",
@@ -19,7 +19,9 @@
     {
       "role": "execution.progress",
       "media_type": "application/json",
-      "schemas": ["qcl-negf-execution-progress-v1"]
+      "schemas": [
+        "qcl-negf-execution-progress-v1"
+      ]
     },
     {
       "role": "model",
@@ -32,43 +34,43 @@
       "role": "recovery",
       "media_type": "application/x-hdf5",
       "schemas": [
-        "qcl-negf-checkpoint-v4"
+        "qcl-negf-checkpoint-v5"
       ]
     },
     {
       "role": "recovery",
       "media_type": "application/json",
       "schemas": [
-        "qcl-negf-recovery-reference-v1"
+        "qcl-negf.checkpoint-declaration.v1"
       ]
     },
     {
       "role": "physics.full",
       "media_type": "application/x-hdf5",
       "schemas": [
-        "qcl-negf-physics-v4"
+        "qcl-negf-physics-v5"
       ]
     },
     {
       "role": "physics.analysis",
       "media_type": "application/x-hdf5",
       "schemas": [
-        "qcl-negf-optical-v4",
-        "qcl-negf-physics-analysis-v4"
+        "qcl-negf-optical-v5",
+        "qcl-negf-physics-analysis-v5"
       ]
     },
     {
       "role": "science.history",
       "media_type": "application/x-hdf5",
       "schemas": [
-        "qcl-negf-scientific-history-v4"
+        "qcl-negf-scientific-history-v5"
       ]
     },
     {
       "role": "science.comparison",
       "media_type": "application/json",
       "schemas": [
-        "qcl-negf-operator-diagnostics-v4"
+        "qcl-negf-operator-diagnostics-v5"
       ]
     }
   ],
@@ -80,8 +82,9 @@
   "telemetry_compaction_proof": "qcl-negf.telemetry-compaction-proof.v1",
   "export_transport": "qcl-negf.export-archive.v1",
   "diagnostic_export": "qcl-negf.operational-evidence.v2",
-  "legacy_export_transport": "qcl-negf.export-parts.v1",
-  "legacy_export_part": "qcl-negf.export-part.v1",
-  "legacy_maximum_export_part_bytes": 200000000,
-  "export_receipt": "export-receipt.schema.json"
+  "export_receipt": "export-receipt.schema.json",
+  "history_record": "qcl-negf.scientific-record.v1",
+  "checkpoint": "qcl-negf.checkpoint-declaration.v1",
+  "cursor": "qcl-negf.result-cursor.v1",
+  "core_layout_resource": "core_layout.json"
 }

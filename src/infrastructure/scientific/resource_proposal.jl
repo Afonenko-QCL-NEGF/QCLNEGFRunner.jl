@@ -173,9 +173,10 @@ function _resource_margin_budget(config,resource_plan,hardware,policy;envelope=n
     else
         _resource_unavailable("unsupported_execution_strategy")
     end
-    required=numerical_required_bytes===nothing ?
-        scientific_memory_estimate(FilesystemScientificDefinitions(),config;worker_capacity=cpu) :
-        _resource_integer(numerical_required_bytes)
+    estimate_receipt=numerical_required_bytes===nothing ?
+        scientific_resource_estimate(config;worker_capacity=cpu) : nothing
+    required=estimate_receipt===nothing ? _resource_integer(numerical_required_bytes) :
+        estimate_receipt["estimated_numerical_peak_bytes"]
     required<=budget || _resource_unavailable("numerical_does_not_fit")
     margin=Dict{String,Any}("policy_id"=>policy.policy_id,"policy_sha256"=>policy.policy_sha256,
         "runtime_id"=>policy.runtime_id,"coverage_contract"=>"disjoint_non_numerical_v1",
@@ -315,7 +316,7 @@ function _resource_proposal(bytes,runner_source_id,core_source_id;trusted_policy
                 for execution in plan.executions
                     for point in plan.points
                         point.execution_id==execution.id || continue
-                        point_config=_resolve_configuration(_point_resolved_raw(execution.configuration,point),execution.configuration.provenance)
+                        point_config=_point_resolved_configuration(execution.configuration,point)
                         candidate=_resource_candidate(point_config,hardware,policy)
                         push!(rows,Dict("execution_id"=>execution.id,"point_id"=>point.id,
                             "estimated_peak_bytes"=>candidate.margin["numerical_required_bytes"],"margin"=>candidate.margin,
