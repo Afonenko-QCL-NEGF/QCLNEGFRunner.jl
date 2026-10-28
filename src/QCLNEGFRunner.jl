@@ -18,14 +18,18 @@ include("infrastructure/persistence/hdf5_backend.jl")
 include("infrastructure/persistence/hdf5.jl")
 include("infrastructure/telemetry/progress.jl")
 include("infrastructure/persistence/light_results.jl")
+include("infrastructure/persistence/core_state_codec.jl")
 include("infrastructure/telemetry/sender.jl")
 include("presentation/expert_report.jl")
+include("infrastructure/persistence/scientific_history.jl")
 include("infrastructure/persistence/production_state.jl")
 include("infrastructure/persistence/point_artifacts.jl")
 include("infrastructure/persistence/physics_diagnostics.jl")
-include("infrastructure/persistence/scientific_history.jl")
 include("composition/production_solver_adapter.jl")
 include("composition/production_workflow.jl")
+export ScientificHistoryRecorder, record_scientific_history!, flush_scientific_history!,
+    VerifiedExactCheckpoint, commit_exact_checkpoint!, open_exact_checkpoint,
+    checkpoint_reference, load_exact_solver_state
 
 module QCLConfiguration
 using Unitful

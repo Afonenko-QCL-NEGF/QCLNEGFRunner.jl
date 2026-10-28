@@ -37,6 +37,195 @@ function _prepare_generation!(root)
     return nothing
 end
 
+# Native5 publication uses new immutable files only; it never traverses old payloads.
+function _p04_validate_status(status)
+    _p04_keys(status,("process","convergence","physics","discretization","experimental"))
+    process=status["process"];_p04_keys(process,("state","exit_code","reason"))
+    _p04_require(process["state"] in ("pending","running","succeeded","failed","cancelled","interrupted","unknown") &&
+        (process["exit_code"]===nothing || process["exit_code"] isa Integer && !(process["exit_code"] isa Bool)) &&
+        (process["reason"]===nothing || process["reason"] isa String && !isempty(process["reason"])),"invalid process status")
+    for name in ("convergence","physics","discretization","experimental")
+        record=status[name];_p04_keys(record,("state","reason","evidence"))
+        measured=record["state"]=="recorded"
+        _p04_require(measured ? record["evidence"] isa AbstractDict &&
+            (record["reason"]===nothing || record["reason"] isa String && !isempty(record["reason"])) :
+            record["state"] in ("not_measured","unsupported","error") && record["reason"] isa String &&
+                !isempty(record["reason"]) && record["evidence"]===nothing,"invalid scientific evidence status")
+    end
+    _p04_json(status);nothing
+end
+function _p04_validate_provenance(value)
+    _p04_keys(value,("format","revision","components"))
+    _p04_require(value["format"]=="qcl-negf.git-graph.v1" && occursin(r"^[0-9a-f]{40}\z",value["revision"]),"invalid source graph")
+    for c in value["components"]
+        _p04_keys(c,("path","revision","url"))
+        _p04_require(c["path"] isa String && occursin(r"^[0-9a-f]{40}\z",c["revision"]) && c["url"] isa String,"invalid graph component")
+    end
+end
+function _p04_verify_status(root,status,verified)
+    _p04_validate_status(status)
+    for name in ("convergence","physics","discretization","experimental")
+        evidence=status[name]["evidence"];evidence===nothing && continue
+        _p04_keys(evidence,("path","bytes","sha256","media_type","schema"))
+        path=_p04_path(root,evidence["path"]);known=get(verified,evidence["path"],nothing)
+        if known===nothing || known.reference!=evidence || !isfile(path) || known.signature!=_p04_stat(stat(path))
+            _p04_check_ref(root,evidence);_p04_remember!(verified,root,evidence)
+        end
+    end
+    nothing
+end
+function _p04_lineage(identity,parent)
+    _p04_keys(parent,("identity","state_id","state_sequence","manifest"));_p04_identity(parent["identity"])
+    _p04_id(parent["state_id"]);_p04_u64(parent["state_sequence"];positive=true);_p04_file_fields(parent["manifest"])
+    _p04_require(all(identity[k]==parent["identity"][k] for k in ("run_id","execution_id","point_id","model_sha256","plan_sha256")) &&
+        parse(UInt64,parent["identity"]["attempt"])<parse(UInt64,identity["attempt"]),"parent scientific scope/attempt differs")
+end
+function _p04_publish_file!(r,temporary,destination;hook=stage->nothing)
+    _p04_require(!ispath(destination) && !islink(destination),"immutable publication path already exists")
+    chmod(temporary,0o640);_sync_artifact_file(temporary);hook(:payload_closed)
+    # Single owning writer plus fresh attempt/epoch namespace; no force/overwrite fallback.
+    mv(temporary,destination;force=false);_sync_artifact_directory(dirname(destination));destination
+end
+function _p04_new_hdf!(writer::Function,r,relative,schema,role,representation;hook=stage->nothing)
+    destination=_p04_path(r.root,_p04_relative(r.root,joinpath(r.directory,relative)))
+    mkpath(dirname(destination));temporary,io=mktemp(dirname(destination);cleanup=false);close(io)
+    h5open(temporary,"w") do file
+        _p04_metadata(file,r.identity,r.invocation,schema,role,representation);writer(file)
+    end
+    _p04_publish_file!(r,temporary,destination;hook)
+end
+function _p04_payload!(r,relative,arrays,schema,role;hook=stage->nothing)
+    path=_p04_new_hdf!(r,relative,schema,role,"array_payload";hook) do file
+        group=create_group(file,"arrays")
+        try;for (name,array) in arrays;_p04_write_array(group,last(split(name,'/')),array);end
+        finally;close(group);end
+    end
+    _p04_ref(r.root,path,schema;media="application/x-hdf5")
+end
+function _p04_publish_json!(r,relative,value,schema)
+    destination=_p04_path(r.root,_p04_relative(r.root,joinpath(r.directory,relative)))
+    mkpath(dirname(destination));temporary,io=mktemp(dirname(destination);cleanup=false)
+    try;_p04_json(io,value);finally;close(io);end
+    _p04_publish_file!(r,temporary,destination)
+    _p04_ref(r.root,destination,schema)
+end
+_p04_artifact(ref,role;dependencies=String[],profile="science")=merge(deepcopy(ref),Dict{String,Any}(
+    "role"=>role,"profile"=>profile,"dependencies"=>dependencies))
+function _p04_manifest(r,generation,pin,checkpoint,artifacts,binding,status,closed)
+    _p04_verify_status(r.root,status,r.verified)
+    _p04_id(r.invocation["source_epoch"]*"-state-"*string(generation))
+    Dict{String,Any}("schema"=>_P04_SCHEMAS["manifest"],"contract_set"=>_P04_CONTRACT,"identity"=>deepcopy(r.identity),
+        "lineage"=>deepcopy(r.lineage),"invocation"=>deepcopy(r.invocation),"provenance"=>deepcopy(r.provenance),
+        "numerical_binding"=>binding,"state_id"=>r.invocation["source_epoch"]*"-state-"*string(generation),
+        "state_sequence"=>string(generation),"generation"=>string(generation),"closed"=>closed,"status"=>deepcopy(status),
+        "artifacts"=>artifacts,"history"=>deepcopy(pin),"checkpoint"=>checkpoint)
+end
+function _p04_pointer!(r,relative,manifest,reference)
+    pointer=Dict("schema"=>_P04_SCHEMAS["pointer"],"contract_set"=>_P04_CONTRACT,"identity"=>r.identity,
+        "generation"=>manifest["generation"],"manifest"=>reference)
+    path=_p04_path(r.root,_p04_relative(r.root,joinpath(r.directory,relative)));mkpath(dirname(path))
+    temporary,io=mktemp(dirname(path);cleanup=false)
+    try;_p04_json(io,pointer);finally;close(io);end
+    _sync_artifact_file(temporary);_atomic_replace_file(temporary,path);_sync_artifact_directory(dirname(path))
+    _p04_require(read(path,String)==_p04_json(pointer),"pointer outcome uncertain; reconcile required")
+    nothing
+end
+function _p04_ack_history!(r,pin,page,generation)
+    r.pin=deepcopy(pin);r.page=page;r.publication=generation;empty!(r.buffer);r.buffer_bytes=0
+    r.last_flush_ns=UInt64(r.clock_ns());r.pending=nothing;r.failed=false;_p04_trim_verified!(r);nothing
+end
+function _p04_reconcile!(r)
+    pending=r.pending
+    pending===nothing && return false
+    pending.manifest_ref===nothing && return false
+    for name in ("current.json","recovery/current.json")
+        path=joinpath(r.directory,name)
+        isfile(path) || continue
+        pointer=try
+            _p04_path(r.root,_p04_relative(r.root,path))
+            value=_p04_parse(read(path,String));_p04_keys(value,("schema","contract_set","identity","generation","manifest"))
+            _p04_identity(value["identity"]);_p04_u64(value["generation"];positive=true);_p04_file_fields(value["manifest"])
+            _p04_require(value["schema"]==_P04_SCHEMAS["pointer"] && value["contract_set"]==_P04_CONTRACT &&
+                value["identity"]==r.identity && value["generation"]==pending.manifest["generation"],"pointer reconciliation differs")
+            value
+        catch;continue;end
+        if pointer["manifest"]==pending.manifest_ref
+            _p04_check_ref(r.root,pending.manifest_ref)
+            r.status=deepcopy(pending.manifest["status"]);r.closed=pending.manifest["closed"]
+            _p04_ack_history!(r,pending.pin,pending.page,pending.publication)
+            return true
+        end
+    end
+    false
+end
+
+function _p04_witness_targets(r,state)
+    targets=Any[]
+    if state.boundary===:scba_accepted && state.continuation isa QCLNEGF.SCBAContinuation && !state.continuation.decision.terminal
+        for index in unique(filter(>(0),collect(state.continuation.witness_retention[2:3])))
+            matches=[(key,locator) for (key,locator) in r.active if begin
+                row=_p04_parse(key);row["stage"]["value"]=="scba" &&
+                parse(Int,row["outer_iteration"]["decimal"])==state.progress.current_outer &&
+                row["inner_iteration"]!==nothing && parse(Int,row["inner_iteration"]["decimal"])==index &&
+                (r.stage===nothing || (parse(Int,row["domain_revision"]["decimal"]),row["discretization_id"],row["basis_id"])==r.stage[1:3])
+            end]
+            _p04_require(length(matches)==1,"public continuation anchor missing/ambiguous")
+            key,locator=only(matches);_p04_require(locator["leaf"]!==nothing,"checkpoint anchor is unsealed")
+            _p04_unchanged(r,locator["leaf"])
+            push!(targets,Dict("row_key"=>_p04_parse(key),"locator"=>deepcopy(locator)))
+        end
+    end
+    targets
+end
+
+"""Publish an already captured and publicly validated state; performs no solve/revalidation."""
+function commit_exact_checkpoint!(r::ScientificHistoryRecorder,problem::QCLNEGF.NEGFProblem,state::QCLNEGF.ExactSolverState;
+    options::QCLNEGF.SolverOptions,production_options::QCLNEGF.ProductionOptions,execution::QCLNEGF.ExactExecutionIdentity,
+    domain_adaptation::QCLNEGF.DomainAdaptationPolicy,kernel_options::Union{Nothing,QCLNEGF.ProductionKernelOptions},
+    status::AbstractDict,closed::Bool=false,publication_hook::Function=stage->nothing)::VerifiedExactCheckpoint
+    _p04_require(!r.failed && !r.closed,"recorder closed or needs reconciliation")
+    _p04_verify_status(r.root,status,r.verified)
+    _p04_require(!closed || state.boundary===:final && status["process"]["state"] in ("succeeded","failed","cancelled","interrupted"),"closed checkpoint requires explicit terminal global-final state")
+    QCLNEGF.validate_exact_state(problem,state;options,production_options,execution,domain_adaptation,kernel_options)
+    hook=publication_hook
+    # Seal mandatory history without an intermediate live pointer. Commit pins this exact frontier.
+    _p04_flush_history!(r;hook,publish_live=false)
+    r.failed=true;generation=Base.checked_add(r.publication,UInt64(1))
+    prefix=r.invocation["source_epoch"]*"-"*lpad(string(generation),9,'0')
+    arrays=Any[];wire=_p04_encode(state,arrays)
+    schema=closed ? "qcl-negf-physics-v5" : "qcl-negf-checkpoint-v5";role=closed ? "physics.full" : "recovery"
+    payload=_p04_payload!(r,joinpath("checkpoint","arrays-"*prefix*".h5"),arrays,schema,role;hook)
+    _p04_bind_arrays!(wire,payload)
+    targets=_p04_witness_targets(r,state);payloads=Dict{String,Any}[payload]
+    for target in targets
+        ref=target["locator"]["leaf"]
+        ref in payloads || push!(payloads,deepcopy(ref))
+    end
+    binding=Dict("identity"=>wire["fields"]["identity"],"execution"=>_p04_encode(execution,Any[]))
+    stateid=r.invocation["source_epoch"]*"-state-"*string(generation)
+    declaration=Dict{String,Any}("schema"=>_P04_SCHEMAS["checkpoint"],"contract_set"=>_P04_CONTRACT,
+        "identity"=>r.identity,"lineage"=>r.lineage,"invocation"=>r.invocation,"state_id"=>stateid,
+        "state_sequence"=>string(generation),"core_layout_sha256"=>_P04_LAYOUT,"numerical_binding"=>binding,
+        "history"=>deepcopy(r.pin),"state"=>wire,"payloads"=>payloads,"witness_targets"=>targets)
+    cpref=_p04_publish_json!(r,joinpath("checkpoint","declaration-"*prefix*".json"),declaration,_P04_SCHEMAS["checkpoint"])
+    hook(:checkpoint_published)
+    artifacts=[_p04_artifact(p,p==payload ? role : "science.history";profile=p==payload ? "full-state" : "science") for p in payloads]
+    push!(artifacts,_p04_artifact(cpref,"recovery";profile="full-state",dependencies=[p["path"] for p in payloads]))
+    manifest=_p04_manifest(r,generation,r.pin,cpref,artifacts,binding,status,closed)
+    manifestref=_p04_publish_json!(r,joinpath("manifests","state-"*prefix*".json"),manifest,_P04_SCHEMAS["manifest"])
+    r.pending=(;pin=deepcopy(r.pin),page=r.page,publication=generation,manifest,manifest_ref=manifestref,checkpoint=cpref)
+    hook(:manifest_published)
+    _p04_pointer!(r,"recovery/current.json",manifest,manifestref);hook(:recovery_pointer_published)
+    _p04_pointer!(r,"current.json",manifest,manifestref);hook(:current_pointer_published)
+    reference=Dict("identity"=>deepcopy(r.identity),"state_id"=>stateid,"state_sequence"=>string(generation),"manifest"=>manifestref)
+    # New payloads have already been streamed/hashed; cache their immutable inode signatures.
+    _p04_remember!(r.verified,r.root,payload)
+    r.status=deepcopy(status)
+    checkpoint=VerifiedExactCheckpoint(r.root,reference,manifest,declaration,_p04_proofs(r.verified,payloads,r.status),Val(:verified))
+    _p04_ack_history!(r,r.pin,r.page,generation);r.closed=closed
+    checkpoint
+end
+
 function _physics_axes(path, rank)
     rank==0 && return "scalar"
     if occursin("/state_dimensionless/", path)
@@ -1123,14 +1312,14 @@ function commit_point_artifacts(
     end
 end
 
-function _require_internal_hdf5_storage(file)
+function _require_internal_hdf5_storage(file;maximum_depth=64,maximum_group_entries=10000,maximum_links=100000)
     visited=Set{UInt64}()
     inspected=Ref(0)
     function visit(group,depth)
-        depth<=64 && length(group)<=10000 || throw(ArgumentError("native HDF5 object graph exceeds verification bounds"))
+        depth<=maximum_depth && length(group)<=maximum_group_entries || throw(ArgumentError("native HDF5 object graph exceeds verification bounds"))
         for name in keys(group)
             inspected[]+=1
-            inspected[]<=100000 || throw(ArgumentError("native HDF5 link count exceeds verification bounds"))
+            inspected[]<=maximum_links || throw(ArgumentError("native HDF5 link count exceeds verification bounds"))
             info=Ref{HDF5.API.H5L_info_t}()
             # HDF5.jl's unversioned H5Lget_info wrapper is absent from the
             # pinned native library. H5Lget_info1 uses its declared H5L_info_t

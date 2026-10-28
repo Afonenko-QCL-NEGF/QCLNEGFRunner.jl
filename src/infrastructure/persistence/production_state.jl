@@ -1,5 +1,228 @@
 # Optional production checkpoint and summary persistence adapter.
 
+function _p04_read_json_ref(root,reference,budget)
+    _p04_file_fields(reference)
+    _p04_require(reference["media_type"]=="application/json","metadata is not JSON")
+    path=_p04_path(root,reference["path"])
+    _p04_require(isfile(path) && filesize(path)<=budget[],"metadata byte budget exceeded/missing source")
+    open(path,"r") do io
+        _p04_read_observer[](:metadata,path,filesize(path))
+        before=_p04_stat(stat(io));text=read(io,String);budget[]-=ncodeunits(text)
+        _p04_require(before==_p04_stat(stat(path)) && before==_p04_stat(stat(io)) &&
+            string(ncodeunits(text))==reference["bytes"] && bytes2hex(sha256(text))==reference["sha256"],"metadata bytes/hash/path differ")
+        _p04_parse(text)
+    end
+end
+function _p04_envelope(value,kind,fields)
+    _p04_keys(value,fields)
+    _p04_require(value["schema"]==_P04_SCHEMAS[kind] && value["contract_set"]==_P04_CONTRACT,"unsupported result format")
+    _p04_identity(value["identity"]);_p04_keys(value["invocation"],("source_epoch",))
+    _p04_id(value["invocation"]["source_epoch"])
+    haskey(value,"state_id") && _p04_id(value["state_id"])
+    for name in ("state_sequence","generation","entries","stream_ordinal")
+        haskey(value,name) && _p04_u64(value[name];positive=true)
+    end
+    value
+end
+const _p04_registry=Ref{Any}(nothing)
+function _p04_artifact_fields(root,item)
+    _p04_keys(item,("path","bytes","sha256","media_type","schema","role","profile","dependencies"))
+    _p04_file_fields(Dict(k=>item[k] for k in ("path","bytes","sha256","media_type","schema")))
+    if _p04_registry[]===nothing
+        _p04_registry[]=_p04_parse(read(joinpath(@__DIR__,"../../../schema/results-contract-set.json"),String))
+    end
+    registry=_p04_registry[]
+    _p04_require(registry["contract_set"]==_P04_CONTRACT && any(a->a["role"]==item["role"] &&
+        a["media_type"]==item["media_type"] && item["schema"] in a["schemas"],registry["artifacts"]) &&
+        item["profile"] in ("science","full-state","both","local") && item["dependencies"] isa AbstractVector &&
+        all(d->d isa String && !isempty(d),item["dependencies"]),"unsupported artifact role/media/schema/profile")
+    _p04_path(root,item["path"])
+    for path in item["dependencies"];_p04_path(root,path);end
+    item
+end
+function _p04_pin(pin)
+    _p04_keys(pin,("head","entries","records","scba_rows","outer_rows","witness_updates","last_record"))
+    counts=Dict{String,UInt64}()
+    for name in ("entries","records","scba_rows","outer_rows","witness_updates","last_record")
+        counts[name]=_p04_u64(pin[name])
+    end
+    _p04_require(BigInt(counts["records"])==sum(BigInt(counts[k]) for k in ("scba_rows","outer_rows","witness_updates")) &&
+        counts["records"]==counts["last_record"],"history totals differ")
+    _p04_require(pin["head"]===nothing ? all(==(0),values(counts)) : counts["entries"]>0 && counts["records"]>0,"empty/nonempty history pin differs")
+    pin["head"]===nothing || _p04_file_fields(pin["head"])
+    counts
+end
+function _p04_verify_history(root,pin,identity,invocation,budget)
+    _p04_pin(pin);current=deepcopy(pin);artifacts=Dict{String,Any}();records=Set{String}();pages=Set{String}();lastgeneration=nothing
+    while current["head"]!==nothing
+        ref=current["head"];_p04_require(ref["schema"]==_P04_SCHEMAS["catalog"] && !(ref["path"] in pages),"catalog cycle/format")
+        push!(pages,ref["path"]);page=_p04_read_json_ref(root,ref,budget)
+        _p04_envelope(page,"catalog",("schema","contract_set","identity","invocation","generation","entries","previous","artifacts","range","totals"))
+        _p04_require(page["identity"]==identity && page["invocation"]==invocation,"catalog source differs")
+        _p04_keys(page["totals"],("records","scba_rows","outer_rows","witness_updates","last_record"))
+        _p04_require(merge(Dict("head"=>ref,"entries"=>page["entries"]),page["totals"])==current,"catalog pin/counters differ")
+        generation=_p04_u64(page["generation"];positive=true)
+        _p04_require(lastgeneration===nothing || generation<lastgeneration,"catalog generation order differs");lastgeneration=generation
+        previous=page["previous"]===nothing ? _p04_empty_pin() : page["previous"]
+        prior=_p04_pin(previous);now=_p04_pin(current)
+        _p04_keys(page["range"],("first_record","last_record"))
+        first=_p04_u64(page["range"]["first_record"];positive=true);_p04_u64(page["range"]["last_record"];positive=true)
+        _p04_require(BigInt(first)==BigInt(prior["last_record"])+1 &&
+            page["range"]["last_record"]==current["last_record"] && now["records"]>prior["records"] &&
+            all(now[k]>=prior[k] for k in keys(now)) && length(page["artifacts"]) in (1,2) &&
+            BigInt(now["entries"])==BigInt(prior["entries"])+length(page["artifacts"]),"catalog range/entry count differs")
+        for item in page["artifacts"]
+            _p04_artifact_fields(root,item)
+            _p04_require(item["role"]=="science.history" && item["schema"]=="qcl-negf-scientific-history-v5" &&
+                item["media_type"]=="application/x-hdf5" && !(item["path"] in keys(artifacts)) &&
+                !(item["path"] in pages) && length(unique(item["dependencies"]))==length(item["dependencies"]),"duplicate/non-native history artifact")
+            _p04_path(root,item["path"]);artifacts[item["path"]]=item
+        end
+        if length(page["artifacts"])==2
+            _p04_require(page["artifacts"][1]["path"] in page["artifacts"][2]["dependencies"],"record leaf does not bind ordered array owner")
+        end
+        push!(records,page["artifacts"][end]["path"])
+        current=previous
+    end
+    _p04_require(isempty(intersect(pages,Set(keys(artifacts)))) && length(artifacts)==parse(UInt64,pin["entries"]),"history inventory differs")
+    (;artifacts,records)
+end
+function _p04_original_record(root,locator,key,verified)
+    _p04_keys(locator,("source_identity","source_epoch","append_ordinal","leaf","row_offset"))
+    _p04_identity(locator["source_identity"]);_p04_id(locator["source_epoch"])
+    _p04_u64(locator["append_ordinal"];positive=true);offset=_p04_u64(locator["row_offset"])
+    _p04_require(offset<=typemax(Int),"record offset exceeds reader index width")
+    file=_p04_open_hdf(root,locator["leaf"],verified)
+    meta=offsets=bytes=nothing
+    try
+        meta=file["metadata"]
+        _p04_require(read_attribute(meta,"representation")=="record_leaf","original append is not record leaf")
+        identity=read(meta,"identity_json");invocation=read(meta,"invocation_json")
+        _p04_require(_p04_parse(String(identity))==locator["source_identity"] &&
+            _p04_parse(String(invocation))["source_epoch"]==locator["source_epoch"],"original append leaf owner differs")
+        offsets=file["records/offsets"];index=Int(offset)
+        _p04_require(0<=index<length(offsets)-1,"original append offset out of range")
+        a,b=Int(offsets[index+1]),Int(offsets[index+2]);bytes=file["records/json_utf8"]
+        _p04_require(0<=a<b<=length(bytes),"record byte offsets differ")
+        record=_p04_parse(String(bytes[a+1:b]))
+        _p04_envelope(record,"record",("schema","contract_set","identity","invocation","stream_ordinal","row_key","target","core"))
+        _p04_admit_row_key(record["row_key"],record["core"])
+        _p04_require(record["identity"]==locator["source_identity"] && record["invocation"]["source_epoch"]==locator["source_epoch"] &&
+            record["stream_ordinal"]==locator["append_ordinal"] && record["row_key"]==key && record["target"]===nothing &&
+            record["core"]["fields"]["action"]==Dict("kind"=>"symbol","value"=>"append"),"target is not original append")
+        record
+    finally
+        for object in (meta,offsets,bytes);object===nothing || close(object);end
+        close(file)
+    end
+end
+
+function _p04_manifest_checkpoint(root,reference,budget)
+    _p04_keys(reference,("identity","state_id","state_sequence","manifest"));_p04_identity(reference["identity"])
+    _p04_id(reference["state_id"]);_p04_u64(reference["state_sequence"];positive=true)
+    _p04_require(reference["manifest"]["schema"]==_P04_SCHEMAS["manifest"],"unsupported manifest reference")
+    manifest=_p04_read_json_ref(root,reference["manifest"],budget)
+    _p04_envelope(manifest,"manifest",("schema","contract_set","identity","lineage","invocation","provenance","numerical_binding", "state_id","state_sequence","generation","closed","status","artifacts","history","checkpoint"))
+    _p04_require(all(manifest[k]==reference[k] for k in ("identity","state_id","state_sequence")) &&
+        manifest["checkpoint"]!==nothing && manifest["checkpoint"]["schema"]==_P04_SCHEMAS["checkpoint"],"selected manifest has no matching exact checkpoint")
+    _p04_validate_status(manifest["status"]);_p04_validate_provenance(manifest["provenance"])
+    _p04_require(manifest["closed"] isa Bool,"invalid manifest closed flag")
+    _p04_keys(manifest["numerical_binding"],("identity","execution"))
+    _p04_keys(manifest["lineage"],("parent_state",))
+    manifest["lineage"]["parent_state"]===nothing || _p04_lineage(manifest["identity"],manifest["lineage"]["parent_state"])
+    declaration=_p04_read_json_ref(root,manifest["checkpoint"],budget)
+    _p04_envelope(declaration,"checkpoint",("schema","contract_set","identity","lineage","invocation","state_id","state_sequence","core_layout_sha256","numerical_binding","history","state","payloads","witness_targets"))
+    _p04_keys(declaration["numerical_binding"],("identity","execution"))
+    _p04_require(declaration["payloads"] isa AbstractVector && declaration["witness_targets"] isa AbstractVector &&
+        length(declaration["witness_targets"])<=2 && manifest["artifacts"] isa AbstractVector,"invalid checkpoint inventory")
+    _p04_require(declaration["core_layout_sha256"]==_P04_LAYOUT &&
+        all(declaration[k]==manifest[k] for k in ("identity","lineage","invocation","state_id","state_sequence","history","numerical_binding")) &&
+        declaration["state"]["fields"]["identity"]==declaration["numerical_binding"]["identity"],"checkpoint binding differs from pinned manifest")
+    manifest,declaration
+end
+
+function _p04_verify_anchors(root,manifest,decl,budget,verified)
+    history=_p04_verify_history(root,decl["history"],decl["identity"],decl["invocation"],budget)
+    state=decl["state"]["fields"];eligible=Set{Int}()
+    if state["boundary"]==Dict("kind"=>"symbol","value"=>"scba_accepted") && state["continuation"]!==nothing &&
+            get(state["continuation"],"type",nothing)=="SCBAContinuation" && !state["continuation"]["fields"]["decision"]["fields"]["terminal"]
+        for n in state["continuation"]["fields"]["witness_retention"][2:3]
+            i=parse(Int,n["decimal"]);i>0 && push!(eligible,i)
+        end
+    end
+    indices=Set{Int}();carried=Any[]
+    for entry in decl["witness_targets"]
+        _p04_keys(entry,("row_key","locator"));key=_p04_admit_row_key(entry["row_key"]);locator=entry["locator"]
+        _p04_require(key["stage"]==Dict("kind"=>"symbol","value"=>"scba") &&
+            key["outer_iteration"]==state["progress"]["fields"]["current_outer"] && key["inner_iteration"]!==nothing,"anchor stage differs")
+        index=parse(Int,key["inner_iteration"]["decimal"]);_p04_require(!(index in indices),"duplicate witness anchor");push!(indices,index)
+        _p04_require(locator["leaf"] in decl["payloads"] && all(locator["source_identity"][k]==decl["identity"][k] for k in
+            ("run_id","execution_id","point_id","model_sha256","plan_sha256")),"witness leaf/scope dependency absent")
+        if locator["source_identity"]==decl["identity"] && locator["source_epoch"]==decl["invocation"]["source_epoch"]
+            _p04_require(locator["leaf"]["path"] in history.records &&
+                all(history.artifacts[locator["leaf"]["path"]][k]==v for (k,v) in locator["leaf"]) &&
+                0<parse(UInt64,locator["append_ordinal"])<=parse(UInt64,decl["history"]["last_record"]),"own anchor outside committed history")
+        else;push!(carried,entry);end
+        _p04_original_record(root,locator,key,verified)
+    end
+    _p04_require(indices==eligible,"anchors differ from public continuation receipt")
+    if !isempty(carried)
+        parent=manifest["lineage"]["parent_state"];_p04_require(parent!==nothing,"carried anchor without parent")
+        pm,pd=_p04_manifest_checkpoint(root,parent,budget)
+        _p04_require(all(entry in pd["witness_targets"] for entry in carried),"carried anchor not retained by immediate parent")
+        _p04_verify_anchors(root,pm,pd,budget,verified)
+    end
+    history
+end
+
+"""Open a hash-pinned exact state and verify native datasets without materializing arrays."""
+function open_exact_checkpoint(artifact_root::AbstractString,reference::AbstractDict;
+    maximum_metadata_bytes::Integer)::VerifiedExactCheckpoint
+    _p04_require(isdir(artifact_root) && !islink(artifact_root) && maximum_metadata_bytes>0,"invalid root/metadata budget")
+    root=realpath(artifact_root);budget=Ref(Int(maximum_metadata_bytes))
+    manifest,decl=_p04_manifest_checkpoint(root,reference,budget)
+    references=Dict{String,Any}();verified=Dict{String,Any}()
+    for p in decl["payloads"]
+        _p04_file_fields(p)
+        _p04_require(!haskey(references,p["path"]),"duplicate checkpoint payload path")
+        references[p["path"]]=p
+    end
+    inventory=Dict{String,Any}()
+    for a in manifest["artifacts"]
+        _p04_artifact_fields(root,a)
+        _p04_require(!haskey(inventory,a["path"]),"duplicate manifest artifact");inventory[a["path"]]=a
+    end
+    for a in values(inventory)
+        _p04_require(length(unique(a["dependencies"]))==length(a["dependencies"]) && all(haskey(inventory,d) for d in a["dependencies"]),"artifact dependency closure absent")
+    end
+    _p04_require(haskey(inventory,manifest["checkpoint"]["path"]) &&
+        all(inventory[manifest["checkpoint"]["path"]][k]==v for (k,v) in manifest["checkpoint"]),"checkpoint absent from manifest inventory")
+    state_schema=manifest["closed"] ? "qcl-negf-physics-v5" : "qcl-negf-checkpoint-v5"
+    _p04_require(count(p->p["schema"]==state_schema,values(references))==1 &&
+        all(p->p["schema"] in (state_schema,"qcl-negf-scientific-history-v5"),values(references)),"checkpoint native ownership differs")
+    for p in values(references)
+        _p04_require(haskey(inventory,p["path"]) && all(inventory[p["path"]][k]==v for (k,v) in p),"payload absent from manifest inventory")
+        file=p["schema"]==state_schema ? _p04_open_hdf(root,p,verified;identity=decl["identity"],invocation=decl["invocation"],representation="array_payload") :
+            _p04_open_hdf(root,p,verified;representation="record_leaf")
+        close(file)
+    end
+    _p04_verify_status(root,manifest["status"],verified)
+    _p04_verify_anchors(root,manifest,decl,budget,verified)
+    files=Dict{String,Any}();context=(;root,references,verified,files,validate_only=true)
+    try
+        _p04_decode(decl["state"],QCLNEGF.ExactSolverState,context)
+        _p04_decode(decl["numerical_binding"]["execution"],QCLNEGF.ExactExecutionIdentity,context)
+    finally;for file in values(files);close(file);end;end
+    VerifiedExactCheckpoint(root,reference,manifest,decl,verified,Val(:verified))
+end
+"""Explicit full state materialization; call Core.restore_exact_state for numerical admission."""
+function load_exact_solver_state(checkpoint::VerifiedExactCheckpoint)::QCLNEGF.ExactSolverState
+    decl=_p04_parse(checkpoint.declaration_json);references=Dict(p["path"]=>p for p in decl["payloads"])
+    files=Dict{String,Any}();context=(root=checkpoint.root,references=references,verified=checkpoint.verified,files=files,validate_only=false)
+    try;_p04_decode(decl["state"],QCLNEGF.ExactSolverState,context)
+    finally;for file in values(files);close(file);end;end
+end
+
 function _atomic_checkpoint(path::AbstractString, solution::NEGFSolution;
     resource_policy::Symbol = :standalone)
     _resident_writer_preflight(resource_policy, :atomic_checkpoint)
