@@ -4,6 +4,157 @@ const R04=QCLNEGFRunner
 const C04=QCLNEGF
 const P04_ROOT=isempty(get(ENV,"QCL_P04_TEST_ROOT","")) ? mktempdir(;prefix="qcl-p04-exact-",cleanup=false) : abspath(ENV["QCL_P04_TEST_ROOT"])
 include("../support/exact_persistence_fixture.jl")
+@testset "Explicit native5 pointer and aggregate metadata admission" begin
+    f=p04_exact_fixture();r=p04_recorder("pointer-bridge")
+    R04.record_scientific_history!(r,p04_snapshot(f))
+    checkpoint=R04.commit_exact_checkpoint!(r,f.problem,f.state;f.bind...,status=p04_status())
+    reference=R04.checkpoint_reference(checkpoint)
+    @testset "Selected pointer capability" begin
+        selected=R04.open_exact_checkpoint(P04_ROOT,"pointer-bridge/current.json";
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        @test R04.checkpoint_reference(selected)==reference
+        R04.record_scientific_history!(r,p04_row(2;sequence=12,outer=f.state.progress.current_outer))
+        R04.flush_scientific_history!(r)
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,"pointer-bridge/current.json";
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        recovery=R04.open_exact_checkpoint(P04_ROOT,"pointer-bridge/recovery/current.json";
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        @test R04.checkpoint_reference(recovery)==reference
+        @test R04.load_exact_solver_state(selected).integrity==f.state.integrity
+    end
+    @testset "Pointer identity, format, selection and mutable-path barriers" begin
+        pointer=R04._p04_parse(read(joinpath(P04_ROOT,"pointer-bridge/recovery/current.json"),String))
+        for name in keys(p04_identity())
+            expected=p04_identity();expected[name]=name in ("model_sha256","plan_sha256") ? repeat("c",64) : name=="attempt" ? "2" : "other"
+            @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,"pointer-bridge/recovery/current.json";
+                expected_identity=expected,maximum_metadata_bytes=4*1024^2)
+        end
+        for (name,mutator) in (
+                ("generation",p->(p["generation"]="99")),("generation-lf",p->(p["generation"]="1\n")),
+                ("unknown",p->(p["unknown"]=nothing)),("missing",p->delete!(p,"generation")),
+                ("schema",p->(p["schema"]="qcl-negf.artifact-pointer.v2")),
+                ("contract",p->(p["contract_set"]="qcl-negf.results.v1")),
+                ("media",p->(p["manifest"]["media_type"]="text/plain")),
+                ("manifest-schema",p->(p["manifest"]["schema"]="other")),
+                ("missing-manifest",p->(p["manifest"]["path"]="absent.json")),
+                ("manifest-hash",p->(p["manifest"]["sha256"]=repeat("0",64))))
+            value=deepcopy(pointer);mutator(value);path=p04_pointer_fixture("pointer-"*name,value)
+            @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,path;
+                expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        end
+        value=deepcopy(pointer);value["identity"]["point_id"]="other"
+        path=p04_pointer_fixture("pointer-manifest-identity",value)
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,path;
+            expected_identity=value["identity"],maximum_metadata_bytes=4*1024^2)
+        independent=p04_forge(checkpoint,"pointer-independent-sequence";
+            declaration_mutator=d->(d["state_sequence"]="17"),manifest_mutator=m->(m["state_sequence"]="17"))
+        value=deepcopy(pointer);value["manifest"]=independent["manifest"]
+        path=p04_pointer_fixture("pointer-sequence-not-generation",value)
+        @test R04.checkpoint_reference(R04.open_exact_checkpoint(P04_ROOT,path;
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2))==independent
+        for path in ("absent-pointer.json","../current.json","/absolute.json","windows\\pointer.json","bad\0pointer.json")
+            @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,path;
+                expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        end
+        for budget in (0,-1,true,big(typemax(Int))+1)
+            @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,"pointer-bridge/recovery/current.json";
+                expected_identity=p04_identity(),maximum_metadata_bytes=budget)
+        end
+        path=p04_pointer_fixture("pointer-whitespace",pointer)
+        open(io->print(io,"\n \t"),joinpath(P04_ROOT,path),"a")
+        @test R04.checkpoint_reference(R04.open_exact_checkpoint(P04_ROOT,path;
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2))==reference
+        duplicate="{\"generation\":\"1\","*R04._p04_json(pointer)[2:end]
+        path=joinpath(P04_ROOT,"pointer-duplicate.json");write(path,duplicate)
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,"pointer-duplicate.json";
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        symlink(joinpath(P04_ROOT,"pointer-bridge/recovery/current.json"),joinpath(P04_ROOT,"pointer-link.json"))
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,"pointer-link.json";
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        symlink(joinpath(P04_ROOT,"pointer-bridge/recovery"),joinpath(P04_ROOT,"pointer-directory-link"))
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,"pointer-directory-link/current.json";
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+        path=p04_pointer_fixture("pointer-rebind",pointer);previous=R04._p04_read_observer[];replaced=Ref(false)
+        R04._p04_read_observer[]=(kind,file,bytes)->begin
+            if kind===:metadata && file==joinpath(P04_ROOT,reference["manifest"]["path"]) && !replaced[]
+                temporary=joinpath(P04_ROOT,"pointer-replacement.json")
+                cp(joinpath(P04_ROOT,path),temporary);mv(temporary,joinpath(P04_ROOT,path);force=true);replaced[]=true
+            end
+        end
+        try
+            @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,path;
+                expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2)
+            @test replaced[]
+        finally;R04._p04_read_observer[]=previous;end
+    end
+    @testset "Native JSON belongs to the same metadata allowance" begin
+        previous=R04._p04_read_observer[];reads=Any[]
+        R04._p04_read_observer[]=(kind,path,bytes)->push!(reads,(kind,path,bytes))
+        try
+            opened=R04.open_exact_checkpoint(P04_ROOT,reference;maximum_metadata_bytes=4*1024^2)
+            @test R04.checkpoint_reference(opened)==reference
+        finally;R04._p04_read_observer[]=previous;end
+        file_json=sum(event[3] for event in reads if event[1]===:metadata)
+        @test file_json>0
+        # The published reader debits only JSON FileRefs and incorrectly accepts this exact sum.
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,reference;maximum_metadata_bytes=file_json)
+        total=p04_metadata_bytes(reads)
+        @test total>file_json
+        @test R04.checkpoint_reference(R04.open_exact_checkpoint(P04_ROOT,reference;maximum_metadata_bytes=total))==reference
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,reference;maximum_metadata_bytes=total-1)
+        budget=Ref(total)
+        @test R04.checkpoint_reference(R04._p04_open_exact_checkpoint(realpath(P04_ROOT),reference,budget))==reference
+        @test budget[]==0
+        path="pointer-bridge/recovery/current.json"
+        _,reads=p04_reads(()->R04.open_exact_checkpoint(P04_ROOT,path;
+            expected_identity=p04_identity(),maximum_metadata_bytes=4*1024^2))
+        pointer_total=p04_metadata_bytes(reads)
+        @test count(event->event[1]===:metadata && event[2]==joinpath(P04_ROOT,reference["manifest"]["path"]),reads)==2
+        @test pointer_total==total+filesize(joinpath(P04_ROOT,path))+parse(Int,reference["manifest"]["bytes"])
+        @test R04.checkpoint_reference(R04.open_exact_checkpoint(P04_ROOT,path;
+            expected_identity=p04_identity(),maximum_metadata_bytes=pointer_total))==reference
+        @test_throws ArgumentError R04.open_exact_checkpoint(P04_ROOT,path;
+            expected_identity=p04_identity(),maximum_metadata_bytes=pointer_total-1)
+        target=R04._p04_parse(checkpoint.declaration_json)["witness_targets"][1]
+        _,reads=p04_reads(()->R04._p04_original_record(P04_ROOT,target["locator"],target["row_key"],Dict{String,Any}(),Ref(4*1024^2)))
+        native=sum(event[3] for event in reads if event[1]===:scalar_json)
+        budget=Ref(native);previous=R04._p04_read_observer[];observed=Symbol[]
+        R04._p04_read_observer[]=(kind,file,bytes)->push!(observed,kind)
+        try
+            @test_throws ArgumentError R04._p04_original_record(P04_ROOT,target["locator"],target["row_key"],Dict{String,Any}(),budget)
+            @test budget[]==0 && !(:record_json in observed) && !(:array in observed)
+        finally;R04._p04_read_observer[]=previous;end
+    end
+    @testset "JSON size growth is refused by the bounded read" begin
+        path=joinpath(P04_ROOT,"growing-json.json");write(path,"{\"a\":1}")
+        ref=R04._p04_ref(P04_ROOT,path,"qcl-negf.result-manifest.v1");budget=Ref(filesize(path))
+        previous=R04._p04_read_observer[]
+        R04._p04_read_observer[]=(kind,file,bytes)->kind===:metadata && file==path && open(io->print(io,repeat(" ",32)),path,"a")
+        try
+            @test_throws ArgumentError R04._p04_read_json_ref(P04_ROOT,ref,budget)
+            @test budget[]==0 # only the captured seven bytes were read/debited, not the growing tail
+        finally;R04._p04_read_observer[]=previous;end
+    end
+    @testset "Fixed scalar metadata capability before JSON allocation" begin
+        path=joinpath(P04_ROOT,"fixed-json-budget.h5")
+        R04.HDF5.h5open(path,"w") do file
+            file["scalar"]="{\"a\":1}";file["wrong-class"]=UInt8(1)
+            dtype=R04.HDF5.datatype("{\"a\":1}")
+            try;close(R04.HDF5.create_dataset(file,"wrong-rank",dtype,(1,)))
+            finally;close(dtype);end
+        end
+        R04.HDF5.h5open(path,"r") do file
+            budget=Ref(7)
+            @test R04._p04_read_scalar_json(file,"scalar",budget,path)==Dict("a"=>1)
+            @test budget[]==0
+            @test_throws ArgumentError R04._p04_read_scalar_json(file,"scalar",Ref(6),path)
+            for name in ("wrong-class","wrong-rank")
+                @test_throws ArgumentError R04._p04_read_scalar_json(file,name,Ref(1000),path)
+            end
+        end
+    end
+end
+
 @testset "Selected original RowKey binds public Core snapshot metadata" begin
     f=p04_exact_fixture();r=p04_recorder("row-projection")
     R04.record_scientific_history!(r,p04_snapshot(f))
@@ -38,7 +189,7 @@ include("../support/exact_persistence_fixture.jl")
     leaf=Dict(k=>page["artifacts"][end][k] for k in ("path","bytes","sha256","media_type","schema"))
     locator=Dict("source_identity"=>r.identity,"source_epoch"=>r.invocation["source_epoch"],
         "append_ordinal"=>"1","leaf"=>leaf,"row_offset"=>"0")
-    record=R04._p04_original_record(P04_ROOT,locator,R04._p04_row_key(outer),Dict{String,Any}())
+    record=R04._p04_original_record(P04_ROOT,locator,R04._p04_row_key(outer),Dict{String,Any}(),Ref(4*1024^2))
     @test record["row_key"]["stage"]["value"]=="outer"
     @test record["row_key"]["inner_iteration"]===record["core"]["fields"]["inner_iteration"]===nothing
 end
@@ -241,7 +392,7 @@ end
         R04.HDF5.delete_object(file,"records/offsets");file["records/offsets"]=UInt64[0]
     end
     target["locator"]["leaf"]=R04._p04_ref(P04_ROOT,path,"qcl-negf-scientific-history-v5";media="application/x-hdf5")
-    @test_throws ArgumentError R04._p04_original_record(P04_ROOT,target["locator"],target["row_key"],Dict{String,Any}())
+    @test_throws ArgumentError R04._p04_original_record(P04_ROOT,target["locator"],target["row_key"],Dict{String,Any}(),Ref(4*1024^2))
     # Correct native shapes/dtypes cannot mask a changed Core integrity payload.
     changed=p04_forge(checkpoint,"changed-state-values";payload_mutator=path->R04.HDF5.h5open(path,"r+") do file
         dataset=file["arrays/a00000001"];dataset[1]=0.25;close(dataset)

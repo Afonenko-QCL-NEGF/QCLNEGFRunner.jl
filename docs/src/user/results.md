@@ -47,6 +47,11 @@ its own manifest; the two updates are not atomic together.
 The supported explicit recovery operations are:
 
 ```julia
+# Select the source attempt and its full expected Identity explicitly.
+checkpoint = open_exact_checkpoint(artifact_root, "attempt-4/recovery/current.json";
+    expected_identity=source_identity, maximum_metadata_bytes)
+state_ref = checkpoint_reference(checkpoint)
+# A previously captured immutable StateRef can also be opened directly:
 checkpoint = open_exact_checkpoint(artifact_root, state_ref; maximum_metadata_bytes)
 state = load_exact_solver_state(checkpoint)
 # The consumer then calls Core's public validate_exact_state/restore_exact_state
@@ -58,6 +63,24 @@ dtypes, history reachability and witness ancestry without materializing the full
 explicitly reconstructs the full public state and verifies its Core integrity. Core restore performs
 numerical admission; persistence does not execute a solver or a completed-map revalidation. A failed
 import is an error, never an implicit fresh calculation.
+
+The pointer reader accepts one root-relative file, checks its Identity and generation against its
+hash-pinned manifest, and uses the same verification pipeline as the StateRef reader. Expected
+Identity refers to the selected source attempt, including its branch, model and frozen-plan hashes;
+it is not inferred from directory names or replaced with the new continuation attempt's Identity.
+There is no current/previous search or automatic switch from live to recovery. A live manifest with
+`checkpoint=null` is valid history with no exact recovery capability. A pointer replaced during the
+call is refused; advancing it after a successful return does not enlarge the frozen handle's cutoff.
+
+The required metadata allowance counts every JSON input read in the call, including pointer and both
+bootstrap/verified manifest reads, ancestor documents, native identity/invocation JSON and selected
+original-record JSON. The bounded Runner reader supports the fixed-length scalar HDF5 string
+metadata produced by its writer; the declared byte width, including padding, is checked before
+reading and debited. Variable-length, non-string or non-scalar metadata is explicitly unsupported by
+this reader. This reader capability does not tighten the Contracts native5 format. Streamed hashes
+of selected native files remain separate byte reads; they do not materialize numeric arrays. The
+allowance does not bound HDF5 internal memory, full-state loading, total artifact size or the
+lifetime of an execution.
 
 A new attempt names the exact parent StateRef, uses a greater attempt number and retains original
 append identity/epoch/ordinal in carried witness locators. An update binds the immediate parent's

@@ -265,6 +265,8 @@ commit_exact_checkpoint!(recorder, problem::QCLNEGF.NEGFProblem, state::QCLNEGF.
     options, production_options, execution, domain_adaptation, kernel_options, status,
     closed=false, publication_hook=stage->nothing)::VerifiedExactCheckpoint
 open_exact_checkpoint(artifact_root, state_ref; maximum_metadata_bytes)::VerifiedExactCheckpoint
+open_exact_checkpoint(artifact_root, pointer_relative::AbstractString;
+    expected_identity, maximum_metadata_bytes)::VerifiedExactCheckpoint
 checkpoint_reference(checkpoint)::Dict{String,Any} # detached canonical StateRef
 load_exact_solver_state(checkpoint)::QCLNEGF.ExactSolverState
 ```
@@ -272,9 +274,27 @@ load_exact_solver_state(checkpoint)::QCLNEGF.ExactSolverState
 `VerifiedExactCheckpoint` is created by commit/open, not by a caller-supplied proof dictionary. The
 artifact root must already exist. Recorder metadata is frozen at construction; each invocation owns
 a fresh namespace. `maximum_scba_rows` bounds compact current-stage RowKey/locator entries; buffer
-limits bound current pending rows, not the complete exact-state payload. Strict resident
-storage-policy integration belongs to its owning stage; this API currently admits standalone owning
-storage and fails explicitly for other contexts.
+limits bound current pending rows, not the complete exact-state payload. The current normal writer
+accepts standalone owning storage with no storage context. Unsupported contexts fail explicitly;
+removal of the obsolete strict resource mode belongs to its owning stage.
+
+The pointer overload requires an explicit root-relative native5 pointer file and the expected full
+source-attempt Identity. It resolves every FileRef against the same artifact root and returns the
+existing verified handle. It never searches for another pointer or falls back after an error. A
+history-only live manifest with `checkpoint=null` has no exact recovery capability and is refused.
+Use the explicitly selected recovery pointer for the last exact cutoff. A pointer that changes
+during verification is refused; updates after return do not change the captured immutable StateRef.
+
+`maximum_metadata_bytes` is one aggregate input-read allowance for the call: pointer bytes, every
+referenced JSON document, the bootstrap manifest and its repeated verified read, parsed native
+identity/invocation JSON, and selected original-record JSON slices, including repeated ancestor
+reads. Native scalar JSON must use fixed-length HDF5 string datasets with scalar dataspace; their
+declared storage width, including padding, consumes the allowance before allocation. Variable-length
+or other metadata types are unsupported by this bounded exact reader and are refused before a
+payload read or variable-length size query. This is a Runner reader capability, not a change to the
+Contracts native5 schema or scientific numeric dtypes. The allowance is per call; streamed native
+file hashing, opaque HDF5 library memory and explicit full-state loading are separate costs. It is
+not a process memory or lifetime history limit.
 
 The required `status` carries independent process, convergence, physics, discretization and
 experimental evidence states. It cannot be synthesized from process exit. `closed=true` requires a
