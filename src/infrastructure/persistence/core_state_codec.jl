@@ -292,7 +292,24 @@ end
 checkpoint_reference(handle::VerifiedExactCheckpoint)=_p04_parse(handle.reference_json)
 
 _p04_stat(s)=(s.device,s.inode,s.size,s.mtime,s.ctime)
-function _p04_open_hdf(root,ref,verified;identity=nothing,invocation=nothing,representation=nothing)
+function _p04_read_scalar_json(meta,name,budget,path)
+    dataset=meta[name];dtype=space=nothing
+    try
+        _p04_require(dataset isa HDF5.Dataset,"native JSON metadata is not a dataset")
+        dtype=HDF5.datatype(dataset);space=HDF5.dataspace(dataset)
+        _p04_require(HDF5.API.h5s_get_simple_extent_type(space)==HDF5.API.H5S_SCALAR &&
+            HDF5.API.h5t_get_class(dtype)==HDF5.API.H5T_STRING && !HDF5.API.h5t_is_variable_str(dtype),
+            "unsupported native JSON metadata: fixed scalar string required")
+        bytes=HDF5.API.h5t_get_size(dtype)
+        _p04_require(bytes<=typemax(Int) && (budget===nothing || bytes<=budget[]),"native JSON metadata byte budget exceeded")
+        budget===nothing || (budget[]-=Int(bytes))
+        _p04_read_observer[](:scalar_json,path,Int(bytes))
+        _p04_parse(read(dataset,String))
+    finally
+        for object in (space,dtype,dataset);object===nothing || close(object);end
+    end
+end
+function _p04_open_hdf(root,ref,verified;identity=nothing,invocation=nothing,representation=nothing,metadata_budget=nothing)
     _p04_file_fields(ref)
     roles=Dict("qcl-negf-scientific-history-v5"=>"science.history","qcl-negf-checkpoint-v5"=>"recovery","qcl-negf-physics-v5"=>"physics.full")
     _p04_require(ref["media_type"]=="application/x-hdf5" && haskey(roles,ref["schema"]),"unsupported native5 array format")
@@ -328,8 +345,8 @@ function _p04_open_hdf(root,ref,verified;identity=nothing,invocation=nothing,rep
             _p04_require(actual in ("array_payload","record_leaf") && (representation===nothing || actual==representation) &&
                 (actual=="array_payload" || ref["schema"]=="qcl-negf-scientific-history-v5") &&
                 Set(keys(file))==Set(("metadata",actual=="array_payload" ? "arrays" : "records")),"unsupported native5 representation/tree")
-            identity===nothing || _p04_require(_p04_parse(read(meta,"identity_json"))==identity,"native payload identity differs")
-            invocation===nothing || _p04_require(_p04_parse(read(meta,"invocation_json"))==invocation,"native payload invocation differs")
+            identity===nothing || _p04_require(_p04_read_scalar_json(meta,"identity_json",metadata_budget,path)==identity,"native payload identity differs")
+            invocation===nothing || _p04_require(_p04_read_scalar_json(meta,"invocation_json",metadata_budget,path)==invocation,"native payload invocation differs")
         finally;close(meta);end
         _p04_require(verified[ref["path"]].signature==_p04_stat(stat(_p04_path(root,ref["path"]))),"native path changed during verification")
         file
@@ -343,7 +360,9 @@ function _p04_read_array(wire,T,context)
     ref=wire["file"];_p04_require(haskey(context.references,ref["path"]) && context.references[ref["path"]]==ref,"undeclared array dependency")
     _p04_require(wire["dataset"] isa String && startswith(wire["dataset"],"/arrays/") &&
         !occursin(r"[\\\x00]",wire["dataset"]) && all(x->!(x in ("",".","..")),split(wire["dataset"][2:end],'/')),"invalid array dataset")
-    file=get!(context.files,ref["path"]) do;_p04_open_hdf(context.root,ref,context.verified);end
+    file=get!(context.files,ref["path"]) do
+        _p04_open_hdf(context.root,ref,context.verified;metadata_budget=hasproperty(context,:metadata_budget) ? context.metadata_budget : nothing)
+    end
     dataset=file[wire["dataset"]]
     try
         _p04_require(dataset isa HDF5.Dataset,"array locator is not a dataset")

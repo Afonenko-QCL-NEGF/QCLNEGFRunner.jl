@@ -1,14 +1,22 @@
 # Optional production checkpoint and summary persistence adapter.
 
+function _p04_read_json_text(io,budget,bytes)
+    _p04_require(isfile(stat(io)) && 0<=bytes<=budget[],"metadata byte budget exceeded/nonregular source")
+    text=String(read(io,Int(bytes)))
+    budget[]-=ncodeunits(text)
+    _p04_require(eof(io),"metadata source grew during bounded read")
+    text
+end
 function _p04_read_json_ref(root,reference,budget)
     _p04_file_fields(reference)
     _p04_require(reference["media_type"]=="application/json","metadata is not JSON")
     path=_p04_path(root,reference["path"])
     _p04_require(isfile(path) && filesize(path)<=budget[],"metadata byte budget exceeded/missing source")
     open(path,"r") do io
-        _p04_read_observer[](:metadata,path,filesize(path))
-        before=_p04_stat(stat(io));text=read(io,String);budget[]-=ncodeunits(text)
-        _p04_require(before==_p04_stat(stat(path)) && before==_p04_stat(stat(io)) &&
+        before=_p04_stat(stat(io));_p04_require(before==_p04_stat(stat(path)),"metadata path rebound during open")
+        _p04_read_observer[](:metadata,path,before[3])
+        text=_p04_read_json_text(io,budget,before[3])
+        _p04_require(before==_p04_stat(stat(_p04_path(root,reference["path"]))) && before==_p04_stat(stat(io)) &&
             string(ncodeunits(text))==reference["bytes"] && bytes2hex(sha256(text))==reference["sha256"],"metadata bytes/hash/path differ")
         _p04_parse(text)
     end
@@ -87,23 +95,27 @@ function _p04_verify_history(root,pin,identity,invocation,budget)
     _p04_require(isempty(intersect(pages,Set(keys(artifacts)))) && length(artifacts)==parse(UInt64,pin["entries"]),"history inventory differs")
     (;artifacts,records)
 end
-function _p04_original_record(root,locator,key,verified)
+function _p04_original_record(root,locator,key,verified,budget)
     _p04_keys(locator,("source_identity","source_epoch","append_ordinal","leaf","row_offset"))
     _p04_identity(locator["source_identity"]);_p04_id(locator["source_epoch"])
     _p04_u64(locator["append_ordinal"];positive=true);offset=_p04_u64(locator["row_offset"])
     _p04_require(offset<=typemax(Int),"record offset exceeds reader index width")
-    file=_p04_open_hdf(root,locator["leaf"],verified)
+    file=_p04_open_hdf(root,locator["leaf"],verified;metadata_budget=budget)
     meta=offsets=bytes=nothing
     try
         meta=file["metadata"]
         _p04_require(read_attribute(meta,"representation")=="record_leaf","original append is not record leaf")
-        identity=read(meta,"identity_json");invocation=read(meta,"invocation_json")
-        _p04_require(_p04_parse(String(identity))==locator["source_identity"] &&
-            _p04_parse(String(invocation))["source_epoch"]==locator["source_epoch"],"original append leaf owner differs")
+        path=_p04_path(root,locator["leaf"]["path"])
+        identity=_p04_read_scalar_json(meta,"identity_json",budget,path)
+        invocation=_p04_read_scalar_json(meta,"invocation_json",budget,path)
+        _p04_require(identity==locator["source_identity"] &&
+            invocation["source_epoch"]==locator["source_epoch"],"original append leaf owner differs")
         offsets=file["records/offsets"];index=Int(offset)
         _p04_require(0<=index<length(offsets)-1,"original append offset out of range")
         a,b=Int(offsets[index+1]),Int(offsets[index+2]);bytes=file["records/json_utf8"]
         _p04_require(0<=a<b<=length(bytes),"record byte offsets differ")
+        _p04_require(b-a<=budget[],"selected record metadata byte budget exceeded")
+        budget[]-=b-a;_p04_read_observer[](:record_json,path,b-a)
         record=_p04_parse(String(bytes[a+1:b]))
         _p04_envelope(record,"record",("schema","contract_set","identity","invocation","stream_ordinal","row_key","target","core"))
         _p04_admit_row_key(record["row_key"],record["core"])
@@ -163,7 +175,7 @@ function _p04_verify_anchors(root,manifest,decl,budget,verified)
                 all(history.artifacts[locator["leaf"]["path"]][k]==v for (k,v) in locator["leaf"]) &&
                 0<parse(UInt64,locator["append_ordinal"])<=parse(UInt64,decl["history"]["last_record"]),"own anchor outside committed history")
         else;push!(carried,entry);end
-        _p04_original_record(root,locator,key,verified)
+        _p04_original_record(root,locator,key,verified,budget)
     end
     _p04_require(indices==eligible,"anchors differ from public continuation receipt")
     if !isempty(carried)
@@ -175,11 +187,48 @@ function _p04_verify_anchors(root,manifest,decl,budget,verified)
     history
 end
 
+function _p04_checkpoint_input(artifact_root,maximum_metadata_bytes)
+    _p04_require(isdir(artifact_root) && !islink(artifact_root) && !(maximum_metadata_bytes isa Bool) &&
+        0<maximum_metadata_bytes<=typemax(Int),"invalid root/metadata budget")
+    realpath(artifact_root),Ref(Int(maximum_metadata_bytes))
+end
 """Open a hash-pinned exact state and verify native datasets without materializing arrays."""
 function open_exact_checkpoint(artifact_root::AbstractString,reference::AbstractDict;
     maximum_metadata_bytes::Integer)::VerifiedExactCheckpoint
-    _p04_require(isdir(artifact_root) && !islink(artifact_root) && maximum_metadata_bytes>0,"invalid root/metadata budget")
-    root=realpath(artifact_root);budget=Ref(Int(maximum_metadata_bytes))
+    root,budget=_p04_checkpoint_input(artifact_root,maximum_metadata_bytes)
+    _p04_open_exact_checkpoint(root,reference,budget)
+end
+"""Resolve one explicitly selected native5 pointer; never search or fall back to another pointer."""
+function open_exact_checkpoint(artifact_root::AbstractString,pointer_relative::AbstractString;
+    expected_identity::AbstractDict,maximum_metadata_bytes::Integer)::VerifiedExactCheckpoint
+    root,budget=_p04_checkpoint_input(artifact_root,maximum_metadata_bytes)
+    expected=deepcopy(expected_identity);_p04_identity(expected)
+    rootstat=stat(root);rootid=(rootstat.device,rootstat.inode)
+    path=_p04_path(root,String(pointer_relative));_p04_require(isfile(path),"missing/nonregular selected pointer")
+    open(path,"r") do io
+        before=_p04_stat(stat(io));_p04_require(before==_p04_stat(stat(path)),"pointer path rebound during open")
+        _p04_read_observer[](:metadata,path,before[3])
+        pointer=_p04_parse(_p04_read_json_text(io,budget,before[3]))
+        _p04_keys(pointer,("schema","contract_set","identity","generation","manifest"))
+        _p04_identity(pointer["identity"]);_p04_u64(pointer["generation"];positive=true)
+        _p04_file_fields(pointer["manifest"])
+        _p04_require(pointer["schema"]==_P04_SCHEMAS["pointer"] && pointer["contract_set"]==_P04_CONTRACT &&
+            pointer["identity"]==expected && pointer["manifest"]["schema"]==_P04_SCHEMAS["manifest"],"selected pointer format/identity differs")
+        manifest=_p04_read_json_ref(root,pointer["manifest"],budget)
+        _p04_require(manifest isa AbstractDict && all(haskey(manifest,k) for k in
+            ("identity","generation","state_id","state_sequence")),"selected manifest lacks StateRef fields")
+        _p04_require(manifest["identity"]==pointer["identity"] && manifest["generation"]==pointer["generation"],"pointer/manifest identity or generation differs")
+        reference=Dict{String,Any}("identity"=>manifest["identity"],"state_id"=>manifest["state_id"],
+            "state_sequence"=>manifest["state_sequence"],"manifest"=>pointer["manifest"])
+        checkpoint=_p04_open_exact_checkpoint(root,reference,budget)
+        finalroot=stat(root)
+        _p04_require(!islink(artifact_root) && realpath(artifact_root)==root &&
+            (finalroot.device,finalroot.inode)==rootid && _p04_path(root,String(pointer_relative))==path &&
+            before==_p04_stat(stat(path)) && before==_p04_stat(stat(io)),"selected pointer/root changed during verification")
+        checkpoint
+    end
+end
+function _p04_open_exact_checkpoint(root::String,reference::AbstractDict,budget::Base.RefValue{Int})::VerifiedExactCheckpoint
     manifest,decl=_p04_manifest_checkpoint(root,reference,budget)
     references=Dict{String,Any}();verified=Dict{String,Any}()
     for p in decl["payloads"]
@@ -202,13 +251,13 @@ function open_exact_checkpoint(artifact_root::AbstractString,reference::Abstract
         all(p->p["schema"] in (state_schema,"qcl-negf-scientific-history-v5"),values(references)),"checkpoint native ownership differs")
     for p in values(references)
         _p04_require(haskey(inventory,p["path"]) && all(inventory[p["path"]][k]==v for (k,v) in p),"payload absent from manifest inventory")
-        file=p["schema"]==state_schema ? _p04_open_hdf(root,p,verified;identity=decl["identity"],invocation=decl["invocation"],representation="array_payload") :
-            _p04_open_hdf(root,p,verified;representation="record_leaf")
+        file=p["schema"]==state_schema ? _p04_open_hdf(root,p,verified;identity=decl["identity"],invocation=decl["invocation"],representation="array_payload",metadata_budget=budget) :
+            _p04_open_hdf(root,p,verified;representation="record_leaf",metadata_budget=budget)
         close(file)
     end
     _p04_verify_status(root,manifest["status"],verified)
     _p04_verify_anchors(root,manifest,decl,budget,verified)
-    files=Dict{String,Any}();context=(;root,references,verified,files,validate_only=true)
+    files=Dict{String,Any}();context=(;root,references,verified,files,validate_only=true,metadata_budget=budget)
     try
         _p04_decode(decl["state"],QCLNEGF.ExactSolverState,context)
         _p04_decode(decl["numerical_binding"]["execution"],QCLNEGF.ExactExecutionIdentity,context)

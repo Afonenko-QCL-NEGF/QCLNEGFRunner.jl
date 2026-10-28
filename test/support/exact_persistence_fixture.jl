@@ -121,6 +121,22 @@ function p04_forge(checkpoint,name;payload_mutator=nothing,declaration_mutator=d
         "manifest"=>R04._p04_ref(P04_ROOT,path,"qcl-negf.result-manifest.v1"))
 end
 
+# Selected pointer/IO observation fixtures share the actual writer's format helpers.
+function p04_pointer_fixture(name,pointer)
+    path=joinpath(P04_ROOT,name*".json")
+    ispath(path) && error("fresh pointer fixture required")
+    open(io->R04._p04_json(io,pointer),path,"w")
+    replace(relpath(path,P04_ROOT),'\\'=>'/')
+end
+function p04_reads(f)
+    previous=R04._p04_read_observer[];reads=Any[]
+    R04._p04_read_observer[]=(kind,path,bytes)->push!(reads,(kind,path,bytes))
+    try
+        f(),reads
+    finally;R04._p04_read_observer[]=previous;end
+end
+p04_metadata_bytes(reads)=sum(event[3] for event in reads if event[1] in (:metadata,:scalar_json,:record_json))
+
 # Change one selected original's metadata and re-sign only its leaf/catalog/envelopes.
 function p04_forge_record(checkpoint,name,mutator)
     declaration=R04._p04_parse(checkpoint.declaration_json)
