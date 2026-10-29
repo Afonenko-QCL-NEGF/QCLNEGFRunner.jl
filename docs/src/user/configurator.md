@@ -273,7 +273,7 @@ core_source_id, context_sha256
 ```
 
 These fields correspond to the agreed existing release.json/service.env port; the callback is not a
-browser approval flag. Runner requires selected immutable `/nix/store/<hash>-<output>`, exact
+browser approval flag. Runner requires the selected immutable Nix store output `<output>`, exact
 executable `<output>/bin/qcl-negf`, loaded Runner/Core under `<output>/share/qcl-negf/components`,
 active Project/Manifest under its julia directory, expected source refs and captured Manifest SHA.
 It captures hashes of fixed small configuration/planning/snapshot/quantum and Core
