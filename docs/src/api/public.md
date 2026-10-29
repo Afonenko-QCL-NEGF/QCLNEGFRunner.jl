@@ -36,6 +36,10 @@ ProductionStudyResult
 ProgressMetric
 ProgressSnapshot
 ProgressReporter
+ScientificHistoryRecorder
+open_exact_checkpoint
+load_exact_solver_state
+commit_exact_checkpoint!
 MethodDescriptor
 MethodPoint
 MethodRun
