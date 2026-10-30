@@ -4,7 +4,8 @@ struct _ScientificPause <: Exception
 end
 
 import ..QCLNEGFRunner: publish_native_selection!, _p07_retain_input_pair!, _p05_closed_metadata_limit,
-    _native_origin_ids, _native_source_epoch
+    _native_origin_ids, _native_source_epoch, _p30_begin_performance_anchor,
+    _p30_anchor_phase_source, _p30_borrowed_anchor!
 
 function _p05_prepare_scientific_request!(recorder::ScientificHistoryRecorder,
     capture::_P05PlanCapture,configuration,point::ScientificPoint;
@@ -986,6 +987,7 @@ function execute_scientific_plan(
             observer_admission=nothing
             phase_source=(status=:disabled,session_id=nothing,current_path=nothing,reason="telemetry_disabled")
             history_recorder=nothing
+            performance_anchor_path=nothing
             callbacks=nothing;committed=nothing;recorded=nothing;terminal=nothing;prepared_final_request=nothing;final_phase=false
             latest_commit=Ref{Union{Nothing,String}}(
                 restoring &&
@@ -1032,6 +1034,15 @@ function execute_scientific_plan(
                         phase_source=(status=:unavailable,session_id=nothing,current_path=nothing,reason=reason)
                     end
                 end
+                if execution.outputs.telemetry.enabled
+                    performance_anchor_path=joinpath(root,"performance-anchor-current.json")
+                    phase_anchor=_p30_begin_performance_anchor(root,performance_anchor_path,phase_identity,phase_source,native_origin)
+                    if phase_anchor.failed
+                        phase_source=(status=:unavailable,session_id=nothing,current_path=nothing,
+                            reason=:performance_anchor_publication_failed)
+                        performance_anchor_path=nothing
+                    end
+                end
                 _scientific_progress(root, point, attempt, :running, directory;phase_source)
                 reporter=ProgressReporter(;
                     machine_directory = joinpath(directory, "progress"),
@@ -1054,6 +1065,7 @@ function execute_scientific_plan(
                     end
                 end
                 function observe_solver_event(event)
+                    phase_source=_p30_anchor_phase_source(history_recorder,phase_source)
                     event.action in (:phase_begin,:phase_end) && return nothing
                     if telemetry_sender!==nothing
                         _p05_emit_scalar!(telemetry_sender,event,(;point_id=point.id,execution_id=execution.id,attempt))
@@ -1098,7 +1110,8 @@ function execute_scientific_plan(
                     (name=>unmeasured() for name in ("convergence","physics","discretization","experimental"))...)
                 history_recorder=ScientificHistoryRecorder(directory;artifact_root=root,identity,
                     source_epoch=_native_source_epoch(native_origin),provenance=source_graph,status=running_status,
-                    maximum_scba_rows=config.solver.max_scba,parent_checkpoint,resource_policy)
+                    maximum_scba_rows=config.solver.max_scba,parent_checkpoint,resource_policy,performance_anchor_path)
+                phase_source=_p30_anchor_phase_source(history_recorder,phase_source)
                 recovery_policy=execution.outputs.recovery
                 recovery_directory=joinpath(root,"recovery",execution.id,point.id)
                 archive_directory=joinpath(root,"archive",execution.id,point.id)
@@ -1176,6 +1189,7 @@ function execute_scientific_plan(
                     domain_adaptation=config.domain_adaptation,kernel_options=kernel_binding,status=final_status,
                     request=prepared_final_request.request,
                     source_mode=parent_state!==nothing && parent_state.boundary===:final ? :completed_restore : :produced,limits...)
+                phase_source=_p30_anchor_phase_source(history_recorder,phase_source)
                 _p07_retain_input_pair!(native_selected_inputs,".",committed.checkpoint,
                     prepared_final_request.request,limits.maximum_metadata_bytes)
                 recorded=_p05_recorded_final(committed,limits.maximum_metadata_bytes)
@@ -1241,6 +1255,10 @@ function execute_scientific_plan(
                     callback_failure===nothing || callback_failure===error || throw(callback_failure)
                     rethrow()
                 end
+                if (callbacks===nothing || callbacks.latest[]===nothing) && history_recorder!==nothing && parent_checkpoint!==nothing
+                    _p30_borrowed_anchor!(history_recorder,parent_checkpoint)
+                end
+                phase_source=_p30_anchor_phase_source(history_recorder,phase_source)
                 error_source=callbacks!==nothing && callbacks.latest[]!==nothing ?
                     _p05_native_source(".";checkpoint=callbacks.latest[],reason="last_accepted_boundary_before_failure") :
                     parent_checkpoint!==nothing ? _p05_native_source(".";checkpoint=parent_checkpoint,relation="retained_source",reason="selected_parent_before_failure") :
@@ -1391,6 +1409,7 @@ function execute_scientific_plan(
                     observe_solver_event=nothing;runtime_options=nothing;callbacks=nothing
                     input_roots=nothing;pre_roots=nothing
                     reporter=nothing;history_recorder=nothing;latest_commit=nothing
+                    phase_anchor=nothing;performance_anchor_path=nothing
                     # Only `previous` remains an intentional numerical continuation.
                     # Other point locals have reached their last use; retaining them
                     # would hide old problem/cache/restoration payload from the next

@@ -39,6 +39,14 @@ function _native_source_epoch(origin=nothing;nonce::UInt64=time_ns())
     _p04_id(epoch);epoch
 end
 
+# Independent metadata publication; this object never owns scientific buffers or cursors.
+mutable struct _PerformanceAnchor
+    root::String
+    path::String
+    value::Dict{String,Any}
+    failed::Bool
+end
+
 """One native5 invocation. Scientific ordinals are independent of Core delivery sequence."""
 mutable struct ScientificHistoryRecorder
     directory::String
@@ -70,6 +78,7 @@ mutable struct ScientificHistoryRecorder
     closed::Bool
     pending::Any
     verified::Dict{String,Any}
+    performance_anchor::Union{Nothing,_PerformanceAnchor}
 end
 _p04_empty_pin()=Dict{String,Any}("head"=>nothing,(k=>"0" for k in ("entries","records","scba_rows","outer_rows","witness_updates","last_record"))...)
 const _P04_ROW_KEY_FIELDS=(:domain_revision,:discretization_id,:basis_id,:stage,:outer_iteration,:inner_iteration)
@@ -122,12 +131,14 @@ function ScientificHistoryRecorder(directory::AbstractString;artifact_root::Abst
     maximum_scba_rows::Integer,parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
     maximum_buffer_records::Integer=1000,maximum_buffer_bytes::Integer=1048576,
     flush_interval_seconds::Real=30,clock_ns::Function=time_ns,
-    resource_policy::Symbol=:standalone,storage_context=nothing)
+    resource_policy::Symbol=:standalone,storage_context=nothing,
+    performance_anchor_path::Union{Nothing,AbstractString}=nothing)
     _resource_policy(resource_policy; storage_context)
     _p04_identity(identity);_p04_validate_status(status);_p04_validate_provenance(provenance)
     _p04_require(isdir(artifact_root) && !islink(artifact_root),"artifact root must exist and be owned")
     root=realpath(artifact_root);directory=abspath(directory)
     _p04_path(root,_p04_relative(root,directory));mkpath(directory)
+    performance_anchor_path===nothing || _p30_anchor_path(root,performance_anchor_path)
     _p04_require(!ispath(joinpath(directory,"current.json")) && !ispath(joinpath(directory,"history")),"invocation namespace already used")
     _p04_id(String(source_epoch))
     _p04_require(maximum_scba_rows>0 && maximum_buffer_records>0 && maximum_buffer_bytes>0 &&
@@ -146,7 +157,7 @@ function ScientificHistoryRecorder(directory::AbstractString;artifact_root::Abst
         lineage,deepcopy(provenance),deepcopy(status),parent_checkpoint,QCLNEGF.ScientificHistorySnapshot[],0,
         Int(maximum_buffer_bytes),Int(maximum_buffer_records),Int(maximum_scba_rows),0,0,0,_p04_empty_pin(),nothing,
         active,nothing,0,false,round(UInt64,flush_interval_seconds*1e9),UInt64(clock_ns()),clock_ns,false,false,nothing,
-        parent_checkpoint===nothing ? Dict{String,Any}() : copy(parent_checkpoint.verified))
+        parent_checkpoint===nothing ? Dict{String,Any}() : copy(parent_checkpoint.verified),nothing)
     _p04_verify_status(root,recorder.status,recorder.verified)
     if !isempty(active)
         rowkeys=[_p04_parse(key) for key in Base.keys(active)]
@@ -157,6 +168,8 @@ function ScientificHistoryRecorder(directory::AbstractString;artifact_root::Abst
         _p04_require(recorder.last_inner<=maximum_scba_rows,"parent progress exceeds declared SCBA bound")
     end
     _p04_trim_verified!(recorder)
+    performance_anchor_path===nothing || (recorder.performance_anchor=
+        _p30_recorder_anchor(root,performance_anchor_path,recorder.identity,recorder.invocation))
     recorder
 end
 function record_scientific_history!(r::ScientificHistoryRecorder,s::QCLNEGF.ScientificHistorySnapshot)::Nothing
