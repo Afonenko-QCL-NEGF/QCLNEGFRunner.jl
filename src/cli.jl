@@ -120,6 +120,26 @@ function _cli_quantum_preview(arguments)
     return get(response,"status",nothing)=="available" ? 0 : 2
 end
 
+function _cli_parent_checkpoint(options::AbstractDict, artifact_root::AbstractString)
+    flags=("--parent-pointer","--parent-identity","--parent-metadata-bytes")
+    present=count(flag->haskey(options,flag),flags)
+    present==0 && return nothing
+    present==length(flags) || throw(ArgumentError("parent pointer, identity and metadata byte allowance must be supplied together"))
+    allowance=tryparse(Int,options["--parent-metadata-bytes"])
+    allowance !== nothing && allowance>0 || throw(ArgumentError("parent metadata byte allowance must be a positive integer"))
+    path=options["--parent-identity"]
+    islink(path) && throw(ArgumentError("invalid parent identity file"))
+    bytes=open(io->read(io,256*1024+1),path)
+    length(bytes)<=256*1024 || throw(ArgumentError("parent identity file exceeds byte limit"))
+    text=String(bytes)
+    isvalid(text) || throw(ArgumentError("invalid parent identity UTF-8"))
+    identity=_p04_parse(text)
+    identity isa AbstractDict || throw(ArgumentError("invalid parent identity"))
+    _p04_identity(identity)
+    return open_exact_checkpoint(artifact_root,options["--parent-pointer"];
+        expected_identity=identity,maximum_metadata_bytes=allowance)
+end
+
 function _cli_heavy(arguments)
     command=first(arguments)
     if command == "plan"
@@ -136,16 +156,22 @@ function _cli_heavy(arguments)
         options = Dict{String,String}()
         for index in 4:2:length(arguments)
             flag = arguments[index]
-            flag in ("--execution-id", "--scratch-root", "--attempt", "--recovery-bundle", "--archive-bundle", "--archive-byte-budget") || throw(ArgumentError("unknown run-plan option $flag"))
+            flag in ("--execution-id", "--scratch-root", "--attempt", "--recovery-bundle", "--archive-bundle", "--archive-byte-budget", "--source-graph", "--parent-pointer", "--parent-identity", "--parent-metadata-bytes") || throw(ArgumentError("unknown run-plan option $flag"))
             haskey(options, flag) && throw(ArgumentError("duplicate option $flag"))
             options[flag] = arguments[index+1]
         end
-        plan=load_scientific_plan(arguments[2])
+        parent_checkpoint=_cli_parent_checkpoint(options,arguments[3])
+        loaded=QCLScientificWorkflow._load_scientific_plan_bytes(arguments[2])
+        plan=loaded.plan
         capture_context=_capture_context(plan,arguments[3],get(options,"--execution-id",nothing),
             haskey(options,"--attempt") ? parse(Int,options["--attempt"]) : nothing;
-            scratch_root=get(options,"--scratch-root",nothing))
+            scratch_root=get(options,"--scratch-root",nothing),
+            frozen_plan_bytes=loaded.bytes,source_plan_path=arguments[2])
         result = execute_scientific_plan_staged(plan, arguments[3];
             capture_context,
+            frozen_plan_capture=loaded.capture,
+            source_graph=haskey(options,"--source-graph") ? _load_source_graph_file(options["--source-graph"]) : nothing,
+            parent_checkpoint,
             execution_id=get(options, "--execution-id", nothing),
             scratch_root=get(options, "--scratch-root", nothing),
             attempt=haskey(options,"--attempt") ? parse(Int,options["--attempt"]) : nothing,
@@ -153,6 +179,8 @@ function _cli_heavy(arguments)
             telemetry_sink=haskey(ENV,"QCL_TELEMETRY_ENDPOINT") ? http_telemetry_sink(ENV["QCL_TELEMETRY_ENDPOINT"]) : nothing,
             archive_bundle=get(options,"--archive-bundle",nothing),
             archive_byte_budget=haskey(options,"--archive-byte-budget") ? parse(Int,options["--archive-byte-budget"]) : 64*1024^3)
+        # Typed DTO output is independent of Q1 transport-close. The stationary
+        # entry gate remains until the same DTO readers/actor/close are qualified.
         write_scientific_result(stdout, result)
     elseif command == "analyze"
         length(arguments) in (2, 3) || throw(ArgumentError("analyze expects RESULTS [OUTPUT]"))

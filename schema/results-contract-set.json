@@ -6,7 +6,19 @@
   "pointer": "qcl-negf.result-pointer.v1",
   "export": "qcl-negf.science-export.v3",
   "performance": "qcl-negf.performance.v2",
-  "series": "qcl-negf-series-result-v3",
+  "series": "qcl-negf-series-result-v4",
+  "series_read_versions": [
+    "qcl-negf-series-result-v3",
+    "qcl-negf-series-result-v4"
+  ],
+  "outward_result": "outward-result.schema.json",
+  "outward_versions": [
+    "qcl-negf.native-point-source.v1",
+    "qcl-negf-series-result-v4",
+    "qcl-negf-current-point-v2",
+    "qcl-negf-configured-point-result-v2",
+    "qcl-negf-configured-point-status-v2"
+  ],
   "history_index": "qcl-negf.scientific-catalog.v1",
   "performance_index": "qcl-negf.performance-index.v2",
   "telemetry_catalog": "qcl-negf.telemetry-catalog.v2",

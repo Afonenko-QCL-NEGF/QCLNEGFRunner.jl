@@ -36,10 +36,30 @@ function finish(o)
     R._close_phase_observer!(o)
     @test timedwait(()->istaskdone(o.task),10;pollint=0.01)==:ok
     fetch(o.task)
+    lock(R._PHASE_RESIDENCY_LOCK) do
+        R._phase_reap_locked!()
+    end
 end
 load(path)=YAML.load_file(path;dicttype=Dict{String,Any})
 function segments(o)
     [load(joinpath(o.directory,f)) for f in sort(readdir(o.directory)) if startswith(f,"segment-")]
+end
+@testset "Phase charge lane rejects oversized symbols before formatting" begin
+    o=observer("charge-lane";hook=R._NO_PHASE_PUBLICATION_HOOK)
+    try
+        e=C.SolverEvent(:phase_begin,Symbol(repeat("k",2*1024^2)),"row",:running,1,1,(),"")
+        R._enqueue_phase!(o,e)
+        allocated=@allocated R._enqueue_phase!(o,e)
+        @test allocated<65536
+        println("phase_oversized_symbol_allocation=",allocated)
+        o.admitting[]=true;before=o.drops[2][]
+        jobs=[Threads.@spawn R._enqueue_phase!(o,event(:phase_end,1,2)) for _ in 1:32]
+        @test all(!fetch(t) for t in jobs)
+        @test o.drops[2][]==before+32
+        o.admitting[]=false
+    finally
+        o.admitting[]=false;finish(o)
+    end
 end
 @testset "Policy admission and defaults" begin
     p=R._normal_phase_policy(256)
@@ -133,6 +153,7 @@ end
     current=load(joinpath(o.directory,"phase-current.json"))
     @test current["publication"]===nothing
     @test current["health"]["incomplete"]
+    R._close_phase_observer!(o)
 end
 @testset "Existing namespace is never rewritten by initialization failure" begin
     root=joinpath(output,"collision");directory=joinpath(root,"attempt","progress","phases","session")
@@ -142,6 +163,7 @@ end
     @test timedwait(()->istaskdone(o.task),5)==:ok
     @test read(path,String)=="owned-original\n"
     @test R._phase_observer_statistics(o).failed
+    R._close_phase_observer!(o)
 end
 @testset "Diagnostic nested spans preserve typed availability and ordering" begin
     entered=Channel{Nothing}(1);release=Channel{Nothing}(1)
@@ -275,6 +297,7 @@ end
         @test "writer_unavailable" in current["health"]["incomplete_reasons"]
         ref=current["publication"];raw=read(joinpath(o.root,ref["path"]))
         @test bytes2hex(sha256(raw))==ref["sha256"]
+        R._close_phase_observer!(o)
     end
 end
 @testset "Invalid metric names are explicit input loss, not invalid wire" begin
@@ -326,6 +349,7 @@ end
         policy=policy(),capacity_events=4)
     @test timedwait(()->istaskdone(failed.task),5)==:ok
     @test R._phase_observer_statistics(failed).failed
+    R._close_phase_observer!(failed)
     valid=observer("slot-after-init-failure");finish(valid)
     @test !R._phase_observer_statistics(valid).failed
 end
@@ -370,4 +394,47 @@ end
     @test row["context_status"]=="incomplete"
     @test row["core_sequence"]=="8" # Core gaps are preserved, not misclassified as the technical gap.
 end
+@testset "Phase admission seals before reap and charges the admitted lane" begin
+    for managed in (false,true)
+        root=mktempdir();p=policy(capacity=2)
+        request=(;directory=joinpath(root,"phase"),artifact_root=root,identity=identity(),
+            source_session="session",policy=p,capacity_events=2)
+        owner=managed ? R._p05_begin_observers!(;phase_request=request,scalar_request=nothing) : nothing
+        o=R._start_phase_observer(request.directory;artifact_root=root,identity=request.identity,
+            source_session="session",policy=p,capacity_events=2,admission=owner)
+        entered=Channel{Bool}(1);release=Channel{Nothing}(1)
+        producer=Threads.@spawn begin
+            admitted=R._phase_try_producer!(o);put!(entered,admitted)
+            try take!(release) finally admitted && R._phase_release_producer!(o) end
+        end
+        @test take!(entered)
+        managed ? R._p05_end_observers!(owner) : R._close_phase_observer!(o)
+        @test timedwait(()->istaskdone(o.task),10)==:ok
+        a=R._p05_begin_observers!(;phase_request=nothing,scalar_request=nothing)
+        try
+            @test o.admitting[] && o.producer_state[]==3 && !istaskdone(producer)
+            @test R._p05_observer_work_bound(a)==R._phase_profile(o.directory,o.root,o.identity,"session",p,2).payload_bound_bytes
+            @test (@atomic :acquire R._PHASE_RESIDENCY[].owner)===o
+        finally
+            R._p05_end_observers!(a);put!(release,nothing);fetch(producer)
+        end
+        @test !o.admitting[] && o.producer_state[]==2
+        a=R._p05_begin_observers!(;phase_request=nothing,scalar_request=nothing)
+        @test R._p05_observer_work_bound(a)==0
+        R._p05_end_observers!(a)
+    end
+    o=observer("phase-stale-read-open";hook=R._NO_PHASE_PUBLICATION_HOOK)
+    @test !R._phase_closed(o)
+    finish(o) # closes and reaps between the producer read and its CAS
+    a=R._p05_begin_observers!(;phase_request=nothing,scalar_request=nothing)
+    try
+        @test R._p05_observer_work_bound(a)==0
+        @test !R._phase_try_producer!(o)
+        @test !R._enqueue_phase!(o,event(:phase_end,1,2))
+        @test o.producer_state[]==2 && !o.admitting[]
+    finally
+        R._p05_end_observers!(a)
+    end
+end
+
 end

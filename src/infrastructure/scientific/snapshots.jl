@@ -186,6 +186,82 @@ function load_scientific_plan(data::AbstractDict)
     )
 end
 
+function _load_scientific_plan_bytes(path::AbstractString)
+    isfile(path) && !islink(path) || throw(ArgumentError("scientific plan must be a regular non-symlink file"))
+    bytes=open(path,"r") do io
+        before=stat(io)
+        same(st)=(st.device,st.inode,st.size,st.mtime,st.ctime)
+        same(before)==same(stat(path)) || throw(ArgumentError("scientific plan path rebound"))
+        data=read(io,CONFIGURATOR_PLAN_BYTES+1)
+        !islink(path) && same(before)==same(stat(io))==same(stat(path)) ||
+            throw(ArgumentError("scientific plan changed during capture"))
+        data
+    end
+    length(bytes)<=CONFIGURATOR_PLAN_BYTES || throw(ArgumentError("scientific plan exceeds byte limit"))
+    text=String(copy(bytes))
+    isvalid(text) || throw(ArgumentError("scientific plan is not valid UTF-8"))
+    document=_mapping_input(_configurator_json(text;maximum=CONFIGURATOR_PLAN_BYTES),"plan")
+    plan=load_scientific_plan(document)
+    capture=_P05PlanCapture((:scientific_plan_v2,bytes,document,bytes2hex(sha256(bytes))))
+    return (plan=plan,bytes=bytes,capture=capture)
+end
+
+# Freeze the selected plan bytes once; semantic equality cannot replace byte identity.
+function _freeze_scientific_plan(plan::ScientificPlan, root::AbstractString;
+    frozen_plan_bytes::Union{Nothing,Vector{UInt8}}=nothing,
+    frozen_plan_capture::Union{Nothing,_P05PlanCapture}=nothing)
+    frozen_plan_bytes===nothing || frozen_plan_capture===nothing || throw(ArgumentError("choose one frozen plan source"))
+    path=joinpath(root,"scientific_plan.json")
+    islink(path) && throw(ArgumentError("scientific plan path cannot be a symlink"))
+    function bounded_bytes(path)
+        isfile(path) && !islink(path) || throw(ArgumentError("scientific plan must be a regular non-symlink file"))
+        data=open(path,"r") do io
+            stamp(s)=(s.device,s.inode,s.size,s.mtime,s.ctime)
+            before=stamp(stat(io))
+            before==stamp(stat(path)) || throw(ArgumentError("scientific plan path rebound"))
+            bytes=read(io,CONFIGURATOR_PLAN_BYTES+1)
+            !islink(path) && before==stamp(stat(io))==stamp(stat(path)) ||
+                throw(ArgumentError("scientific plan changed during capture"))
+            bytes
+        end
+        length(data)<=CONFIGURATOR_PLAN_BYTES || throw(ArgumentError("scientific plan exceeds byte limit"))
+        return data
+    end
+    selected = if frozen_plan_capture !== nothing
+        frozen_plan_capture.kind===:scientific_plan_v2 || throw(ArgumentError("wrong frozen plan kind"))
+        frozen_plan_capture.bytes
+    elseif frozen_plan_bytes !== nothing
+        length(frozen_plan_bytes)<=CONFIGURATOR_PLAN_BYTES || throw(ArgumentError("scientific plan exceeds byte limit"))
+        copy(frozen_plan_bytes)
+    elseif isfile(path)
+        bounded_bytes(path)
+    else
+        Vector{UInt8}(codeunits(sprint(write_scientific_plan,plan)))
+    end
+    length(selected)<=CONFIGURATOR_PLAN_BYTES || throw(ArgumentError("scientific plan exceeds byte limit"))
+    text=String(copy(selected))
+    isvalid(text) || throw(ArgumentError("scientific plan is not valid UTF-8"))
+    document=_mapping_input(_configurator_json(text;maximum=CONFIGURATOR_PLAN_BYTES),"plan")
+    if frozen_plan_capture !== nothing
+        bytes2hex(sha256(selected))==frozen_plan_capture.plan_sha256 || throw(ArgumentError("frozen plan bytes changed"))
+        canonical_bytes(document)==canonical_bytes(frozen_plan_capture.document) || throw(ArgumentError("frozen plan document changed"))
+    end
+    bound=load_scientific_plan(document)
+    expected=load_scientific_plan(scientific_plan_dict(plan))
+    canonical_bytes(scientific_plan_dict(bound))==canonical_bytes(scientific_plan_dict(expected)) ||
+        throw(ArgumentError("frozen plan differs from selected plan"))
+    if isfile(path)
+        existing=bounded_bytes(path)
+        bytes2hex(sha256(existing))==bytes2hex(sha256(selected)) ||
+            throw(ArgumentError("output directory has different frozen plan bytes"))
+    else
+        _observability_atomic_text(path) do io
+            write(io,selected)
+        end
+    end
+    return _P05PlanCapture((:scientific_plan_v2,selected,document,bytes2hex(sha256(selected))))
+end
+
 function _scientific_json(path, data)
     _observability_atomic_text(path) do io
         _light_json(io, data)
@@ -200,14 +276,14 @@ function _scientific_result_dict(result::ScientificPointResult)
 end
 function _series_document(plan, results, status)
     return Dict{String,Any}(
-        "schema"=>"qcl-negf-series-result-v3",
-        "contract_set"=>"qcl-negf.results.v1",
+        "schema"=>"qcl-negf-series-result-v4",
+        "contract_set"=>"qcl-negf.results.v2",
         "plan_fingerprint"=>plan.fingerprint,
         "plan_scientific_fingerprint"=>scientific_plan_dict(plan)["scientific_fingerprint"],
         "root_definition_id"=>plan.root_definition_id,
         "name"=>plan.name,
         "status"=>String(status),
-        "model_version"=>_software_version(),
+        "model_version"=>_core_package_version(),
         "inclusions"=>_inclusion_dict.(plan.inclusions),
         "executions"=>[
             Dict(
@@ -227,16 +303,21 @@ function _series_document(plan, results, status)
         "points"=>_scientific_result_dict.(results),
     )
 end
+# Version pairs are independent formats; never relabel an existing payload.
+function _scientific_result_pair_supported(result)
+    (get(result,"schema",nothing),get(result,"contract_set",nothing)) in (
+        ("qcl-negf-series-result-v3","qcl-negf.results.v1"),
+        ("qcl-negf-series-result-v4","qcl-negf.results.v2"))
+end
 function _read_series(directory)
     path=isdir(directory) ? joinpath(directory, "series_result.json") : directory
     isfile(path) || throw(
         ArgumentError(
-            "committed scientific series is absent; expected qcl-negf.results.v1",
+            "committed scientific series is absent; expected legacy v3/v1 or native v4/v2",
         ),
     )
     data=_mapping_input(YAML.load_file(path; dicttype = Dict{String,Any}), "series result")
-    get(data, "contract_set", nothing)=="qcl-negf.results.v1" &&
-    get(data, "schema", nothing)=="qcl-negf-series-result-v3" ||
+    _scientific_result_pair_supported(data) ||
         throw(ArgumentError("unsupported series result schema"))
     return data, dirname(abspath(path))
 end
@@ -258,8 +339,7 @@ function write_scientific_plan(io::IO, plan::ScientificPlan)
 end
 """Write a checked public result envelope; scientific status remains in its payload."""
 function write_scientific_result(io::IO, result::AbstractDict)
-    get(result, "contract_set", nothing)=="qcl-negf.results.v1" &&
-    get(result, "schema", nothing)=="qcl-negf-series-result-v3" ||
+    _scientific_result_pair_supported(result) ||
         throw(ArgumentError("unsupported scientific result schema"))
     _light_json(io, result)
     println(io)

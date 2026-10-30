@@ -9,6 +9,9 @@ module QCLApplicationRuntime
 
 using SHA
 using YAML
+import ..QCLNEGFRunner: _resident_writer_preflight, StorageWriteContext,
+    _resident_live_ancestry!, ResidentGrowthRefusal, require_growth!,
+    validate_resident_writer!, _resident_failure!
 
 include("../application/contracts.jl")
 include("../presentation/downsampling.jl")

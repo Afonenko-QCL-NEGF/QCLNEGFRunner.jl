@@ -66,9 +66,9 @@ function _spectral_resolution_sample(H, gamma, nodes, phase)
     count = size(H, 1)
     h = reshape(H, 1, count, count)
     sigma_R = [-(im/2)*gamma[a, b] for e = 1:nodes, m = 1:1, a = 1:count, b = 1:count]
-    options = _DIAGNOSTIC_CORE.ProductionOptions(worker_count = 1)
-    green, _, _ = _DIAGNOSTIC_CORE._retarded_green_production(energies, h, sigma_R; options)
-    spectral = _DIAGNOSTIC_CORE.spectral_function(green)
+    options = QCLNEGF.ProductionOptions(worker_count = 1)
+    green = QCLNEGF.production_retarded_green(energies, h, sigma_R; options).G_R
+    spectral = QCLNEGF.spectral_function(green)
     integral = zeros(ComplexF64, count, count)
     for e in eachindex(energies)
         integral .+= weights[e]/(2π) .* view(spectral, e, 1, :, :)
@@ -76,12 +76,10 @@ function _spectral_resolution_sample(H, gamma, nodes, phase)
     truth = _constant_selfenergy_spectral_integral(H, gamma, lower, upper)
     # The same production marker used during SCBA is checked independently
     # against Rayleigh bounds of this explicitly known constant Γ.
-    total = _DIAGNOSTIC_CORE.SelfEnergyFamily(sigma_R, -sigma_R, sigma_R)
-    markers = _DIAGNOSTIC_CORE.QCLNumerics._sampled_linewidth_markers(
-        spectral,
-        total,
-        (; ε = energies, wᴱ = weights, wᵏ = [1.0]),
-        _DIAGNOSTIC_CORE.SCBAPhysicsMarkerPolicy(),
+    total = QCLNEGF.SelfEnergyFamily(sigma_R, -sigma_R, sigma_R)
+    markers = QCLNEGF.sampled_linewidth_diagnostics(
+        spectral, total, energies, weights, [1.0];
+        policy=QCLNEGF.SCBAPhysicsMarkerPolicy(),
     )
     gamma_eigenvalues = eigvals(Hermitian(gamma))
     bounds = extrema(gamma_eigenvalues ./ step)
@@ -217,7 +215,7 @@ function _multilevel_chain_checks()
     checks = Dict{String,Any}[]
     for energy in fixture.chain_energies_eV
         truth = _full_matrix_chain_oracle(energy, onsite, couplings, sr, sl, sg)
-        chain = _DIAGNOSTIC_CORE.finite_chain_green(
+        chain = QCLNEGF.finite_chain_green(
             energy,
             onsite,
             couplings;
@@ -265,14 +263,13 @@ end
 
 """Bounded Hilbert controls: distinguish algebraic FFT equivalence from quadrature."""
 function _bounded_hilbert_checks()
-    bn = _DIAGNOSTIC_CORE
     energy = collect(range(-1.0, 1.0; length = 129))
     weights = fill(2/128, 129)
     weights[[1, end]] ./= 2
     gamma = reshape(ComplexF64.(2 ./ (1 .+ energy .^ 2)), 129, 1, 1, 1)
-    direct = bn.direct_hilbert_transform(gamma, energy, weights)
-    fft = bn.fft_hilbert_transform(gamma, energy, weights)
-    triangle = bn.product_integration_hilbert_transform(
+    direct = QCLNEGF.direct_hilbert_transform(gamma, energy, weights)
+    fft = QCLNEGF.fft_hilbert_transform(gamma, energy, weights)
+    triangle = QCLNEGF.product_integration_hilbert_transform(
         reshape(ComplexF64[0, 1, 0], 3, 1, 1, 1),
         [0.0, 1.0, 2.0],
         [0.5, 1.0, 0.5],
@@ -289,7 +286,7 @@ function _bounded_hilbert_checks()
     for n in (401, 801)
         e = collect(range(-20.0, 20.0; length = n))
         g = reshape(ComplexF64.(2 ./ (1 .+ e .^ 2)), n, 1, 1, 1)
-        actual = bn.product_integration_hilbert_transform(g, e, fill(40/(n-1), n))
+        actual = QCLNEGF.product_integration_hilbert_transform(g, e, fill(40/(n-1), n))
         mask = abs.(e) .<= 3
         push!(errors, maximum(abs, real.(vec(actual))[mask]-(e ./ (1 .+ e .^ 2))[mask]))
     end

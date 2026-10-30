@@ -70,6 +70,30 @@ function _quantum_raw_screen(data)
     end
 end
 
+_quantum_postphase_residual(h, vectors, values, norm_floor) =
+    norm(h*vectors-vectors*Diagonal(values))/(norm(h)+norm_floor)
+
+function _quantum_projected_eigensystem(h, chi)
+    spectrum = try
+        QCLNEGF.projected_hamiltonian_spectrum(h)
+    catch error
+        error isa DomainError || rethrow()
+        _quantum_refuse("nonhermitian_projected_hamiltonian")
+    end
+    V = copy(spectrum.eigenvectors)
+    spatial = chi*V
+    for state in axes(spatial,2)
+        pivot=argmax(abs.(view(spatial,:,state))); amplitude=spatial[pivot,state]
+        if abs(amplitude)>0
+            phase=conj(amplitude)/abs(amplitude)
+            spatial[:,state].*=phase; V[:,state].*=phase
+        end
+    end
+    return (; values=spectrum.eigenvalues, vectors=V, spatial,
+        hermiticity_residual=spectrum.hermiticity_residual, norm_floor=spectrum.norm_floor,
+        eigen_residual=_quantum_postphase_residual(h,V,spectrum.eigenvalues,spectrum.norm_floor))
+end
+
 # Kept separate so the tiny independent arithmetic oracle does not need a plan,
 # runtime delivery record, NEGFProblem, Green matrix, kernel or output directory.
 function _quantum_basis_payload(config;grid_builder=QCLNEGF.build_grids)
@@ -87,23 +111,14 @@ function _quantum_basis_payload(config;grid_builder=QCLNEGF.build_grids)
     # actual Core pure overload: same onsite/window seam diagonals, no T±.
     h=QCLNEGF.project_hamiltonians(basis,grids,profiles,p,s,zeros(n.N_z))
     h0=Matrix(view(h,1,:,:))
-    residual=norm(h0-h0')/(norm(h0)+QCLNEGF._EFFECTIVE_HAMILTONIAN_NORM_FLOOR)
-    residual<=QCLNEGF._EFFECTIVE_HAMILTONIAN_HERMITICITY_LIMIT ||
-        _quantum_refuse("nonhermitian_projected_hamiltonian")
-    decomposition=eigen(Hermitian(h0))
-    V=copy(decomposition.vectors); spatial=basis.χ*V
-    for state in axes(spatial,2)
-        pivot=argmax(abs.(view(spatial,:,state))); amplitude=spatial[pivot,state]
-        if abs(amplitude)>0
-            phase=conj(amplitude)/abs(amplitude)
-            spatial[:,state].*=phase; V[:,state].*=phase
-        end
-    end
+    projected=_quantum_projected_eigensystem(h0,basis.χ)
+    residual=projected.hermiticity_residual
+    spatial=projected.spatial
     L0_nm=s.L₀_m*1e9; dx_nm=grids.wˣ[1]*L0_nm
     psi=spatial./sqrt(L0_nm); density=abs2.(psi)
     Eref=Float64(ustrip(u"eV",p.E_ref))
-    energies=decomposition.values.*s.E₀_eV .+ Eref
-    eigen_residual=norm(h0*V-V*Diagonal(decomposition.values))/(norm(h0)+QCLNEGF._EFFECTIVE_HAMILTONIAN_NORM_FLOOR)
+    energies=projected.values.*s.E₀_eV .+ Eref
+    eigen_residual=projected.eigen_residual
     norms=vec(sum(density;dims=1)).*dx_nm
     all(isfinite,energies) && all(isfinite,psi) && all(isfinite,density) && all(isfinite,norms) &&
         isfinite(dx_nm) && dx_nm>0 && all(isfinite,grids.x.*L0_nm) &&

@@ -294,7 +294,7 @@ function _write_checkpoint(
         )["checkpoint_boundary"] = "accepted Green/selfenergy evaluation before next mixing step"
         metadata["point_identity_json"] = sprint(_light_json, identity)
         _persist_model_scope!(metadata, solution)
-        attributes(metadata)["package_version"] = _software_version()
+        attributes(metadata)["package_version"] = _core_package_version()
         attributes(metadata)["schema_version"] = _CHECKPOINT_SCHEMA_VERSION
         attributes(metadata)["contract_set"]=_RESULT_CONTRACT_SET
         attributes(metadata)["status"] = String(solution.status)
@@ -341,13 +341,13 @@ function _write_checkpoint(
         scales["m_ref_kg"] = Float64(ustrip(u"kg", problem.scales.m_ref))
 
         inputs = create_group(file, "inputs")
-        inputs["F_bias_V_per_m"] = _volts_per_metre(problem.physical.F_bias)
-        inputs["T_L_K"] = _kelvin(problem.physical.Tᴸ)
-        inputs["T_LO_K"] = _kelvin(problem.physical.Tᴸᴼ)
-        inputs["N_dop_2D_per_m2"] = _per_square_metre(problem.physical.N_dop²ᴰ)
+        inputs["F_bias_V_per_m"] = _runner_volts_per_metre(problem.physical.F_bias)
+        inputs["T_L_K"] = _runner_kelvin(problem.physical.Tᴸ)
+        inputs["T_LO_K"] = _runner_kelvin(problem.physical.Tᴸᴼ)
+        inputs["N_dop_2D_per_m2"] = _runner_per_square_metre(problem.physical.N_dop²ᴰ)
         inputs["f_ion"] = problem.physical.f_ion
-        inputs["z0_m"] = _metres(problem.physical.z₀)
-        inputs["E_ref_eV"] = _electronvolts(problem.physical.E_ref)
+        inputs["z0_m"] = _runner_metres(problem.physical.z₀)
+        inputs["E_ref_eV"] = _runner_electronvolts(problem.physical.E_ref)
         inputs["V_period_V"] = Float64(
             ustrip(
                 u"V",
@@ -355,30 +355,30 @@ function _write_checkpoint(
             ),
         )
         inputs["layer_thickness_m"] =
-            _metres.([layer.d for layer in problem.physical.layers])
+            _runner_metres.([layer.d for layer in problem.physical.layers])
         inputs["layer_Ec_eV"] =
-            _electronvolts.([layer.Eᶜ for layer in problem.physical.layers])
+            _runner_electronvolts.([layer.Eᶜ for layer in problem.physical.layers])
         inputs["layer_mz_relative"] = [layer.mᶻᵣ for layer in problem.physical.layers]
         inputs["layer_mparallel_relative"] =
             [layer.m_parallelᵣ for layer in problem.physical.layers]
         inputs["layer_epsilon_relative"] = [layer.εᵣ for layer in problem.physical.layers]
         inputs["layer_x_Al"] = [layer.x_Al for layer in problem.physical.layers]
         inputs["layer_doped"] = Int8[layer.doped for layer in problem.physical.layers]
-        inputs["interface_m"] = _metres.(problem.physical.interfaces)
+        inputs["interface_m"] = _runner_metres.(problem.physical.interfaces)
         inputs["epsilon_static_relative"] = problem.physical.ε_s
         inputs["epsilon_infinity_relative"] = problem.physical.ε_∞
-        inputs["hbar_omega_LO_eV"] = _electronvolts(problem.physical.ħωᴸᴼ)
-        inputs["q_screen_per_m"] = _inverse_metres(problem.physical.q_s)
-        inputs["q_LO_screen_per_m"] = _inverse_metres(problem.physical.qᴸᴼ_s)
-        inputs["Delta_IFR_m"] = _metres(problem.physical.Δᴵᶠᴿ)
-        inputs["Lambda_IFR_m"] = _metres(problem.physical.Λᴵᶠᴿ)
-        inputs["Xi_eV"] = _electronvolts(problem.physical.Ξ)
+        inputs["hbar_omega_LO_eV"] = _runner_electronvolts(problem.physical.ħωᴸᴼ)
+        inputs["q_screen_per_m"] = _runner_inverse_metres(problem.physical.q_s)
+        inputs["q_LO_screen_per_m"] = _runner_inverse_metres(problem.physical.qᴸᴼ_s)
+        inputs["Delta_IFR_m"] = _runner_metres(problem.physical.Δᴵᶠᴿ)
+        inputs["Lambda_IFR_m"] = _runner_metres(problem.physical.Λᴵᶠᴿ)
+        inputs["Xi_eV"] = _runner_electronvolts(problem.physical.Ξ)
         inputs["rho_m_kg_per_m3"] = Float64(ustrip(u"kg/m^3", problem.physical.ρ_m))
         inputs["v_s_m_per_s"] = Float64(ustrip(u"m/s", problem.physical.v_s))
         inputs["spin_degeneracy"] = problem.physical.g_s
         attributes(inputs)["alloy_enabled"] = problem.scattering.alloy
         if problem.physical.ΔV_alloy !== nothing
-            inputs["DeltaV_alloy_eV"] = _electronvolts(problem.physical.ΔV_alloy)
+            inputs["DeltaV_alloy_eV"] = _runner_electronvolts(problem.physical.ΔV_alloy)
         end
         if problem.physical.Ω₀ !== nothing
             inputs["Omega0_m3"] = Float64(ustrip(u"m^3", problem.physical.Ω₀))
@@ -391,16 +391,16 @@ function _write_checkpoint(
         numerical["Nz"] = n.N_z
         numerical["Nb"] = n.N_b
         numerical["P_basis"] = n.P_basis
-        numerical["E_min_eV"] = _electronvolts(n.E_min)
-        numerical["E_max_eV"] = _electronvolts(n.E_max)
+        numerical["E_min_eV"] = _runner_electronvolts(n.E_min)
+        numerical["E_max_eV"] = _runner_electronvolts(n.E_max)
         numerical["NE"] = n.N_E
-        numerical["M_E_eV"] = _electronvolts(n.M_E)
-        numerical["k_max_per_m"] = _inverse_metres(n.k_max)
+        numerical["M_E_eV"] = _runner_electronvolts(n.M_E)
+        numerical["k_max_per_m"] = _runner_inverse_metres(n.k_max)
         numerical["Nk"] = n.N_k
         numerical["Nphi"] = n.N_φ
-        numerical["qz_max_per_m"] = _inverse_metres(n.qz_max)
+        numerical["qz_max_per_m"] = _runner_inverse_metres(n.qz_max)
         numerical["Nqz"] = n.N_qz
-        numerical["eta_seed_eV"] = _electronvolts(n.η_seed)
+        numerical["eta_seed_eV"] = _runner_electronvolts(n.η_seed)
         numerical["alpha_Sigma"] = solution.options.α_Σ
         numerical["alpha_Poisson"] = solution.options.α_P
         numerical["max_scba"] = solution.options.max_scba

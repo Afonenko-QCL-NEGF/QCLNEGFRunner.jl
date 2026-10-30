@@ -1,5 +1,33 @@
 const _OUTPUT_REPORT_SCHEMA = "qcl-negf-report-v1"
 
+function _p05_prepared_execution(configuration::ResolvedRunConfiguration,prepared)
+    prepared===nothing && _assert_runtime_configuration_consistency(configuration)
+    pair=prepared===nothing ? resolve_execution_strategy(configuration) : prepared
+    pair isa Tuple{ResolvedRunConfiguration,ExecutionPlan} || throw(ArgumentError("invalid prepared execution pair"))
+    selected,plan=pair
+    prepared===nothing || selected===configuration || throw(ArgumentError("prepared configuration identity differs"))
+    # The owning resolver updates raw scheduling fields, but deliberately keeps the
+    # original raw memory ceiling. Only that resource-authority field may differ.
+    raw=_resolve_configuration(deepcopy(selected.raw),selected.provenance)
+    expected=_runtime_complete_configuration_identity(raw)
+    actual=_runtime_complete_configuration_identity(selected)
+    expected["production"]["fields"]["memory_budget_bytes"]=selected.production.memory_budget_bytes
+    canonical_bytes(actual)==canonical_bytes(expected) || throw(ArgumentError("prepared typed/raw configuration differs"))
+    p=selected.production
+    (plan.requested_strategy,plan.parallel_backend,plan.worker_count,plan.energy_chunk,plan.hilbert_columns,plan.residual_chunk)==
+        (selected.execution.strategy,p.parallel_backend,p.worker_count,p.energy_chunk,p.hilbert_columns,p.residual_chunk) ||
+        throw(ArgumentError("prepared execution fields differ"))
+    plan.blas_threads==selected.execution.blas_threads || throw(ArgumentError("prepared BLAS binding differs"))
+    0<plan.memory_budget_bytes<=p.memory_budget_bytes &&
+        (plan.requested_strategy===:manual || plan.memory_budget_bytes==p.memory_budget_bytes) ||
+        throw(ArgumentError("prepared execution memory differs"))
+    estimate=_configured_production_estimate(selected,p)
+    plan.estimated_peak_bytes==estimate.peak_bytes && estimate.peak_bytes<=plan.memory_budget_bytes ||
+        throw(ArgumentError("prepared execution estimate differs"))
+    pair
+end
+
+
 """Static problem, diagnostics, and the resolved
 [YAML input](@ref yaml-run-configurations)."""
 struct ConfiguredProblem
@@ -24,13 +52,15 @@ function _application_progress_stage(reporter::ProgressReporter)
     return reporter.stack[end].stage
 end
 
-_application_progress_metrics(metrics::Vector{SolverMetric}) = ProgressMetric[
-    ProgressMetric(metric.name, metric.value, metric.unit) for metric in metrics
+_application_progress_metrics(metrics::Union{Tuple,AbstractVector{SolverMetric}}) = ProgressMetric[
+    ProgressMetric(metric.name, metric.value, metric.unit;
+        measurement_status=metric.measurement_status, reason=metric.reason) for metric in metrics
 ]
 
 function _progress_event_sink(
     reporter::ProgressReporter;
     solver_event_observer::Function = identity,
+    phase_observer::Union{Nothing,_NativePhaseObserver} = nothing,
 )
     return function (event::SolverEvent)
         # SolverEvent is the canonical in-process observability contract.
@@ -38,7 +68,7 @@ function _progress_event_sink(
         # adapter renders terminal/CSV/dashboard snapshots.
         current = _application_progress_stage(reporter)
         if event.action in (:phase_begin, :phase_end)
-            _record_native_phase!(reporter.machine_directory, event)
+            phase_observer === nothing || _enqueue_phase!(phase_observer, event)
             solver_event_observer(event)
             return true
         elseif event.action === :begin
@@ -122,10 +152,11 @@ function _production_options_with_reporter(
     options::ProductionOptions,
     reporter::ProgressReporter;
     solver_event_observer::Function = identity,
+    phase_observer::Union{Nothing,_NativePhaseObserver} = nothing,
 )
     return with_production_options(
         options;
-        event_sink = _progress_event_sink(reporter; solver_event_observer),
+        event_sink = _progress_event_sink(reporter; solver_event_observer,phase_observer),
         phase_request = _native_phase_request(reporter.machine_directory),
     )
 end
@@ -177,12 +208,20 @@ production construction.  The later SCBA backend choice is independent.
 See [Optimization decision tree](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md) and
 [Microscopic kernels](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md).
 """
+function _configured_public_memory_preflight(numerical::NumericalParameters,
+    scattering::ScatteringOptions, production_options::ProductionOptions)
+    estimate = QCLNEGF.estimate_production_memory(numerical, scattering; options=production_options)
+    estimate.peak_bytes <= production_options.memory_budget_bytes || throw(ArgumentError(
+        "estimated production peak $(estimate.peak_bytes) bytes exceeds the resolved execution budget $(production_options.memory_budget_bytes) bytes"))
+    return estimate
+end
+
 function build_configured_problem(configuration::ResolvedRunConfiguration)
     algorithms = configuration.algorithms
     # Fail before grid/basis/kernel allocation for every backend. The common
     # typed scattering port below owns direct/tabulated dispatch and format
     # validation; orchestration does not branch on concrete implementations.
-    _preflight_production_memory(
+    _configured_public_memory_preflight(
         configuration.numerical,
         configuration.scattering,
         configuration.production,
@@ -221,7 +260,7 @@ function _save_configuration_provenance(
         joinpath(output_directory, "algorithm_manifest.yaml"),
         Dict{String,Any}(
             "package" => "QCLNEGFRunner",
-            "package_version" => _software_version(),
+            "package_version" => _runner_package_version(),
             "run_name" => configuration.name,
             "declared_classification" => String(configuration.classification),
             "runtime" => Dict{String,Any}(
@@ -280,7 +319,7 @@ function _save_output_policy(
         "schema" => _OUTPUT_REPORT_SCHEMA,
         "schema_version" => 1,
         "package" => "QCLNEGFRunner",
-        "package_version" => _software_version(),
+        "package_version" => _runner_package_version(),
         "run_name" => configuration.name,
         "output_directory" => abspath(output_directory),
         "fields" => Dict{String,Any}(
@@ -462,7 +501,7 @@ function _run_educational_sweep(
             index += 1
             voltage_mV = Float64(ustrip(u"mV", uconvert(u"mV", voltage)))
             label =
-                "T=$(compact_number(_kelvin(temperature))) K, " *
+                "T=$(compact_number(_runner_kelvin(temperature))) K, " *
                 "Vₚ=$(compact_number(voltage_mV)) mV"
             begin_progress_stage!(reporter, :point; label, iteration = index, total)
             problem = retarget_problem(
@@ -499,9 +538,9 @@ function _run_educational_sweep(
                 push!(
                     records,
                     ProductionSweepRecord(
-                        _kelvin(temperature),
+                        _runner_kelvin(temperature),
                         Float64(ustrip(u"V", uconvert(u"V", voltage))),
-                        _volts_per_metre(problem.physical.F_bias),
+                        _runner_volts_per_metre(problem.physical.F_bias),
                         NaN,
                         false,
                         :failed,
@@ -548,7 +587,7 @@ function _run_educational_sweep(
             configuration.output.save_full_state && _atomic_checkpoint(checkpoint, solution)
             current =
                 Float64(ustrip(u"A/m^2", solution.observables[:electron_flow_current]))
-            metrics = _solution_report_metrics(solution)
+            metrics = QCLNEGF.solution_metric_diagnostics(solution).summary_metrics
             photon_energies = _configured_photon_energies(configuration.study)
             if photon_energies !== nothing && solution.converged
                 _configured_optical_response!(
@@ -567,9 +606,9 @@ function _run_educational_sweep(
             push!(
                 records,
                 ProductionSweepRecord(
-                    _kelvin(temperature),
+                    _runner_kelvin(temperature),
                     Float64(ustrip(u"V", uconvert(u"V", voltage))),
-                    _volts_per_metre(problem.physical.F_bias),
+                    _runner_volts_per_metre(problem.physical.F_bias),
                     current,
                     solution.converged,
                     solution.status,
@@ -640,11 +679,24 @@ function run_from_configuration(
     configuration_directory::AbstractString;
     solver_event_observer::Function = identity,
     resume_from_checkpoint::Union{Nothing,Bool} = nothing,
+    phase_observer::Union{Nothing,_NativePhaseObserver} = nothing,
+    observer_admission::Union{Nothing,_P05ObserverAdmission}=nothing,
+    prepared_execution::Union{Nothing,Tuple{ResolvedRunConfiguration,ExecutionPlan}}=nothing,
+    frozen_plan_bytes::Union{Nothing,Vector{UInt8}}=nothing,
+    source_graph::Union{Nothing,AbstractDict}=nothing,
+    parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
+    run_id::Union{Nothing,AbstractString}=nothing,
+    native_publication_sink::Union{Nothing,Function}=nothing,
+    final_presentation_sink::Union{Nothing,Function}=nothing,
+    native_context::Union{Nothing,NamedTuple}=nothing,
 )
+    prepared_execution===nothing || throw(ArgumentError("prepared execution requires loaded configuration identity"))
     return run_from_configuration(
         load_run_configuration(configuration_directory);
         solver_event_observer,
         resume_from_checkpoint,
+        phase_observer,
+        observer_admission,frozen_plan_bytes,source_graph,parent_checkpoint,run_id,native_publication_sink,final_presentation_sink,native_context,
     )
 end
 
@@ -652,7 +704,38 @@ function run_from_configuration(
     configuration::ResolvedRunConfiguration;
     solver_event_observer::Function = identity,
     resume_from_checkpoint::Union{Nothing,Bool} = nothing,
+    phase_observer::Union{Nothing,_NativePhaseObserver} = nothing,
+    observer_admission::Union{Nothing,_P05ObserverAdmission}=nothing,
+    prepared_execution::Union{Nothing,Tuple{ResolvedRunConfiguration,ExecutionPlan}}=nothing,
+    frozen_plan_bytes::Union{Nothing,Vector{UInt8}}=nothing,
+    source_graph::Union{Nothing,AbstractDict}=nothing,
+    parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
+    run_id::Union{Nothing,AbstractString}=nothing,
+    native_publication_sink::Union{Nothing,Function}=nothing,
+    final_presentation_sink::Union{Nothing,Function}=nothing,
+    native_context::Union{Nothing,NamedTuple}=nothing,
 )
+    configuration,execution_plan=_p05_prepared_execution(configuration,prepared_execution)
+    owns_observer_epoch=observer_admission===nothing
+    owns_observer_epoch && (observer_admission=_p05_begin_observers!(;phase_request=nothing,scalar_request=nothing))
+    try
+    # The actual52 native consumer gate stays in place. Preparation and observer ownership
+    # must already be coherent; this extension does not authorize a numerical entry.
+    roots=(;entry=(configuration,native_context,source_graph),resources=(execution_plan,configuration.production,observer_admission),
+        construction=(),continuation=(parent_checkpoint,),history=(),observers=(phase_observer,solver_event_observer,native_publication_sink,final_presentation_sink),
+        inputs_publication=(frozen_plan_bytes,run_id))
+    grant=min(execution_plan.memory_budget_bytes,configuration.production.memory_budget_bytes)
+    available=_p05_input_metadata_limit(grant,roots;observer_admission)
+    execution_plan.estimated_peak_bytes<=available || throw(ArgumentError("observer payload exceeds configured grant"))
+    throw(ArgumentError("native5_configured_consumer_unavailable: typed Results/AiiDA/Q1 transport qualification pending"))
+    source_graph=_require_source_graph(source_graph)
+    configuration.execution.solver_backend===:production || throw(ArgumentError("native5_educational_consumer_unavailable"))
+    # Capture the original before the operational execution-plan file is written.
+    original_plan_bytes=native_context===nothing ?
+        (frozen_plan_bytes===nothing ? Vector{UInt8}(codeunits(YAML.write(
+            QCLApplicationRuntime._sweep_plan_dict(configured_nested_sweep_plan(configuration))))) : frozen_plan_bytes) :
+        native_context.plan_capture.bytes
+    frozen_plan_bytes===nothing || original_plan_bytes==frozen_plan_bytes || throw(ArgumentError("native plan inputs conflict"))
     study = configuration.study
     study.mode in (:single, :sweep) || throw(
         ArgumentError(
@@ -688,7 +771,6 @@ function run_from_configuration(
             ),
         )
     end
-    configuration, execution_plan = resolve_execution_strategy(configuration)
     configure_execution!(configuration)
     output_directory = configuration_output_directory(configuration)
     mkpath(output_directory)
@@ -761,9 +843,9 @@ function run_from_configuration(
                 configuration.production,
                 reporter;
                 solver_event_observer,
+                phase_observer,
             )
             photon_energies = _configured_photon_energies(configuration.study)
-            storage=_configured_storage_observers(configuration, output_directory)
             sweep = run_production_sweep(
                 configured.problem,
                 configuration.study.voltages_per_period,
@@ -775,16 +857,14 @@ function run_from_configuration(
                 checkpoint_prefix = configuration.output.checkpoint_prefix,
                 save_full_state = configuration.output.save_full_state,
                 save_csv = configuration.output.save_csv,
-                solution_observer = storage.solution,
-                checkpoint_observer = storage.checkpoint,
-                checkpoint_request = storage.request,
-                history_observer = storage.history,
                 fail_fast = configuration.output.fail_fast,
                 photon_energies = photon_energies,
                 optical_edge_tolerance = configuration.study.optical_edge_tolerance,
                 incompatible_checkpoint = :error,
                 domain_adaptation = configuration.domain_adaptation,
                 kernel_options = configuration.kernels,
+                observer_admission,execution_plan=execution_plan,source_configuration=configuration,frozen_plan_bytes=original_plan_bytes,
+                source_graph,parent_checkpoint,run_id,native_publication_sink,final_presentation_sink,native_context,
             )
         end
         end_progress_stage!(reporter, :study; status = :completed, message = "run finished")
@@ -801,6 +881,11 @@ function run_from_configuration(
         progress_csv,
         dashboard_path,
     )
+    finally
+        phase_observer=nothing;runtime_options=nothing;storage=nothing;roots=nothing
+        native_publication_sink=nothing;final_presentation_sink=nothing;native_context=nothing;original_plan_bytes=nothing
+        owns_observer_epoch && _p05_end_observers!(observer_admission)
+    end
 end
 
 

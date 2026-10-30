@@ -8,6 +8,9 @@ end
 
 execute_point!(runner::FunctionPointRunner, context) = runner.callback(context)
 
+_native_point_source(::AbstractPointRunner)=nothing
+_verify_completed_point(::AbstractPointRunner,repository,definition,point,result)=nothing
+
 function execute_point!(runner::AbstractPointRunner, context)
     throw(MethodError(execute_point!, (runner, context)))
 end
@@ -46,7 +49,11 @@ mutable struct PointExecutionContext
     tracer::RuntimeTracer
     retention::IterationRetentionPolicy
     resume_checkpoint::Union{Nothing,LoadedCheckpoint}
+    phase_source::Union{Nothing,Dict{String,Any}}
 end
+
+PointExecutionContext(definition,point,attempt,repository,checkpoint_codec,tracer,retention,resume_checkpoint) =
+    PointExecutionContext(definition,point,attempt,repository,checkpoint_codec,tracer,retention,resume_checkpoint,nothing)
 
 """Commit a solver checkpoint through the application checkpoint port."""
 function checkpoint!(
@@ -142,6 +149,8 @@ function _point_status_mapping(
     message::AbstractString = "",
     checkpoint = nothing,
     result_sha256 = nothing,
+    phase_source = nothing,
+    native_source = nothing,
 )
     checkpoint_mapping =
         checkpoint === nothing ? nothing :
@@ -152,7 +161,7 @@ function _point_status_mapping(
             "iteration" => checkpoint.iteration,
             "sha256" => checkpoint.sha256,
         )
-    return Dict{String,Any}(
+    result = Dict{String,Any}(
         "schema" => "reference2019-point-status-v1",
         "run_id" => definition.identity.run_id,
         "point_id" => point.point_id,
@@ -166,6 +175,44 @@ function _point_status_mapping(
         "updated_unix_seconds" => Float64(time()),
         "latest_checkpoint" => checkpoint_mapping,
     )
+    if native_source!==nothing
+        result["schema"]="qcl-negf-configured-point-status-v2"
+        result["native_source"]=deepcopy(native_source)
+        result["phase_source"]=phase_source===nothing ? Dict{String,Any}("status"=>"disabled","session_id"=>nothing,"current_path"=>nothing,"reason"=>"telemetry_disabled") : deepcopy(phase_source)
+        result["latest_checkpoint"]=nothing
+    else
+        phase_source===nothing || (result["phase_source"]=deepcopy(phase_source))
+    end
+    return result
+end
+
+function _set_context_phase_source!(context::PointExecutionContext,source::AbstractDict)
+    Set(keys(source))==Set(("status","session_id","current_path","reason")) ||
+        throw(ArgumentError("invalid phase source fields"))
+    status=source["status"]
+    status in ("available","disabled","unavailable") || throw(ArgumentError("invalid phase source status"))
+    if status=="available"
+        source["session_id"] isa AbstractString && !isempty(source["session_id"]) &&
+        source["current_path"] isa AbstractString && !isempty(source["current_path"]) && source["reason"]===nothing ||
+            throw(ArgumentError("invalid available phase source"))
+    else
+        source["session_id"]===nothing && source["current_path"]===nothing &&
+        source["reason"] isa AbstractString && !isempty(source["reason"]) ||
+            throw(ArgumentError("invalid unavailable phase source"))
+    end
+    context.phase_source=deepcopy(Dict{String,Any}(source))
+    return nothing
+end
+
+function _publish_context_phase_source!(context::PointExecutionContext)
+    context.phase_source===nothing && return nothing
+    status=read_point_status(context.repository,context.definition.identity.run_id,context.point.point_id)
+    status isa AbstractDict && get(status,"attempt",nothing)==context.attempt && get(status,"status",nothing)=="running" ||
+        throw(ArgumentError("point status does not match current attempt"))
+    updated=deepcopy(status)
+    updated["phase_source"]=deepcopy(context.phase_source)
+    write_point_status!(context.repository,context.definition.identity.run_id,context.point.point_id,updated)
+    return nothing
 end
 
 function _write_recovered_interruption!(
@@ -183,6 +230,7 @@ function _write_recovered_interruption!(
         attempt;
         message = "recovered after an unclean application exit",
         checkpoint,
+        phase_source = get(prior,"phase_source",nothing),
     )
     write_point_status!(repository, definition.identity.run_id, point.point_id, status)
     return status
@@ -191,7 +239,8 @@ end
 function _result_mapping(
     context::PointExecutionContext,
     result::PointExecutionResult,
-    checkpoint,
+    checkpoint;
+    native_source=nothing,
 )
     reference =
         checkpoint === nothing ? nothing :
@@ -203,7 +252,7 @@ function _result_mapping(
             "sha256" => checkpoint.sha256,
         )
     return Dict{String,Any}(
-        "schema" => "reference2019-point-result-v1",
+        "schema" => native_source===nothing ? "reference2019-point-result-v1" : "qcl-negf-configured-point-result-v2",
         "run_id" => context.definition.identity.run_id,
         "point_id" => context.point.point_id,
         "ordinal" => context.point.ordinal,
@@ -213,7 +262,7 @@ function _result_mapping(
         "status" => String(result.status),
         "result" => deepcopy(result.metadata),
         "artifacts" => deepcopy(result.artifacts),
-        "latest_checkpoint" => reference,
+        "latest_checkpoint" => native_source===nothing ? reference : nothing,
     )
 end
 
@@ -325,6 +374,7 @@ function run_sweep!(
     disk_model::Union{Nothing,DiskBudgetModel} = nothing,
     iterations_per_point::Union{Nothing,Integer} = nothing,
 )
+    native_template=_native_point_source(runner)
     existed = initialize_run!(repository, definition)
     existed &&
         !resume &&
@@ -404,11 +454,8 @@ function run_sweep!(
                         "completed point $(point.point_id) " * "result digest mismatch",
                     ),
                 )
-                verify_result_artifacts!(
-                    repository,
-                    definition.identity.run_id,
-                    get(stored_result, "artifacts", Dict{String,Any}()),
-                )
+                verify_result_artifacts!(repository,definition.identity.run_id,get(stored_result,"artifacts",Dict{String,Any}()))
+                _verify_completed_point(runner,repository,definition,point,stored_result)
                 skipped += 1
                 emit_runtime_event!(
                     tracer,
@@ -437,7 +484,7 @@ function run_sweep!(
             end
 
             loaded =
-                resume ?
+                resume && native_template===nothing ?
                 load_latest_checkpoint(
                     repository,
                     checkpoint_codec,
@@ -475,7 +522,7 @@ function run_sweep!(
                 attempt;
                 message = loaded === nothing ? "fresh start" :
                           "resuming checkpoint generation $(reference.generation)",
-                checkpoint = reference,
+                checkpoint = reference,native_source=native_template,
             )
             write_point_status!(
                 repository,
@@ -513,18 +560,14 @@ function run_sweep!(
                         "PointExecutionResult",
                     ),
                 )
-                latest = load_latest_checkpoint(
-                    repository,
-                    checkpoint_codec,
-                    definition.identity.run_id,
-                    point.point_id,
-                )
+                latest = native_template===nothing ? load_latest_checkpoint(
+                    repository,checkpoint_codec,definition.identity.run_id,point.point_id) : nothing
                 latest_reference = latest === nothing ? nothing : latest.reference
                 write_point_result!(
                     repository,
                     definition.identity.run_id,
                     point.point_id,
-                    _result_mapping(context, result, latest_reference),
+                    _result_mapping(context,result,latest_reference;native_source=native_template===nothing ? nothing : result.metadata["native_source"]),
                 )
                 verify_result_artifacts!(
                     repository,
@@ -547,6 +590,8 @@ function run_sweep!(
                     message = "runner returned",
                     checkpoint = latest_reference,
                     result_sha256 = result_digest,
+                    phase_source = context.phase_source,
+                    native_source=native_template===nothing ? nothing : result.metadata["native_source"],
                 )
                 write_point_status!(
                     repository,
@@ -557,12 +602,8 @@ function run_sweep!(
                 end_span!(tracer, token; status = result.status)
             catch error
                 _fail_span_tree!(tracer, token, error)
-                latest = load_latest_checkpoint(
-                    repository,
-                    checkpoint_codec,
-                    definition.identity.run_id,
-                    point.point_id,
-                )
+                latest = native_template===nothing ? load_latest_checkpoint(
+                    repository,checkpoint_codec,definition.identity.run_id,point.point_id) : nothing
                 latest_reference = latest === nothing ? nothing : latest.reference
                 is_interruption = error isa Union{SweepInterrupted,InterruptException}
                 status = is_interruption ? :interrupted : :failed
@@ -573,6 +614,7 @@ function run_sweep!(
                     attempt;
                     message = sprint(showerror, error),
                     checkpoint = latest_reference,
+                    phase_source = context.phase_source,native_source=native_template,
                 )
                 write_point_status!(
                     repository,

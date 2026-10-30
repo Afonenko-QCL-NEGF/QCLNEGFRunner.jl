@@ -209,6 +209,14 @@ QCLNEGFRunner.QCLScientificWorkflow.is_scientific_definition
 QCLNEGFRunner.configured_resource_plan
 ```
 
+## Progress metrics and CSV append
+
+Progress metrics retain their value, measurement status and reason. An unavailable value is
+represented as missing rather than zero. The local progress CSV includes `measurement_status`
+and `reason` columns. `ProgressReporter(path; append=true)` accepts a nonempty existing CSV only
+when its header matches the current format; otherwise it raises `ArgumentError` before writing.
+Choose a new CSV path for an older format. Empty or missing files receive the current header.
+
 ## Numerical solve adapter
 
 `QCLNEGF.solve_production` accepts an in-memory checkpoint callback. Runner adds durable checkpoint
@@ -288,6 +296,13 @@ existing verified handle. It never searches for another pointer or falls back af
 history-only live manifest with `checkpoint=null` has no exact recovery capability and is refused.
 Use the explicitly selected recovery pointer for the last exact cutoff. A pointer that changes
 during verification is refused; updates after return do not change the captured immutable StateRef.
+
+The `run-plan` CLI selects a parent with all three options `--parent-pointer`,
+`--parent-identity`, and `--parent-metadata-bytes`. The pointer is relative to the output artifact
+root; the identity file contains the full source-attempt identity. The byte allowance is an explicit
+positive integer and is shared by the P04 metadata reads described below. Legacy `--recovery-bundle`
+is rejected. Exact continuation remains unavailable until the Core consumer is connected; moving a
+verified closure to a fresh scratch root requires the separate P07 import capability.
 
 `maximum_metadata_bytes` is one aggregate input-read allowance for the call: pointer bytes, every
 referenced JSON document, the bootstrap manifest and its repeated verified read, parsed native

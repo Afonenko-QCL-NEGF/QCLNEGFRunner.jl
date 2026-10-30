@@ -8,7 +8,7 @@ include("../support/numerical_convergence.jl")
         event_sink = event -> (push!(events, event); true),
         outer_iteration = 3,
     )
-    QCLNEGFRunner._begin_solver_stage(options, :scba; iteration = 20, total = 80)
+    QCLNEGFRunner._runner_begin_stage(options, :scba; iteration = 20, total = 80)
     @test only(events).iteration == 20
     @test only(events).total - only(events).iteration == 60
     @test QCLNEGFRunner.with_production_options(options).outer_iteration == 3

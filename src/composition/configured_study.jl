@@ -306,7 +306,8 @@ function _structure_signature(configuration::ResolvedRunConfiguration)
            _signature_record("PhysicalStructure", physical, structural_fields)
 end
 
-_fatal_diagnostic_error(error) = error isa InterruptException
+_fatal_diagnostic_error(error) = error isa InterruptException ||
+    (error isa ArgumentError && startswith(error.msg,"native5_"))
 
 function _write_diagnostic_failure(
     output_directory::AbstractString;
@@ -361,7 +362,7 @@ function _failed_diagnostic_sweep(
             push!(
                 records,
                 ProductionSweepRecord(
-                    _kelvin(temperature),
+                    _runner_kelvin(temperature),
                     Float64(ustrip(u"V", uconvert(u"V", voltage))),
                     NaN,
                     NaN,
@@ -402,10 +403,11 @@ function _run_diagnostic_invocation(
     invocation_kind::Symbol,
     identity::AbstractString,
     runner::Function = run_from_configuration,
+    source_graph::Union{Nothing,AbstractDict}=nothing,
 )
     started = time_ns()
     try
-        result = runner(configuration)
+        result = runner===run_from_configuration ? runner(configuration;source_graph) : runner(configuration)
         return (sweep = result.sweep, failure_path = "")
     catch error
         elapsed = (time_ns() - started) * 1.0e-9
@@ -701,12 +703,12 @@ Only after all calculations finish is the expert Markdown/CSV report assembled.
 
 See [Expert comparison workflow](@ref expert-comparison-workflow).
 """
-function run_comparison_study(configuration_directory::AbstractString)
+function run_comparison_study(configuration_directory::AbstractString;source_graph::Union{Nothing,AbstractDict}=nothing)
     study = load_run_configuration(configuration_directory)
-    return run_comparison_study(study, _find_profile_root(configuration_directory))
+    return run_comparison_study(study, _find_profile_root(configuration_directory);source_graph)
 end
 
-function run_comparison_study(study::ResolvedRunConfiguration, profile_root::AbstractString)
+function run_comparison_study(study::ResolvedRunConfiguration, profile_root::AbstractString;source_graph::Union{Nothing,AbstractDict}=nothing)
     @warn "run_comparison_study is a deprecated combined compute wrapper: executes declared methods × repetitions. Use plan/run-plan for create/execute and compare_saved_results/CLI compare for saved analysis."
     study.study.mode === :comparison ||
         throw(ArgumentError("run_comparison_study requires study.mode: comparison"))
@@ -732,7 +734,7 @@ function run_comparison_study(study::ResolvedRunConfiguration, profile_root::Abs
             invocation = _run_diagnostic_invocation(
                 configured;
                 invocation_kind = :method_repetition,
-                identity = "$(method_metadata.profile)/repetition_$repetition",
+                identity = "$(method_metadata.profile)/repetition_$repetition",source_graph,
             )
             push!(repetition_results, invocation.sweep)
         end
@@ -1021,14 +1023,15 @@ Markdown summary.  Empty axis lists are skipped.
 See [Expert comparison workflow](@ref expert-comparison-workflow) and
 [Physics-first tests](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
 """
-function run_convergence_study(configuration_directory::AbstractString)
+function run_convergence_study(configuration_directory::AbstractString;source_graph::Union{Nothing,AbstractDict}=nothing)
     study = load_run_configuration(configuration_directory)
-    return run_convergence_study(study, _find_profile_root(configuration_directory))
+    return run_convergence_study(study, _find_profile_root(configuration_directory);source_graph)
 end
 
 function run_convergence_study(
     study::ResolvedRunConfiguration,
-    profile_root::AbstractString,
+    profile_root::AbstractString;
+    source_graph::Union{Nothing,AbstractDict}=nothing,
 )
     study.study.mode === :comparison ||
         throw(ArgumentError("run_convergence_study requires study.mode: comparison"))
@@ -1059,7 +1062,7 @@ function run_convergence_study(
         invocation = _run_diagnostic_invocation(
             configured;
             invocation_kind = :convergence_grid,
-            identity = request.grid_id,
+            identity = request.grid_id,source_graph,
         )
         sweep = _materialize_diagnostic_summary(invocation.sweep, directory)
         descriptor = MethodDescriptor(
@@ -1142,9 +1145,9 @@ end
 
 See [Expert comparison workflow](@ref expert-comparison-workflow).
 """
-function run_production_study(configuration_directory::AbstractString)
+function run_production_study(configuration_directory::AbstractString;source_graph::Union{Nothing,AbstractDict}=nothing)
     study = load_run_configuration(configuration_directory)
-    return run_production_study(study, _find_profile_root(configuration_directory))
+    return run_production_study(study, _find_profile_root(configuration_directory);source_graph)
 end
 
 function _run_study_phase(
@@ -1177,13 +1180,13 @@ function _run_study_phase(
 end
 
 
-function run_production_study(study::ResolvedRunConfiguration, profile_root::AbstractString)
+function run_production_study(study::ResolvedRunConfiguration, profile_root::AbstractString;source_graph::Union{Nothing,AbstractDict}=nothing)
     output = configuration_output_directory(study)
     methods = _run_study_phase(study, output, :method_comparison) do
-        run_comparison_study(study, profile_root)
+        run_comparison_study(study, profile_root;source_graph)
     end
     convergence = _run_study_phase(study, output, :grid_convergence) do
-        run_convergence_study(study, profile_root)
+        run_convergence_study(study, profile_root;source_graph)
     end
     method_catalog = methods === nothing ? "" : methods.catalog
     method_report =

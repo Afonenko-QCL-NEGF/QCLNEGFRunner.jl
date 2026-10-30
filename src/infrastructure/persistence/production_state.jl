@@ -40,8 +40,12 @@ function _p04_artifact_fields(root,item)
         _p04_registry[]=_p04_parse(read(joinpath(@__DIR__,"../../../schema/results-contract-set.json"),String))
     end
     registry=_p04_registry[]
-    _p04_require(registry["contract_set"]==_P04_CONTRACT && any(a->a["role"]==item["role"] &&
-        a["media_type"]==item["media_type"] && item["schema"] in a["schemas"],registry["artifacts"]) &&
+    plan_leaf=item["role"]=="plan" && item["profile"]=="science" &&
+        item["dependencies"] isa AbstractVector && isempty(item["dependencies"]) &&
+        (item["schema"],item["media_type"]) in (("qcl-negf-scientific-plan-v2","application/json"),
+            ("qcl-negf.nested-sweep-plan.v1","text/plain"))
+    _p04_require(registry["contract_set"]==_P04_CONTRACT && (plan_leaf || any(a->a["role"]==item["role"] &&
+        a["media_type"]==item["media_type"] && item["schema"] in a["schemas"],registry["artifacts"])) &&
         item["profile"] in ("science","full-state","both","local") && item["dependencies"] isa AbstractVector &&
         all(d->d isa String && !isempty(d),item["dependencies"]),"unsupported artifact role/media/schema/profile")
     _p04_path(root,item["path"])
@@ -407,12 +411,12 @@ function _validate_restart_metadata(file, problem::NEGFProblem)
     _require_restart_equal("N_b", Int(read(numerical["Nb"])), n.N_b)
     _require_restart_equal("P_basis", Int(read(numerical["P_basis"])), n.P_basis)
     for (label, dataset, expected) in (
-        ("E_min", "E_min_eV", _electronvolts(n.E_min)),
-        ("E_max", "E_max_eV", _electronvolts(n.E_max)),
-        ("M_E", "M_E_eV", _electronvolts(n.M_E)),
-        ("k_max", "k_max_per_m", _inverse_metres(n.k_max)),
-        ("qz_max", "qz_max_per_m", _inverse_metres(n.qz_max)),
-        ("eta_seed", "eta_seed_eV", _electronvolts(n.η_seed)),
+        ("E_min", "E_min_eV", _runner_electronvolts(n.E_min)),
+        ("E_max", "E_max_eV", _runner_electronvolts(n.E_max)),
+        ("M_E", "M_E_eV", _runner_electronvolts(n.M_E)),
+        ("k_max", "k_max_per_m", _runner_inverse_metres(n.k_max)),
+        ("qz_max", "qz_max_per_m", _runner_inverse_metres(n.qz_max)),
+        ("eta_seed", "eta_seed_eV", _runner_electronvolts(n.η_seed)),
     )
         _require_restart_close(label, Float64(read(numerical[dataset])), expected)
     end
@@ -437,19 +441,19 @@ function _validate_restart_metadata(file, problem::NEGFProblem)
         expected_voltage,
     )
     for (label, dataset, expected) in (
-        ("field", "F_bias_V_per_m", _volts_per_metre(p.F_bias)),
-        ("sheet doping", "N_dop_2D_per_m2", _per_square_metre(p.N_dop²ᴰ)),
+        ("field", "F_bias_V_per_m", _runner_volts_per_metre(p.F_bias)),
+        ("sheet doping", "N_dop_2D_per_m2", _runner_per_square_metre(p.N_dop²ᴰ)),
         ("ionization", "f_ion", p.f_ion),
-        ("coordinate origin", "z0_m", _metres(p.z₀)),
-        ("energy reference", "E_ref_eV", _electronvolts(p.E_ref)),
+        ("coordinate origin", "z0_m", _runner_metres(p.z₀)),
+        ("energy reference", "E_ref_eV", _runner_electronvolts(p.E_ref)),
         ("static permittivity", "epsilon_static_relative", p.ε_s),
         ("infinite-frequency permittivity", "epsilon_infinity_relative", p.ε_∞),
-        ("LO energy", "hbar_omega_LO_eV", _electronvolts(p.ħωᴸᴼ)),
-        ("screening", "q_screen_per_m", _inverse_metres(p.q_s)),
-        ("LO screening", "q_LO_screen_per_m", _inverse_metres(p.qᴸᴼ_s)),
-        ("IFR height", "Delta_IFR_m", _metres(p.Δᴵᶠᴿ)),
-        ("IFR length", "Lambda_IFR_m", _metres(p.Λᴵᶠᴿ)),
-        ("deformation potential", "Xi_eV", _electronvolts(p.Ξ)),
+        ("LO energy", "hbar_omega_LO_eV", _runner_electronvolts(p.ħωᴸᴼ)),
+        ("screening", "q_screen_per_m", _runner_inverse_metres(p.q_s)),
+        ("LO screening", "q_LO_screen_per_m", _runner_inverse_metres(p.qᴸᴼ_s)),
+        ("IFR height", "Delta_IFR_m", _runner_metres(p.Δᴵᶠᴿ)),
+        ("IFR length", "Lambda_IFR_m", _runner_metres(p.Λᴵᶠᴿ)),
+        ("deformation potential", "Xi_eV", _runner_electronvolts(p.Ξ)),
         ("mass density", "rho_m_kg_per_m3", Float64(ustrip(u"kg/m^3", p.ρ_m))),
         ("sound speed", "v_s_m_per_s", Float64(ustrip(u"m/s", p.v_s))),
     )
@@ -458,12 +462,12 @@ function _validate_restart_metadata(file, problem::NEGFProblem)
     _require_restart_close(
         "lattice temperature",
         Float64(read(inputs["T_L_K"])),
-        _kelvin(p.Tᴸ),
+        _runner_kelvin(p.Tᴸ),
     )
     _require_restart_close(
         "LO temperature",
         Float64(read(inputs["T_LO_K"])),
-        _kelvin(p.Tᴸᴼ),
+        _runner_kelvin(p.Tᴸᴼ),
     )
     _require_restart_equal("spin degeneracy", Int(read(inputs["spin_degeneracy"])), p.g_s)
     _require_restart_equal(
@@ -472,13 +476,13 @@ function _validate_restart_metadata(file, problem::NEGFProblem)
         problem.scattering.alloy,
     )
     layer_arrays = (
-        ("layer thickness", "layer_thickness_m", _metres.([x.d for x in p.layers])),
-        ("layer Ec", "layer_Ec_eV", _electronvolts.([x.Eᶜ for x in p.layers])),
+        ("layer thickness", "layer_thickness_m", _runner_metres.([x.d for x in p.layers])),
+        ("layer Ec", "layer_Ec_eV", _runner_electronvolts.([x.Eᶜ for x in p.layers])),
         ("layer mz", "layer_mz_relative", [x.mᶻᵣ for x in p.layers]),
         ("layer mparallel", "layer_mparallel_relative", [x.m_parallelᵣ for x in p.layers]),
         ("layer epsilon", "layer_epsilon_relative", [x.εᵣ for x in p.layers]),
         ("layer xAl", "layer_x_Al", [x.x_Al for x in p.layers]),
-        ("interfaces", "interface_m", _metres.(p.interfaces)),
+        ("interfaces", "interface_m", _runner_metres.(p.interfaces)),
     )
     for (label, dataset, expected) in layer_arrays
         _require_restart_array_close(label, read(inputs[dataset]), expected)
@@ -495,7 +499,7 @@ function _validate_restart_metadata(file, problem::NEGFProblem)
         _require_restart_close(
             "alloy potential",
             Float64(read(inputs["DeltaV_alloy_eV"])),
-            _electronvolts(p.ΔV_alloy),
+            _runner_electronvolts(p.ΔV_alloy),
         )
         _require_restart_close(
             "alloy volume",
@@ -609,7 +613,7 @@ function _load_production_restart(
     return h5open(path, "r") do file
         _validate_restart_metadata(file, problem)
         metadata = file["metadata"]
-        String(read_attribute(metadata, "package_version")) == _software_version() ||
+        String(read_attribute(metadata, "package_version")) == _core_package_version() ||
             _restart_mismatch("exact restart requires the same package version")
         haskey(metadata, "restart_contract_yaml") || _restart_mismatch(
             "checkpoint lacks the required exact numerical restart contract; start a new run",

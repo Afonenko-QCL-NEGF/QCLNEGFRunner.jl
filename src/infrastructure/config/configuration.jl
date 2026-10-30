@@ -183,16 +183,16 @@ function _quantity(value, path, converter::Function)
     end
 end
 
-_length_configuration(value, path) = _quantity(value, path, _length)
-_energy_configuration(value, path) = _quantity(value, path, _energy)
-_temperature_configuration(value, path) = _quantity(value, path, _temperature)
-_field_configuration(value, path) = _quantity(value, path, _field)
-_wavenumber_configuration(value, path) = _quantity(value, path, _wavenumber)
-_sheetdensity_configuration(value, path) = _quantity(value, path, _sheetdensity)
-_massdensity_configuration(value, path) = _quantity(value, path, _massdensity)
-_speed_configuration(value, path) = _quantity(value, path, _speed)
-_volume_configuration(value, path) = _quantity(value, path, _volume)
-_mass_configuration(value, path) = _quantity(value, path, _mass)
+_length_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"m", uconvert(u"m", q))) * u"m")
+_energy_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"eV", uconvert(u"eV", q))) * u"eV")
+_temperature_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"K", uconvert(u"K", q))) * u"K")
+_field_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"V/m", uconvert(u"V/m", q))) * u"V/m")
+_wavenumber_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"m^-1", uconvert(u"m^-1", q))) * u"m^-1")
+_sheetdensity_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"m^-2", uconvert(u"m^-2", q))) * u"m^-2")
+_massdensity_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"kg/m^3", uconvert(u"kg/m^3", q))) * u"kg/m^3")
+_speed_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"m/s", uconvert(u"m/s", q))) * u"m/s")
+_volume_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"m^3", uconvert(u"m^3", q))) * u"m^3")
+_mass_configuration(value, path) = _quantity(value, path, q -> Float64(ustrip(u"kg", uconvert(u"kg", q))) * u"kg")
 
 function _voltage_configuration(value, path)
     quantity = _untyped_quantity(value, path)
@@ -368,7 +368,7 @@ function _parse_physical(mapping)
             "$path.voltage_per_period",
         )
         try
-            _field(uconvert(u"V/m", voltage / period))
+            Float64(ustrip(u"V/m", uconvert(u"V/m", voltage / period))) * u"V/m"
         catch error
             _configuration_error("$path.voltage_per_period", sprint(showerror, error))
         end
@@ -876,7 +876,7 @@ function _parse_solver_unchecked(mapping)
         ),
     )
     return try
-        _check_options(options)
+        QCLNEGF.validate_options(options)
     catch error
         _configuration_error(path, sprint(showerror, error))
     end
@@ -969,7 +969,7 @@ function _parse_production(mapping, algorithms::AlgorithmOptions)
         algorithms = algorithms,
     )
     return try
-        _check_production_options(options)
+        QCLNEGF.validate_options(options)
     catch error
         _configuration_error(path, sprint(showerror, error))
     end
@@ -1030,7 +1030,7 @@ function _parse_kernels(mapping)
         strict = _bool(mapping["strict"], "$path.strict"),
     )
     return try
-        _check_production_kernel_options(options)
+        QCLNEGF.validate_options(options)
     catch error
         _configuration_error(path, sprint(showerror, error))
     end
@@ -1155,7 +1155,7 @@ function _parse_algorithms(mapping, solver_backend::Symbol)
         ),
     )
     return try
-        _check_algorithm_options(options)
+        QCLNEGF.validate_options(options)
     catch error
         _configuration_error(path, sprint(showerror, error))
     end

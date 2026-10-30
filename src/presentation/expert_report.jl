@@ -101,7 +101,7 @@ struct MethodPoint
         metrics::Dict{Symbol,Float64},
         warnings::Vector{Dict{String,Any}} = Dict{String,Any}[],
     )
-        _check_scba_result_classification(converged, status, scba_quality)
+        QCLNEGF.validate_result_classification(converged, status, scba_quality)
         return new(
             temperature_K,
             voltage_per_period_V,
