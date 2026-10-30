@@ -163,10 +163,15 @@ function _cli_heavy(arguments)
         parent_checkpoint=_cli_parent_checkpoint(options,arguments[3])
         loaded=QCLScientificWorkflow._load_scientific_plan_bytes(arguments[2])
         plan=loaded.plan
-        capture_context=_capture_context(plan,arguments[3],get(options,"--execution-id",nothing),
+        native_capture_input=get(ENV,"QCL_NEGF_NATIVE_CAPTURE_INPUT","")
+        # The fixed native protocol omits --attempt and does not enable scratch.
+        capture_options=isempty(native_capture_input) || Set(keys(options))==Set(["--execution-id","--source-graph"])
+        capture_context=capture_options ? _capture_context(plan,arguments[3],get(options,"--execution-id",nothing),
             haskey(options,"--attempt") ? parse(Int,options["--attempt"]) : nothing;
             scratch_root=get(options,"--scratch-root",nothing),
-            frozen_plan_bytes=loaded.bytes,source_plan_path=arguments[2])
+            frozen_plan_bytes=loaded.bytes,source_plan_path=arguments[2],
+            native_execution_path=isempty(native_capture_input) ? nothing : native_capture_input,
+            source_graph_path=get(options,"--source-graph",nothing)) : nothing
         result = execute_scientific_plan_staged(plan, arguments[3];
             capture_context,
             frozen_plan_capture=loaded.capture,

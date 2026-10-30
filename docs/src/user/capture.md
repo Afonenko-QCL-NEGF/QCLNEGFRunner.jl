@@ -1,4 +1,4 @@
-# Optional ordinary live/performance capture
+# Optional live/performance capture
 
 The packaged public `qcl-negf` keeps its InstalledCode/release identity. With an
 immutable `captureExecutable` and trusted `QCL_NEGF_CAPTURE_SPEC`, only `run-plan`
@@ -33,3 +33,30 @@ supervisor retains signal/reap/exit ownership and bounded terminal drain. Missin
 samples/sidecar are unavailable, not measured zero or scientific acceptance.
 Source fixtures prepare tiny launcher/storage/locator controls without solving.
 Root/Platform capture-runtime injection and native qualification are separate.
+
+Native ingress is enabled only by the explicit pair
+`QCL_NEGF_CAPTURE_SPEC=capture-spec.json` and
+`QCL_NEGF_NATIVE_CAPTURE_INPUT=native-execution.json`. The public launcher adds
+`--native-execution` to Results `capture-run` and passes the original scientific
+argv unchanged. Its fixed native protocol is `run-plan plan.json ORIGINAL_OUTPUT
+--execution-id E --source-graph source-graph.json`; it adds no solver `--attempt`.
+The spec's integer transport attempt identifies the CalcJob capture allocation;
+the solver retains its default/native continuation counter. Unsupported options
+or native scratch refuse capture admission without changing scientific execution.
+Launcher fallback clears both capture environment markers.
+
+The native admission checks bounded original plan/source-graph bytes and their
+whole native INPUT claims, the execution ID and exact absolute CLI output. The
+output must end in the declared relative execution root. That suffix is an
+assertion: controller/Platform policy must establish the absolute jobs-root
+mapping, InstalledCode/release identity and writer lifetime. It grants no storage
+authority by itself. The existing 104 MiB reserve and all forecast/free/protected
+reserve checks apply unchanged; invalid optional metadata grants no capture credit.
+
+This ingress does not prove the original creator/transport of any selected
+StateRef, or retention and access lifetime of its technical workdir. Until the
+owning AiiDA/Platform ports provide those original operands, the native selected
+performance association remains unavailable (`source_binding_missing`). No
+source transport is inferred from a native counter, source epoch, retained-source
+relation or current graph. Engineering fixture success does not qualify native
+installation, observation cost, retention or scientific acceptance.

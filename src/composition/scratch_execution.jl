@@ -2,24 +2,36 @@ const _CAPTURE_RESERVE_BYTES = 104 * 1024^2 # 32 performance +64 scalar +8 auxil
 
 function _capture_context(plan, output, execution_id, attempt;
     spec_path=get(ENV,"QCL_NEGF_CAPTURE_SPEC",""),scratch_root=nothing,
-    frozen_plan_bytes=nothing,source_plan_path=nothing)
+    frozen_plan_bytes=nothing,source_plan_path=nothing,
+    native_execution_path=nothing,source_graph_path=nothing)
     isempty(spec_path) && return nothing
     try
         path=abspath(spec_path); job=dirname(path)
         basename(path)=="capture-spec.json" && isfile(path) && !islink(path) || return nothing
-        abspath(output)==joinpath(job,"result") || return nothing
+        native_mode=native_execution_path!==nothing
+        if native_mode
+            # Transport admission does not set the solver's native point counter.
+            attempt===nothing && scratch_root===nothing && isabspath(output) && abspath(output)==output || return nothing
+        else
+            abspath(output)==joinpath(job,"result") || return nothing
+        end
         raw=open(io->read(io,16385),path); length(raw)<=16384 || return nothing
-        spec=YAML.load(String(raw);dicttype=Dict{String,Any})
+        spec=native_mode ? _p04_parse(String(raw)) : YAML.load(String(raw);dicttype=Dict{String,Any})
         Set(keys(spec))==Set(["schema","selection","plan","capture_token","allocation_id","allocated_logical_cpus","scratch_root","credits"]) &&
             spec["schema"]=="qcl-negf.capture-spec.v1" || return nothing
         selection=spec["selection"]
         Set(keys(selection))==Set(["calcjob_uuid","execution_id","attempt","plan_fingerprint"]) || return nothing
         selection["calcjob_uuid"] isa String && occursin(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",selection["calcjob_uuid"]) || return nothing
-        selection["execution_id"]==execution_id && selection["attempt"]===attempt &&
-            selection["plan_fingerprint"]==plan.fingerprint || return nothing
+        transport_attempt=selection["attempt"]
+        if native_mode
+            transport_attempt isa Int && !(transport_attempt isa Bool) && transport_attempt>=1 || return nothing
+        else
+            transport_attempt===attempt || return nothing
+        end
+        selection["execution_id"]==execution_id && selection["plan_fingerprint"]==plan.fingerprint || return nothing
         token=spec["capture_token"]; token isa String && occursin(r"^[0-9a-f]{32}$",token) || return nothing
         spec["allocated_logical_cpus"]===nothing && spec["scratch_root"]==scratch_root &&
-            spec["allocation_id"]=="calcjob-process:$(selection["calcjob_uuid"]):$(attempt)" || return nothing
+            spec["allocation_id"]=="calcjob-process:$(selection["calcjob_uuid"]):$(transport_attempt)" || return nothing
         pin=spec["plan"]; pin["path"]=="plan.json" || return nothing
         expected_plan=joinpath(job,"plan.json")
         plan_raw=if frozen_plan_bytes !== nothing && source_plan_path !== nothing &&
@@ -29,6 +41,46 @@ function _capture_context(plan, output, execution_id, attempt;
             open(io->read(io,1024^2+1),expected_plan)
         end
         length(plan_raw)<=1024^2 && length(plan_raw)==pin["bytes"] && bytes2hex(sha256(plan_raw))==pin["sha256"] || return nothing
+        if native_mode
+            # These bounded original INPUT claims are assertions. The controller
+            # owns jobs_root authority, InstalledCode/release and writer lifetime.
+            uuid(v)=v isa String && occursin(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z",v)
+            id(v)=v isa String && occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z",v)
+            opaque(v)=v isa String && 1<=length(v)<=256 && !startswith(v,"/") && all(c->c>=' ' && c!='\x7f',v)
+            file_claim(ref,bytes)=ref isa AbstractDict && Set(keys(ref))==Set(["node_uuid","bytes","sha256"]) &&
+                uuid(ref["node_uuid"]) && ref["bytes"]==string(length(bytes)) && ref["sha256"]==bytes2hex(sha256(bytes))
+            uuid(selection["calcjob_uuid"]) && occursin(r"^[0-9a-f]{32}\z",token) &&
+                Set(keys(pin))==Set(["path","bytes","sha256"]) && pin["bytes"] isa Int && !(pin["bytes"] isa Bool) || return nothing
+            source_plan_path!==nothing && source_graph_path!==nothing &&
+                !islink(expected_plan) && !islink(source_plan_path) && realpath(source_plan_path)==realpath(expected_plan) || return nothing
+            graph_path=joinpath(job,"source-graph.json")
+            !islink(graph_path) && !islink(source_graph_path) && realpath(source_graph_path)==realpath(graph_path) || return nothing
+            graph_raw=open(io->read(io,256*1024+1),graph_path);length(graph_raw)<=256*1024 || return nothing
+            graph=_require_source_graph(_p04_parse(String(copy(graph_raw))))
+            components=graph["components"];length(unique(c["path"] for c in components))==length(components) || return nothing
+            original_plan=_p04_parse(String(copy(plan_raw)))
+            original_plan["fingerprint"]==plan.fingerprint && any(e["id"]==execution_id for e in original_plan["executions"]) || return nothing
+            native_path=abspath(native_execution_path)
+            native_path==joinpath(job,"native-execution.json") && !islink(native_path) || return nothing
+            native_raw=open(io->read(io,16385),native_path);length(native_raw)<=16384 || return nothing
+            native=_p04_parse(String(native_raw))
+            Set(keys(native))==Set(["schema","request_id","execution_id","storage","source_graph","code","input_plan","access_receipt_ref"]) &&
+                native["schema"]=="qcl-negf.aiida-native-execution.v1" && uuid(native["request_id"]) &&
+                id(native["execution_id"]) && native["execution_id"]==execution_id && opaque(native["access_receipt_ref"]) &&
+                file_claim(native["input_plan"],plan_raw) && file_claim(native["source_graph"],graph_raw) || return nothing
+            storage=native["storage"];code=native["code"]
+            Set(keys(storage))==Set(["namespace_id","storage_identity","relative_execution_root","computer_uuid",
+                "execution_binding_uuid","retention_policy_id","retention_owner_id","hold_ref","access_binding_ref"]) &&
+                id(storage["namespace_id"]) && uuid(storage["computer_uuid"]) && uuid(storage["execution_binding_uuid"]) &&
+                all(opaque(storage[k]) for k in ("storage_identity","retention_policy_id","retention_owner_id","hold_ref","access_binding_ref")) || return nothing
+            relative=storage["relative_execution_root"]
+            relative isa String && !isempty(relative) && !isabspath(relative) && !occursin('\\',relative) && !occursin('\0',relative) &&
+                all(p->!(p in ("",".","..")),split(relative,'/')) && endswith(output,"/"*relative) || return nothing
+            Set(keys(code))==Set(["code_uuid","computer_uuid","solver_executable","release_id","build_receipt_ref"]) &&
+                uuid(code["code_uuid"]) && uuid(code["computer_uuid"]) && code["computer_uuid"]==storage["computer_uuid"] &&
+                id(code["release_id"]) && opaque(code["build_receipt_ref"]) && code["solver_executable"] isa String &&
+                occursin(r"^/nix/store/[A-Za-z0-9][A-Za-z0-9+._?-]*/bin/qcl-negf\z",code["solver_executable"]) || return nothing
+        end
         credits=spec["credits"]
         Set(keys(credits))==Set(["performance_bytes","scalar_bytes","io_bytes","reserve_bytes"]) &&
             all(v isa Int && !(v isa Bool) for v in values(credits)) &&
