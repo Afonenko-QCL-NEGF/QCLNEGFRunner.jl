@@ -3,15 +3,13 @@
 These small manufactured fixtures establish operator correctness. They do not
 certify a self-consistent physical QCL point or fit experimental material data.
 """
-const _DIAGNOSTIC_CORE=parentmodule(@__MODULE__)
 
 function _diagnostic_numerics(n; changes...)
-    return _DIAGNOSTIC_CORE.NumericalParameters(;
+    return QCLNEGF.NumericalParameters(;
         (name=>get(changes, name, getfield(n, name)) for name in fieldnames(typeof(n)))...,
     )
 end
 function _operator_continuum_checks()
-    bn=_DIAGNOSTIC_CORE
     checks=Dict{String,Any}[]
     z=0.2+0.3im
     coupling=0.04
@@ -21,31 +19,31 @@ function _operator_continuum_checks()
             [(z-sqrt(z*z-4coupling))/(2coupling), (z+sqrt(z*z-4coupling))/(2coupling)],
         ),
     )
-    family(value) = bn.SelfEnergyFamily(
+    family(value) = QCLNEGF.SelfEnergyFamily(
         fill(ComplexF64(value), 1, 1, 1, 1),
         fill(-0.6im*imag(value), 1, 1, 1, 1),
         fill(1.4im*imag(value), 1, 1, 1, 1),
     )
-    options=bn.ProductionOptions(worker_count = 1)
+    options=QCLNEGF.ProductionOptions(worker_count = 1)
     for seed in (0.01, 0.1, 0.5)
         state=family(-im*seed)
         green=0.0im
         residual=Inf
         iterations=0
         for iteration = 1:1000
-            G, _, _=bn._retarded_green_production(
+            G=QCLNEGF.production_retarded_green(
                 [real(z)],
                 zeros(ComplexF64, 1, 1, 1),
                 state.Σᴿ;
                 η = imag(z),
                 options,
-            )
+            ).G_R
             green=only(G)
             candidate=family(coupling*green)
-            residual=bn._selfenergy_residual(state, candidate)
+            residual=QCLNEGF.production_selfenergy_residual(state, candidate; worker_count=1)
             iterations=iteration
             residual<1e-11 && break
-            bn._mix_family_production!(state, candidate, 0.6, options)
+            QCLNEGF.production_mix_selfenergy!(state, candidate, 0.6; options)
         end
         row=_gate("scalar_SCBA_causal_root_seed_$(seed)", abs(green-exact), 2e-10)
         merge!(
@@ -68,15 +66,15 @@ function _operator_continuum_checks()
             step=energy[2]-energy[1]
             centre=0.1+phase*step
             width=0.035
-            G, _, _=bn._retarded_green_production(
+            G=QCLNEGF.production_retarded_green(
                 energy,
                 reshape(ComplexF64[centre], 1, 1, 1),
                 fill(-im*width, nodes, 1, 1, 1);
                 options,
-            )
+            ).G_R
             weights=fill(step, nodes)
             weights[[1, end]]./=2
-            integral=dot(weights, real.(bn.spectral_function(G)[:, 1, 1, 1]))/(2π)
+            integral=dot(weights, real.(QCLNEGF.spectral_function(G)[:, 1, 1, 1]))/(2π)
             exact=(atan((last(energy)-centre)/width)-atan((first(energy)-centre)/width))/π
             push!(errors, abs(integral-exact))
         end
@@ -97,7 +95,7 @@ function _operator_continuum_checks()
     exact_levels=[n^2*π^2 for n = 1:3]
     for nodes in (31, 63, 127)
         spacing=1/(nodes+1)
-        matrix=bn.build_bdd_hamiltonian(
+        matrix=QCLNEGF.build_bdd_hamiltonian(
             zeros(nodes),
             ones(nodes),
             spacing,
@@ -124,12 +122,12 @@ function _operator_continuum_checks()
     gammaL=0.03
     gammaR=0.07
     energy=collect(range(-0.5, 0.6; length = 81))
-    G, _, _=bn._retarded_green_production(
+    G=QCLNEGF.production_retarded_green(
         energy,
         reshape(ComplexF64[level], 1, 1, 1),
         fill(-0.5im*(gammaL+gammaR), 81, 1, 1, 1);
         options,
-    )
+    ).G_R
     exactG=1 ./ (energy .- level .+ 0.5im*(gammaL+gammaR))
     transmission=gammaL*gammaR .* abs2.(G[:, 1, 1, 1])
     exactT=gammaL*gammaR ./ ((energy .- level) .^ 2 .+ ((gammaL+gammaR)/2)^2)
@@ -145,17 +143,17 @@ function _operator_continuum_checks()
             1e-13,
         ),
     )
-    physical=bn.reference_parameters(Tᴸ = 70u"K")
-    scales=bn.ScaleSystem()
+    physical=QCLNEGF.reference_parameters(Tᴸ = 70u"K")
+    scales=QCLNEGF.ScaleSystem()
     errors=Float64[]
     for nodes in (32, 64, 128)
-        numerical=_diagnostic_numerics(bn.tutorial_numerics(); N_z = nodes)
-        grids=bn.build_grids(physical, numerical, scales)
+        numerical=_diagnostic_numerics(QCLNEGF.tutorial_numerics(); N_z = nodes)
+        grids=QCLNEGF.build_grids(physical, numerical, scales)
         L=sum(grids.wˣ)
         epsilon=12.9
         exact=0.01 .* sin.(2π .* grids.x ./ L)
         donors=fill(1e3, nodes)
-        profiles=bn.MaterialProfiles(
+        profiles=QCLNEGF.MaterialProfiles(
             zeros(nodes),
             fill(0.067, nodes),
             fill(0.067, nodes),
@@ -165,7 +163,7 @@ function _operator_continuum_checks()
             ones(Int, nodes),
         )
         density=donors .+ epsilon*(2π/L)^2/scales.λ_P .* exact
-        solution, _, _, _=bn.solve_periodic_poisson(profiles, grids, scales, density)
+        solution, _, _, _=QCLNEGF.solve_periodic_poisson(profiles, grids, scales, density)
         push!(errors, norm(solution-exact)/norm(exact))
     end
     push!(
@@ -184,17 +182,16 @@ function _operator_continuum_checks()
     return checks
 end
 function _operator_cavity_checks()
-    bn=_DIAGNOSTIC_CORE
     checks=Dict{String,Any}[]
     hopping=0.7
     broadening=0.12
     occupation=0.37
     for energy in (-2.0, 0.0, 0.5, 2.0)
         z=energy+im*broadening
-        surface=bn.chain_surface_green(z, hopping)
+        surface=QCLNEGF.chain_surface_green(z, hopping)
         exact=inv(z-2hopping^2*surface)
         count=201
-        chain=bn.finite_chain_green(
+        chain=QCLNEGF.finite_chain_green(
             energy,
             [zeros(ComplexF64, 1, 1) for _ = 1:count],
             [fill(ComplexF64(hopping), 1, 1) for _ = 1:(count-1)];
@@ -227,7 +224,7 @@ function _operator_cavity_checks()
     # The legacy bulk-feedback is a different closure. Its mismatch is an
     # expected model observation, never a hidden correction of the exact oracle.
     z=0.1im
-    exact=inv(z-2bn.chain_surface_green(z, 1.0))
+    exact=inv(z-2QCLNEGF.chain_surface_green(z, 1.0))
     feedback=(z-sqrt(z*z-8))/(4)
     relative=abs(feedback-exact)/abs(exact)
     push!(
@@ -252,11 +249,11 @@ function _diagnostic_lo_equilibrium(
     qz_nodes = 81,
     angular_nodes = 32,
 )
-    physical=_DIAGNOSTIC_CORE.reference_parameters(Tᴸ = 70u"K", V_period = 0u"mV")
+    physical=QCLNEGF.reference_parameters(Tᴸ = 70u"K", V_period = 0u"mV")
     phonon=ustrip(u"eV", physical.ħωᴸᴼ)
     step=phonon/steps_per_phonon
     half_window=(nodes-1)*step/2
-    original=_DIAGNOSTIC_CORE.tutorial_numerics()
+    original=QCLNEGF.tutorial_numerics()
     changes=(;
         N_b = 2,
         N_k = 3,
@@ -267,20 +264,20 @@ function _diagnostic_lo_equilibrium(
         E_min = -half_window*u"eV",
         E_max = half_window*u"eV",
     )
-    numerical=_DIAGNOSTIC_CORE.NumericalParameters(;
+    numerical=QCLNEGF.NumericalParameters(;
         (
             name=>hasproperty(changes, name) ? getproperty(changes, name) :
                   getfield(original, name) for
-            name in fieldnames(_DIAGNOSTIC_CORE.NumericalParameters)
+            name in fieldnames(QCLNEGF.NumericalParameters)
         )...,
     )
-    algorithms=_DIAGNOSTIC_CORE.AlgorithmOptions(energy_shift = algorithm)
-    options=_DIAGNOSTIC_CORE.ProductionOptions(algorithms = algorithms, worker_count = 1)
-    built=_DIAGNOSTIC_CORE.build_configured_scattering_problem(;
+    algorithms=QCLNEGF.AlgorithmOptions(energy_shift = algorithm)
+    options=QCLNEGF.ProductionOptions(algorithms = algorithms, worker_count = 1)
+    built=QCLNEGF.build_configured_scattering_problem(;
         physical,
         numerical,
-        scales = _DIAGNOSTIC_CORE.ScaleSystem(),
-        scattering = _DIAGNOSTIC_CORE.ScatteringOptions(
+        scales = QCLNEGF.ScaleSystem(),
+        scattering = QCLNEGF.ScatteringOptions(
             LO = true,
             acoustic = false,
             impurity = false,
@@ -288,7 +285,7 @@ function _diagnostic_lo_equilibrium(
             alloy = false,
         ),
         algorithms,
-        kernel_options = _DIAGNOSTIC_CORE.ProductionKernelOptions(),
+        kernel_options = QCLNEGF.ProductionKernelOptions(),
     )
     problem=built.problem
     g=problem.grids
@@ -301,8 +298,8 @@ function _diagnostic_lo_equilibrium(
     fill!(less, 0)
     fill!(greater, 0)
     fill!(A, 0)
-    kBT=_DIAGNOSTIC_CORE._electronvolts(_DIAGNOSTIC_CORE.CODATA.kᴮₑᵥ*physical.Tᴸ)/s.E₀_eV
-    f=[_DIAGNOSTIC_CORE._fermi(e, 0.0, kBT) for e in g.ε]
+    kBT=Float64(ustrip(u"eV", QCLNEGF.CODATA.kᴮₑᵥ*physical.Tᴸ))/s.E₀_eV
+    f=[QCLNEGF.fermi_occupation(e, 0.0, kBT) for e in g.ε]
     # A positive smooth spectral fixture isolates the actual LO scattering
     # operator from a separate Dyson fixed point. The broad window suppresses
     # exterior-tail contamination, while the fractional shifts remain real.
@@ -313,7 +310,7 @@ function _diagnostic_lo_equilibrium(
         less[e, m, a, a]=im*f[e]*spectral
         greater[e, m, a, a]=-im*(1-f[e])*spectral
     end
-    green=_DIAGNOSTIC_CORE.GreenState(
+    green=QCLNEGF.GreenState(
         GR,
         less,
         greater,
@@ -322,14 +319,8 @@ function _diagnostic_lo_equilibrium(
         ones(nodes, numerical.N_k),
     )
     cache=build_production_cache(problem; options)
-    lesser, greater=_DIAGNOSTIC_CORE._production_lo_contraction(
-        cache.kernels[:LO],
-        green,
-        problem,
-        cache,
-        problem.kernels.qᴷ[:LO],
-        options,
-    )
+    collision=QCLNEGF.production_lo_selfenergies(problem,green,cache;options)
+    lesser, greater=collision.lesser, collision.greater
     kms=copy(lesser)
     number, energy, event_scale=0.0, 0.0, 0.0
     for e = 1:nodes, m = 1:numerical.N_k
@@ -398,7 +389,6 @@ function _operator_lo_equilibrium_checks()
     return checks
 end
 function _structure_spectrum_checks(configuration, point)
-    bn=_DIAGNOSTIC_CORE
     raw=deepcopy(configuration.raw)
     if point!==nothing
         raw["physical"]["voltage_per_period"]="$(point.voltage_per_period_V) V"
@@ -406,9 +396,9 @@ function _structure_spectrum_checks(configuration, point)
         raw["physical"]["lo_temperature"]="$(point.temperature_K) K"
     end
     c=_resolve_configuration(raw, configuration.provenance)
-    grids=bn.build_grids(c.physical, c.numerical, c.scales)
-    profiles=bn.build_profiles(c.physical, c.numerical, c.scales, grids)
-    basis=bn.build_basis(
+    grids=QCLNEGF.build_grids(c.physical, c.numerical, c.scales)
+    profiles=QCLNEGF.build_profiles(c.physical, c.numerical, c.scales, grids)
+    basis=QCLNEGF.build_basis(
         c.physical,
         c.numerical,
         c.scales,
@@ -416,7 +406,7 @@ function _structure_spectrum_checks(configuration, point)
         profiles;
         localization = c.algorithms.localization,
     )
-    projected=bn.project_hamiltonians(
+    projected=QCLNEGF.project_hamiltonians(
         basis,
         grids,
         profiles,
@@ -424,8 +414,10 @@ function _structure_spectrum_checks(configuration, point)
         c.scales,
         zeros(length(grids.x)),
     )
-    limits=bn.QCLNumerics._STRUCTURAL_VALIDATION_LIMITS
-    row=_gate("structure_basis_orthonormal", basis.r_orth, limits[:basis_orthogonality])
+    diagnostics=QCLNEGF.basis_validation_diagnostics(basis,projected,c.numerical)
+    metrics=diagnostics.report.metrics
+    limits=diagnostics.limits
+    row=_gate("structure_basis_orthonormal", metrics[:basis_orthogonality], limits[:basis_orthogonality])
     merge!(
         row,
         Dict(
@@ -437,7 +429,7 @@ function _structure_spectrum_checks(configuration, point)
             "window_energies_eV"=>basis.window_eigenvalues .* c.scales.E₀_eV,
             "centres_nm"=>basis.centres .* c.scales.L₀_m .* 1e9,
             "spreads_nm"=>basis.spreads .* c.scales.L₀_m .* 1e9,
-            "period_nm"=>ustrip(u"nm", bn.period_length(c.physical)),
+            "period_nm"=>ustrip(u"nm", QCLNEGF.period_length(c.physical)),
             "basis_overlap_condition"=>basis.κ_overlap,
             "basis_states"=>c.numerical.N_b,
             "basis_periods"=>c.numerical.P_basis,
@@ -453,20 +445,15 @@ function _structure_spectrum_checks(configuration, point)
     # truncated basis alone does not prove that its translated periods agree.
     checks = [
         row,
-        _gate("structure_basis_eigen", basis.r_eigen, limits[:basis_eigen]),
+        _gate("structure_basis_eigen", metrics[:basis_eigen], limits[:basis_eigen]),
         _gate(
             "structure_Hermitian_H0",
-            maximum(
-                bn.QCLNumerics._relative_norm(
-                    Matrix(view(projected, m, :, :)),
-                    Matrix(view(projected, m, :, :))',
-                ) for m in axes(projected, 1)
-            ),
+            metrics[:hamiltonian_hermiticity],
             limits[:hamiltonian_hermiticity],
         ),
         _gate(
             "structure_coupling_adjoint",
-            bn.QCLNumerics._relative_norm(basis.T₋, basis.T₊'),
+            metrics[:T_adjoint],
             limits[:T_adjoint],
         ),
     ]
@@ -476,19 +463,18 @@ function _structure_spectrum_checks(configuration, point)
             [
                 _gate(
                     "structure_translation",
-                    basis.r_translation,
-                    bn.QCLNumerics._PZP_TRANSLATION_LIMIT,
+                    metrics[:translation],
+                    limits[:translation],
                 ),
                 _gate(
                     "structure_translation_nearest",
-                    basis.r_translation_nearest,
-                    bn.QCLNumerics._PZP_TRANSLATION_LIMIT,
+                    metrics[:translation_nearest],
+                    limits[:translation_nearest],
                 ),
                 _gate(
                     "structure_translation_two_pairs",
-                    basis.r_translation_two_pairs,
-                    c.numerical.P_basis >= 3 ? bn.QCLNumerics._PZP_TWO_PAIR_LIMIT :
-                    bn.QCLNumerics._PZP_TRANSLATION_LIMIT,
+                    metrics[:translation_two_pairs],
+                    limits[:translation_two_pairs],
                 ),
             ],
         )

@@ -151,3 +151,178 @@ They test actual rank1/2/4, non-square and empty arrays, exact bits, complete ou
 cutoffs, parent ancestry and crash barriers without transport or completed-map work. Native5
 research projections remain a required Results follow-up; absence during reader migration is an
 explicit temporary capability boundary, not permanent removal of those views.
+
+## [Final observations and one commit](@id final-native-observations)
+
+`commit_final!` is the final persistence port. Pass the actual returned `NEGFSolution`, its owning
+public global-final `ExactSolverState`, and the exact options/execution/adaptation/kernel binding.
+Its problem is `solution.problem`, including the final adaptive coordinates. The writer calls
+Core's `final_observation_snapshot` once; Core owns exact-state admission and the integrated PSD
+scan. The writer does not restore a state, run a selected map, or repeat the final analysis.
+
+Publish the inputs first with `publish_final_point_request!`. Its `model_preimage` must come from
+the actual P03 point configuration after applying the operating axes. It is the canonical
+`stationary_transport_inputs_v1` preimage, not a renamed legacy configuration snapshot. The helper
+checks the closed model envelope and canonical digest, detaches bounded metadata, and writes the
+original frozen plan bytes without reserializing them. Existing nested YAML is checked before
+construction for aliases, anchors, custom tags, duplicate/merge/non-string keys, multiple documents,
+nonfinite values and excessive depth. Quoted characters remain data. Original comments, line
+endings and whitespace participate in the plan FileRef hash. Scientific JSON retains its existing
+closed nested profile. These checks do not prove that the caller resolved the scientific model
+correctly; the composition owns that source binding.
+
+```julia
+request = publish_final_point_request!(recorder;
+    plan_bytes=frozen_plan_bytes, model_preimage=actual_point_model_preimage,
+    temperature_K, voltage_per_period_V, scattering_requested,
+    kind=:nested_sweep, maximum_metadata_bytes)
+
+presentation = Ref{NamedTuple}()
+# Final-only input: exactly these three caller-owned fields. Any recorded
+# discretization/experimental evidence must already exist as a verified FileRef.
+status = Dict("process" => terminal_process_status,
+    "discretization" => actual_discretization_status,
+    "experimental" => actual_experimental_status)
+final = commit_final!(recorder, solution, terminal;
+    options, production_options, execution, domain_adaptation, kernel_options,
+    status, request, source_mode=:produced,
+    maximum_observation_bytes, maximum_metadata_bytes,
+    presentation_sink=bundle -> (presentation[] = bundle))
+# Only after this return may the composition publish its terminal point/light result.
+# final has exactly: checkpoint, diagnostics, observations.
+```
+
+The final-only `status` keyword accepts exactly `process`, `discretization` and
+`experimental`. It rejects caller-supplied `convergence` or `physics`, unknown fields
+and missing fields. Caller metadata is detached before capture/publication callbacks.
+Existing recorded external evidence is hash-checked before capture;
+unmeasured external facts retain a null evidence ref and their actual reason. A successful
+process does not imply convergence or scientific acceptance.
+
+After the mandatory capture and immutable observations write, the writer creates the
+complete manifest status. Its `convergence` and `physics` entries are `recorded`, each
+with the exact observations FileRef. Here `recorded` means that evidence was stored,
+including negative classifications and unavailable diagnostic issues; it does not mean
+pass. Current classification is in `observations.summary`, raw metrics/positivity in
+the linked diagnostics, original report in checkpoint `final_evidence`, and completed
+restoration receipts in `observations.restoration`. The same complete status is retained
+by the recorder, verified handle and pointer reconciliation. Intermediate checkpoint
+and recorder-initial status inputs still require the existing complete five-field status.
+
+The mandatory `presentation_sink` transfers the captured stationary assessment and bounded old
+validation/positivity display in exactly three fields: `stationary_assessment`, `validation`,
+`positivity`. It must only retain local memory. It must not perform solver work, I/O or terminal
+publication. The old display may replace nonfinite numbers with null; it is not the raw scientific
+record. The assessment remains a non-wire Core display template, including its existing descriptive
+paths; no legacy audit identity or equivalence with a reconstructed display is invented.
+
+The exact checkpoint retains its original numerical graph. Separate native5 analysis HDF files
+store `final_diagnostics` (complete raw metrics, witnesses and four integral arrays) and
+`final_observations` (actual coordinates/quadratures/scales/models, 26 stored arrays, two scalar
+views, summary, issues and current restoration receipts). Complex coherences and IEEE bits are
+preserved. Green/self-energy descriptors refer to the checkpoint; those arrays and kernels are not
+copied into the observations file. Requested scattering flags remain separate from enabled
+families and the electron-electron model. Missing views require explicit issues. A voltage
+roundtrip difference keeps both samples with `not_verified`; it is not a numerical tolerance.
+
+One manifest binds full FileRefs in the selected dependency DAG, including the original plan and
+actual point model. Immutable files are closed, checked and hashed before the sink and the existing
+recovery/live pointer updates. A sink or analysis failure before the first pointer keeps the old
+heads and may leave immutable orphan files. After the first pointer, the two heads can identify
+different valid generations; use the existing explicit reconciliation rules. Do not recapture or
+replay a sink to repair an uncertain publication.
+
+For `source_mode=:completed_restore`, pass the original loaded terminal and already obtained
+current Core receipts; the recorder must hold the explicit immediate verified parent. Original
+Core identity, integrity and final evidence remain distinct from the child envelope and current
+revalidation. The writer does not perform that numerical revalidation. A produced state after an
+ordinary interrupted resume may also have parent lineage without completed receipts.
+
+`verify_final_artifacts(checkpoint; diagnostics_ref, observations_ref, maximum_metadata_bytes,
+parent=nothing)` verifies explicit selected references, native storage and declarations without
+loading numeric state, getters, restore or a map. Supply the immediate verified `parent` for a
+completed-restored carrier. The metadata allowance is shared across selected inputs and native
+strings. Hash verification still reads the selected immutable files. Successful verification is a
+frozen selection, not protection against later external file changes or scientific acceptance.
+
+`maximum_observation_bytes` bounds Core's additional observation estimate. It is not a total memory
+cap. The writer also checks the actual production memory grant against the jointly resident caller
+and recorder graph, Core's additional estimate, bounded metadata and serialization buffers. The
+composition must account for other retained residents in that grant. These allowances exclude a
+claim about compiler/allocator RSS. This API alone does not complete the remaining solver/CLI
+composition migration or the independent Results interoperability and scientific qualification.
+
+## Native caller composition and explicit checkpoint inputs
+
+The native stationary caller passes the same original `FinalPointRequest` into
+intermediate `commit_exact_checkpoint!` calls with an admitted `maximum_metadata_bytes`.
+Those manifests inventory the exact original plan and canonical P03 model FileRefs.
+The checkpoint declaration, numerical layout and return type remain unchanged.
+`verify_checkpoint_inputs` takes explicitly selected plan/model refs; it checks their
+manifest membership, roles, immutable bytes, original plan digest and canonical model
+preimage digest. It establishes byte/source binding. It does not establish resolver
+provenance or physical acceptance. A4 checkpoint contexts still have null model/plan;
+Runner/Q1/actor verification of the selected pair occurs separately before A4.
+
+```@docs
+verify_checkpoint_inputs
+```
+
+Direct native file output requires `source_configuration`, the original or first
+emitted `frozen_plan_bytes`, and the actual `source_graph`. A manually constructed
+`NEGFProblem` alone cannot supply a P03 provenance claim. Configured composition
+captures the original nested plan before operational YAML rewrites and carries the
+exact prepared execution pair. It neither selects execution twice nor changes the
+selected production memory allowance. Deferred final publication retains only the
+owned terminal state; Core validates against the actual returned `solution.problem`.
+
+Native direct `history_observer(snapshot, it, iv)` receives a public
+`ScientificHistorySnapshot`. The former six-argument private-Core observer signature
+is retired; no synthetic source or arity fallback is supplied. Canonical history is
+owned or sealed before the synchronous external callback. `checkpoint_observer(state,
+it, iv)` remains a state observer: intermediate after native persistence, global final
+after final commit. `native_publication_sink(triple, it, iv)` and
+`final_presentation_sink(bundle, it, iv)` are separate optional composition ports after
+successful final commit. The triple contains exactly checkpoint/diagnostics/observations;
+the display bundle contains exactly stationary_assessment/validation/positivity.
+Their synchronous failures propagate. The configured result uses that same detached
+display; it does not recompute an assessment from stored metrics.
+
+The outward records use series-v4/current-v2/configured result+status-v2. They carry
+full native refs, with a separate phase locator and optional optical attachment;
+legacy string receipts are never aliases. Scratch receives the exact returned v4
+document and a separate metadata allowance, verifies selected native graphs at the
+copied root, then renames and deletes scratch only on success. Disk budget is not RAM
+authority. Metadata admission uses fresh hardware headroom or the explicit execution
+envelope, current seven-root residents and existing buffer reservations. It is a
+source allocation bound, not measured RSS.
+
+The stationary entry gates remain pending same-DTO Results/export, AiiDA actor and
+Q1 typed transport-close qualification. The native caller does not issue a legacy
+stop receipt for v4, and missing transport evidence cannot mean success. Requested
+optical processing still needs its native codec/provenance rollout; the strict legacy
+optical-v4 verifier remains intact. Independent Core oracles, Results obligations and
+native 26+4 interoperability remain release requirements.
+
+For cold direct native calls, the captured configured run definition and public
+coordinate traversal provide deterministic point identities, including an original
+plan with reordered axes. An explicit `run_id` is an opaque caller override;
+it supplies no model-origin proof. A selected parent keeps its original run,
+execution and point scope. Supplied `native_context` identity remains unchanged.
+Intermediate state-observer exceptions propagate after the canonical checkpoint;
+cleanup seals only open healthy history and never replays a failed publication.
+
+Native series output is exactly `qcl-negf-series-result-v4` with
+`qcl-negf.results.v2` from producer through public writer/readback and staging.
+Legacy `qcl-negf-series-result-v3`/`qcl-negf.results.v1` remains a separate
+reader/writer dispatch; cross-pairs are refused and payloads are never relabeled.
+Optional outward `evidence` is an array of unique strings, including empty strings;
+objects, duplicate items and non-string items are rejected before staging effects.
+
+Direct native metadata admission always uses the minimum of unchanged selected P,
+fresh total memory and fresh available memory. Optional `execution_plan` supplies
+only an additional restrictive memory ceiling; configured composition forwards its
+already validated selected object. Identity-only `native_context` does not change G.
+The plan is retained in existing resource roots and checked before observer traversal.
+Because its type is loaded later in the module, the keyword declaration is untyped;
+runtime accepts only `nothing` or `ExecutionPlan`. No plan or P is reconstructed.

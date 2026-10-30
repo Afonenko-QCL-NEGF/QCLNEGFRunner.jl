@@ -104,7 +104,9 @@ function execute_configured_run(
     run_id::Union{Nothing,AbstractString} = nothing,
     report_template::Union{Nothing,AbstractString} = nothing,
     maximum_solver_runs::Integer = DEFAULT_MAXIMUM_SOLVER_RUNS,
+    source_graph::Union{Nothing,AbstractDict} = nothing,
 )
+    source_graph = _require_source_graph(source_graph)
     sources = source isa AbstractVector ? String.(source) : String[source]
     isempty(sources) &&
         throw(ArgumentError("at least one configuration source is required"))
@@ -119,10 +121,11 @@ function execute_configured_run(
         occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", identifier) ||
             throw(ArgumentError("invalid run id"))
         directory=joinpath(abspath(root), identifier)
-        computation=execute_scientific_plan(plan, directory)
+        computation=execute_scientific_plan(plan, directory;source_graph,run_id=identifier)
         report=report_template===nothing ? nothing : postprocess_series(directory)
         return ConfiguredExecutionResult(plan.root_kind, computation, report, directory)
     end
+    throw(ArgumentError("native5_configured_consumer_unavailable: typed Results/AiiDA/Q1 transport qualification pending"))
     configuration = load_run_configuration(sources)
     _check_solver_run_budget(configuration, maximum_solver_runs)
     profile_root = _find_profile_root(first(sources))
@@ -137,11 +140,11 @@ function execute_configured_run(
 
     mode = configuration.study.mode
     computation = if mode === :single
-        run_from_configuration(configuration)
+        run_from_configuration(configuration;source_graph,run_id)
     elseif mode === :sweep
-        run_configured_nested_sweep(configuration)
+        run_configured_nested_sweep(configuration;source_graph)
     elseif mode === :comparison
-        run_production_study(configuration, profile_root)
+        run_production_study(configuration, profile_root;source_graph)
     else
         throw(ArgumentError("unsupported study mode: $mode"))
     end

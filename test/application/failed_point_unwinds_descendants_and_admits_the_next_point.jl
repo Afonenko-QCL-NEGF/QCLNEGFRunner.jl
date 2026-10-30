@@ -40,7 +40,7 @@ include("../support/common.jl")
     # Exercise the real producer: an unstarted, bounded sweep reports 0 / N.
     # A synthetic nothing / N event would violate the progress contract.
     options = BN.ProductionOptions(; event_sink = sink)
-    @test BN._begin_solver_stage(options, :sweep; label = "sweep", total = 2)
+    @test BN._runner_begin_stage(options, :sweep; label = "sweep", total = 2)
     @test snapshots[end].iteration == 0
     @test snapshots[end].total == 2
     @test sink(event(:begin, :point, :running, 1, 2))

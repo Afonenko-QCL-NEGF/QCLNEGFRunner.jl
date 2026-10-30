@@ -1,6 +1,7 @@
 module QCLNEGFRunner
 using LinearAlgebra
 using Logging
+import Libdl
 using SHA
 import Downloads
 using FFTW
@@ -24,6 +25,8 @@ include("infrastructure/telemetry/phase_segments.jl")
 include("presentation/expert_report.jl")
 include("infrastructure/persistence/scientific_history.jl")
 include("infrastructure/persistence/production_state.jl")
+include("infrastructure/persistence/final_observations.jl")
+include("infrastructure/persistence/final_diagnostics.jl")
 include("infrastructure/persistence/point_artifacts.jl")
 include("infrastructure/persistence/physics_diagnostics.jl")
 include("composition/production_solver_adapter.jl")
@@ -31,6 +34,7 @@ include("composition/production_workflow.jl")
 export ScientificHistoryRecorder, record_scientific_history!, flush_scientific_history!,
     VerifiedExactCheckpoint, commit_exact_checkpoint!, open_exact_checkpoint,
     checkpoint_reference, load_exact_solver_state
+export FinalPointRequest, publish_final_point_request!, commit_final!, verify_final_artifacts, verify_checkpoint_inputs
 
 module QCLConfiguration
 using Unitful
@@ -144,13 +148,13 @@ include("composition/application_runtime.jl")
 using .QCLApplicationRuntime
 import .QCLApplicationRuntime: execute_point!
 
-include("composition/production_runtime_adapter.jl")
 include("application/reporting.jl")
 include("infrastructure/config/report_templates.jl")
 include("presentation/configured_report.jl")
 include("composition/configured_execution.jl")
 include("composition/scientific_workflow.jl")
 using .QCLScientificWorkflow
+include("composition/production_runtime_adapter.jl")
 export ResolvedConfigurationSnapshot, resolved_configuration_snapshot, resolved_snapshot_dict,
     resolved_configuration_diff, scientific_resource_estimate
 export ScientificPlan,

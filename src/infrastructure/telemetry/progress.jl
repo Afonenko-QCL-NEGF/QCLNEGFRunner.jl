@@ -10,32 +10,21 @@ See [Production observability](@ref native-result-formats).
 """
 struct ProgressMetric
     name::Symbol
-    value::Union{Float64,Int64,Bool,String}
+    value::Union{Nothing,Float64,Int64,Bool,String}
     unit::String
+    measurement_status::Symbol
+    reason::Union{Nothing,Symbol}
+    function ProgressMetric(name::Symbol, value, unit::AbstractString,
+        measurement_status::Symbol, reason::Union{Nothing,Symbol})
+        metric=SolverMetric(name,value,unit;measurement_status,reason)
+        new(metric.name,metric.value,metric.unit,metric.measurement_status,metric.reason)
+    end
 end
 
-# The automatically generated constructor has the union-typed signature
-# `(Symbol, Union{...}, String)`.  Exact forwarding methods remove dispatch
-# ambiguities between that constructor and the convenient abstract adapters
-# below (notably because `Bool <: Integer` in Julia).
-for T in (Float64, Int64, Bool, String)
-    @eval ProgressMetric(name::Symbol, value::$T, unit::String) = invoke(
-        ProgressMetric,
-        Tuple{Symbol,Union{Float64,Int64,Bool,String},String},
-        name,
-        value,
-        unit,
-    )
+function ProgressMetric(name::Symbol, value, unit::AbstractString = "";
+    measurement_status::Symbol = :measured, reason::Union{Nothing,Symbol} = nothing)
+    return ProgressMetric(name,value,unit,measurement_status,reason)
 end
-
-ProgressMetric(name::Symbol, value::AbstractFloat, unit::AbstractString = "") =
-    ProgressMetric(name, Float64(value), String(unit))
-ProgressMetric(name::Symbol, value::Integer, unit::AbstractString = "") =
-    ProgressMetric(name, Int64(value), String(unit))
-ProgressMetric(name::Symbol, value::Bool, unit::AbstractString = "") =
-    ProgressMetric(name, value, String(unit))
-ProgressMetric(name::Symbol, value::AbstractString, unit::AbstractString = "") =
-    ProgressMetric(name, String(value), String(unit))
 
 """
 Immutable description of one emitted progress event.
@@ -76,6 +65,10 @@ const _PROGRESS_STAGE_PARENT = Dict{Symbol,Tuple{Vararg{Symbol}}}(
     :scba => (:poisson,),
 )
 
+const _PROGRESS_CSV_HEADER = join(("sequence", "event", "stage_path", "stage", "label",
+    "iteration", "total", "fraction", "elapsed_seconds", "status", "metric", "value",
+    "value_type", "measurement_status", "reason", "unit", "message"), ',')
+
 """
     ProgressReporter(; human_io=stdout, csv_io=nothing,
                      significant_digits=4, human_every=1,
@@ -86,6 +79,10 @@ Create an explicit, deterministic progress sink.  The compact human stream is
 intended for a terminal.  The normalized CSV stream writes one row per metric
 and preserves the full `Float64` representation.  Supplying neither stream is
 valid when only `on_snapshot` is used by a dashboard.
+
+Seconds-labelled timing records and steady summaries admit only measured,
+finite, nonnegative `t_*` metrics whose unit is exactly `s`. Metrics in other
+units remain in ordinary progress outputs and do not consume a warmup slot.
 
 `clock_ns` is injectable so tests and replay tools need not depend on wall
 time. The human stream contains lifecycle begin/end events only. Every
@@ -175,29 +172,7 @@ function ProgressReporter(;
         reporter.machine_directory=directory
     end
     if csv_io !== nothing && _write_header
-        println(
-            csv_io,
-            join(
-                (
-                    "sequence",
-                    "event",
-                    "stage_path",
-                    "stage",
-                    "label",
-                    "iteration",
-                    "total",
-                    "fraction",
-                    "elapsed_seconds",
-                    "status",
-                    "metric",
-                    "value",
-                    "value_type",
-                    "unit",
-                    "message",
-                ),
-                ',',
-            ),
-        )
+        println(csv_io, _PROGRESS_CSV_HEADER)
         flush(csv_io)
     end
     return reporter
@@ -216,6 +191,13 @@ function ProgressReporter(csv_path::AbstractString; append::Bool = false, kwargs
     basename(path) in
     ("events.jsonl", "progress.yaml", "timings.csv", "timing_summary.yaml") &&
         throw(ArgumentError("reserved machine telemetry filename"))
+    if append && isfile(path) && filesize(path) > 0
+        expected = Vector{UInt8}(codeunits(_PROGRESS_CSV_HEADER * "\n"))
+        valid = open(path, "r") do io
+            read(io, length(expected)) == expected
+        end
+        valid || throw(ArgumentError("incompatible progress CSV header; choose a new CSV path"))
+    end
     mkpath(dirname(path))
     write_header = !append || !isfile(path) || filesize(path) == 0
     initial_sequence = append && isfile(path) ? _last_progress_sequence(path) : 0
@@ -331,11 +313,13 @@ function _validate_stage_parent(reporter::ProgressReporter, stage::Symbol)
     return nothing
 end
 
+_progress_value_type(::Nothing) = "null"
 _progress_value_type(value::Float64) = "float64"
 _progress_value_type(value::Int64) = "int64"
 _progress_value_type(value::Bool) = "bool"
 _progress_value_type(value::String) = "string"
 
+_progress_full(::Nothing) = ""
 _progress_full(value::Float64) = repr(value)
 _progress_full(value::Int64) = string(value)
 _progress_full(value::Bool) = string(value)
@@ -388,6 +372,8 @@ function _emit_progress_csv!(reporter::ProgressReporter, snapshot::ProgressSnaps
             metric === nothing ? "" : metric.name,
             metric === nothing ? "" : _progress_full(metric.value),
             metric === nothing ? "" : _progress_value_type(metric.value),
+            metric === nothing ? "" : metric.measurement_status,
+            metric === nothing || metric.reason === nothing ? "" : metric.reason,
             metric === nothing ? "" : metric.unit,
             snapshot.message,
         )
@@ -428,6 +414,10 @@ function _emit_progress_human!(reporter::ProgressReporter, snapshot::ProgressSna
     label = isempty(snapshot.labels[end]) ? "" : " — $(snapshot.labels[end])"
     strings = String["$indent$marker $title$position$label"]
     isempty(snapshot.message) || push!(strings, snapshot.message)
+    for metric in snapshot.metrics
+        metric.measurement_status === :measured && continue
+        push!(strings, "$(metric.name)=$(metric.value) [$(metric.measurement_status): $(metric.reason)]")
+    end
     if snapshot.event === :end
         snapshot.status === :completed || push!(strings, "status=$(snapshot.status)")
         push!(
@@ -740,6 +730,7 @@ function save_progress_dashboard(
             _progress_html_escape(metric.name) *
             "</span><strong>" *
             _progress_html_escape(
+                metric.value === nothing ? "unavailable ($(metric.measurement_status): $(metric.reason))" :
                 metric.value isa Real ? compact_number(metric.value) : metric.value,
             ) *
             "</strong><small>" *
@@ -822,6 +813,8 @@ function _machine_progress_mapping(reporter::ProgressReporter, snapshot::Progres
             String(m.name) => Dict(
                 "value"=>m.value isa Real && !isfinite(m.value) ? string(m.value) : m.value,
                 "unit"=>m.unit,
+                "measurement_status"=>String(m.measurement_status),
+                "reason"=>m.reason === nothing ? nothing : String(m.reason),
             ) for m in snapshot.metrics
         ),
     )
@@ -853,6 +846,8 @@ function _emit_machine_progress!(reporter::ProgressReporter, snapshot::ProgressS
     for metric in snapshot.metrics
         snapshot.event === :progress || continue
         startswith(String(metric.name), "t_") || continue
+        metric.measurement_status === :measured || continue
+        metric.unit == "s" || continue
         metric.value isa Real && isfinite(metric.value) && metric.value >= 0 || continue
         name=String(metric.name)[3:end]
         count=get(reporter.timing_calls, name, 0)+1

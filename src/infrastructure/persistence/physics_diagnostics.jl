@@ -103,7 +103,7 @@ function _write_psd_history!(
                 "energy_eV",
                 :energy_index,
                 problem.grids.ε .* problem.scales.E₀_eV .+
-                _electronvolts(problem.physical.E_ref),
+                _runner_electronvolts(problem.physical.E_ref),
             ),
             (
                 "momentum_per_nm",
@@ -269,7 +269,7 @@ end
 
 function _physical_certification_data(solution)
     metrics=solution.report.metrics
-    limits=_solution_validation_limits(solution.options.tolerances, metrics)
+    limits=QCLNEGF.solution_metric_diagnostics(solution).strict_limits
     function category(required)
         present=filter(name->haskey(metrics, name), required)
         failed=filter(
@@ -716,4 +716,105 @@ function _final_audit_equal(left,right)
         return Float64(left)==Float64(right)
     end
     return typeof(left)===typeof(right) && left==right
+end
+
+# This is a bounded non-wire composition port, not a new scientific receipt.
+function _p05_display_tree(value,path=(),depth=0)
+    _p04_require(depth<=16,"display nesting exceeds producer profile")
+    if value isa AbstractDict
+        _p04_require(all(k->k isa String && isvalid(k),keys(value)),"display key is not UTF-8 string")
+        for (key,child) in value;_p05_display_tree(child,(path...,key),depth+1);end
+    elseif value isa AbstractVector
+        if length(path)==3 && path[1]=="quadrature" && path[2] in ("energy","radial","spatial") && path[3]=="weights"
+            _p04_require(value isa Vector{Float64},"display quadrature dtype differs")
+        else
+            _p04_require(ndims(value)==1 && length(value)<=1024 && !(eltype(value)<:Number),"numeric/large array on display port")
+            for item in value;_p05_display_tree(item,path,depth+1);end
+        end
+    elseif value isa String
+        _p05_string(value)
+    else
+        _p04_require(value===nothing || value isa Union{Bool,Integer} || value isa AbstractFloat && isfinite(value),"unsupported/nonfinite display object")
+    end
+    nothing
+end
+function _p05_presentation(snapshot,status,quality,messages,limit)
+    assessment=snapshot.assessment
+    _p04_keys(assessment,("registry_version","registry_source","model_context","quadrature","scales","iterative_converged",
+        "fixed_hartree_converged","physical_gates_passed","stationary_candidate_accepted","discretization_verified","scientific_accepted",
+        "scientific_acceptance_reason","outer_confirmation_count","metrics","final_fixed_point_audit","evaluator"))
+    _p04_keys(assessment["model_context"],("boundary_condition","basis_contract","energy_shift_discretization","enabled_scattering","physical_models"))
+    _p04_keys(assessment["quadrature"],("energy","radial","spatial","spin_degeneracy"))
+    for name in ("energy","radial","spatial");_p04_keys(assessment["quadrature"][name],("weights","units"));end
+    z,e,k,_=snapshot.context.dimensions
+    _p04_require(all(length(assessment["quadrature"][name]["weights"])==n for (name,n) in (("energy",e),("radial",k),("spatial",z))),"display quadrature domain differs")
+    _p04_keys(assessment["scales"],("E0_eV","L0_m","lambda_P","Nb","energy_tail_window_fraction","momentum_tail_window_fraction"))
+    for record in values(assessment["metrics"])
+        _p04_keys(record,("registry_version","metric_id","theory_reference","formula","formula_source","formula_context","units","normalization",
+            "denominator_floor","weights","applicability","threshold_origin","error_budget","value","recorded_value","status","threshold","comparison","iteration_comparison","category","reason"))
+        _p04_keys(record["denominator_floor"],("kind","value","units"))
+        _p04_keys(record["applicability"],("applies","scope","reason"))
+        _p04_keys(record["threshold_origin"],("kind","parameter","source","literature_threshold","interpretation"))
+        _p04_keys(record["error_budget"],("class","estimated_bound","bound_status","interpretation","discretization_evidence"))
+    end
+    audit=assessment["final_fixed_point_audit"]
+    audit===nothing || _p05_audit_shape(audit)
+    # Guard ownership shape before metadata display allocations; no array deepcopy.
+    _p05_metadata_cost((assessment,messages),limit)
+    _p05_display_tree(assessment)
+    for message in messages;_p05_string(message);end
+    validation=_light_validation_data(snapshot;messages)
+    positivity=_light_positivity_data(snapshot;status,quality)
+    (;stationary_assessment=assessment,validation,positivity)
+end
+
+function _p05_audit_measure_shape(value)
+    _p04_keys(value,("status","value","nonfinite","reason"))
+    _p04_require(value["status"] in ("measured","error","unavailable","not_applicable") &&
+        (value["value"]===nothing || value["value"] isa Real && !(value["value"] isa Bool) && isfinite(value["value"])) &&
+        (value["nonfinite"]===nothing || value["nonfinite"] in ("nan","+inf","-inf")) &&
+        (value["reason"]===nothing || value["reason"] isa String),"unknown captured audit measurement shape")
+end
+function _p05_audit_shape(audit)
+    _p04_keys(audit,("schema","record_status","reason","detail","detail_truncated","shape","units","context","history","dyson","spectral","keldysh","selfenergy","charge","poisson"))
+    _p04_require(audit["schema"]=="qcl-negf-final-fixed-point-audit-v1" && audit["record_status"] in ("measured","partial_error","unavailable") &&
+        audit["detail_truncated"] isa Bool,"unknown captured audit profile")
+    _p04_keys(audit["shape"],("NE","Nk","Nb"));_p04_keys(audit["units"],("native","energy_scale","length_scale","index"))
+    context=audit["context"]
+    _p04_keys(context,("status","reason","unknown_fields","backend","energy_shift","hilbert","contraction","kernel_build","embedding","electron_electron_mode",
+        "embedding_periods","enabled_scattering","E0_eV","L0_m","lambda_P","map_kernels_shared_with_solver","independent_physics_oracle","state_alignment",
+        "alignment_reason","source_owner_role","source_paths"))
+    _p04_keys(context["source_paths"],("U","n","GR","GL","GG","A"))
+    _p05_strings(context["unknown_fields"]);_p05_strings(context["enabled_scattering"])
+    _p04_require(context["status"] in ("known","unknown") && context["independent_physics_oracle"]===false &&
+        context["source_owner_role"]=="physics.full","unknown captured audit context")
+    history=audit["history"];_p04_keys(history,("inner_last","inner_previous","outer_last","previous_lambda"))
+    _p05_audit_measure_shape(history["previous_lambda"])
+    dyson=audit["dyson"];_p04_keys(dyson,("ratio","global_abs_F","max_abs_F","ratio_witness","absolute_witness"))
+    for name in ("ratio","global_abs_F","max_abs_F");_p05_audit_measure_shape(dyson[name]);end
+    for name in ("ratio_witness","absolute_witness")
+        witness=dyson[name];_p04_keys(witness,("status","e_index","k_index","numerator_F","D_F","GR_F","identity_F","denominator","ratio"))
+        for key in ("numerator_F","D_F","GR_F","identity_F","denominator","ratio");_p05_audit_measure_shape(witness[key]);end
+    end
+    for name in ("spectral","keldysh")
+        record=audit[name];_p04_keys(record,("numerator_F","scale_F","denominator","ratio","floor"))
+        for key in ("numerator_F","scale_F","denominator","ratio");_p05_audit_measure_shape(record[key]);end
+    end
+    selfenergy=audit["selfenergy"];_p04_keys(selfenergy,("rows","winner","max_ratio","floor"))
+    _p04_require(selfenergy["rows"] isa AbstractVector && length(selfenergy["rows"])<=27,"captured selfenergy display rows exceed current producer")
+    for row in selfenergy["rows"]
+        _p04_keys(row,("family","component","numerator_F","scale_F","denominator","ratio"))
+        _p04_require(row["family"] in (_P05_SCATTERING...,"electron_electron","embedding_total","embedding_plus","embedding_minus") &&
+            row["component"] in ("R","L","G"),"captured audit family/component differs")
+        for key in ("numerator_F","scale_F","denominator","ratio");_p05_audit_measure_shape(row[key]);end
+    end
+    selfenergy["winner"]===nothing || _p04_keys(selfenergy["winner"],("family","component"))
+    _p05_audit_measure_shape(selfenergy["max_ratio"])
+    charge=audit["charge"]
+    _p04_keys(charge,("target_sheet","stored_raw_sheet","normalized_sheet","candidate_raw_sheet","stored_lambda","candidate_lambda","stored_constraint","candidate_constraint","normalized_residual","lambda_change"))
+    for value in values(charge);_p05_audit_measure_shape(value);end
+    poisson=audit["poisson"]
+    _p04_keys(poisson,("residual_ratio","residual_numerator_F","rhs_F","additive_floor","denominator","border_scale","zeta_signed","neutrality_signed","neutrality_abs","target_sheet","neutrality_ratio","rU_max"))
+    for value in values(poisson);_p05_audit_measure_shape(value);end
+    _p05_display_tree(audit,("final_fixed_point_audit",));nothing
 end

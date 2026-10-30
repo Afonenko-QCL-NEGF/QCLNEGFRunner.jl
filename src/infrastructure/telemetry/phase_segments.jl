@@ -47,6 +47,15 @@ struct _PhaseObserverUnavailable <: Exception
 end
 Base.showerror(io::IO,error::_PhaseObserverUnavailable)=print(io,"phase observation unavailable: ",error.reason)
 const _PHASE_WRITER_SLOT=Threads.Atomic{Bool}(false)
+struct _NoPhasePublicationHook <: Function end
+(::_NoPhasePublicationHook)(stage,path)=nothing
+const _NO_PHASE_PUBLICATION_HOOK=_NoPhasePublicationHook()
+struct _PhaseResidentProfile
+    policy::PhaseObservationPolicy
+    capacity_events::Int
+    header_bytes::Int
+    payload_bound_bytes::Int
+end
 mutable struct _NativePhaseObserver
     directory::String
     root::String
@@ -85,7 +94,66 @@ mutable struct _NativePhaseObserver
     publication::Union{Nothing,Dict{String,Any}}
     hook::Function
     task::Union{Nothing,Task}
+    lifetime_generation::UInt64
+    owner_epoch::UInt64
+    caller_released::Threads.Atomic{Bool}
+    admitting::Threads.Atomic{Bool}
+    producer_state::Threads.Atomic{UInt8} # same closed/admitted linearization as scalar
 end
+mutable struct _PhaseLifetime
+    profile::Union{Nothing,_PhaseResidentProfile}
+    generation::UInt64
+    owner_epoch::UInt64
+    started::Threads.Atomic{Bool}
+    caller_released::Threads.Atomic{Bool}
+    @atomic task::Union{Nothing,Task}
+    @atomic owner::Union{Nothing,_NativePhaseObserver}
+end
+const _PHASE_RESIDENCY_LOCK=ReentrantLock()
+const _PHASE_RESIDENCY=Ref{Union{Nothing,_PhaseLifetime}}(nothing)
+const _PHASE_GENERATION_COUNTER=Ref{UInt64}(0)
+function _phase_reap_locked!()
+    r=_PHASE_RESIDENCY[]
+    r===nothing && return
+    t=@atomic :acquire r.task
+    released=r.owner_epoch==0 ? r.caller_released[] : _P05_PHASE_RELEASE_EPOCH[]>=r.owner_epoch
+    if released
+        owner=@atomic :acquire r.owner
+        owner===nothing || Threads.atomic_or!(owner.producer_state,UInt8(2))
+        quiet=owner===nothing || owner.producer_state[]==UInt8(2)
+        if quiet && (!r.started[] || t!==nothing && istaskdone(t))
+            _PHASE_RESIDENCY[]=nothing;_PHASE_WRITER_SLOT[]=false
+        end
+    end
+    nothing
+end
+function _phase_profile(directory,root,identity,session,p::PhaseObservationPolicy,c;
+    hook=_NO_PHASE_PUBLICATION_HOOK)
+    hook===_NO_PHASE_PUBLICATION_HOOK || return nothing
+    c isa Int && c>0 && p.batch_events<=c || throw(ArgumentError("invalid phase capacity"))
+    add=Base.checked_add;mul=Base.checked_mul
+    h=256
+    for text in (directory,root,session,values(identity)...)
+        text isa String && isvalid(text) || throw(ArgumentError("unknown phase header"))
+        h=add(h,ncodeunits(text))
+    end
+    n=min(c,p.capacity_bytes÷256);ur=min(mul(128,n),p.capacity_bytes÷128)
+    q,b,d=p.batch_events,p.batch_bytes,p.maximum_depth
+    a=min(q,p.maximum_aggregate_keys);u=min(mul(128,q),b÷128)
+    w=p.mode===:diagnostic ? u : mul(5,a)
+    kr=add(add(add(64,mul(5,n)),ur),mul(2,d))
+    tr=add(add(p.capacity_bytes,mul(d,add(add(p.maximum_event_bytes,h),128))),mul(8,h))
+    kw=add(add(add(add(add(64,mul(5,q)),u),mul(2,w)),mul(32,a)),mul(2,d))
+    tw=add(add(mul(8,b),mul(512,kw)),mul(16,h));jw=add(mul(6,tw),mul(512,kw))
+    bytes=add(add(add(add(4096,mul(16,c)),mul(512,kr)),mul(4,tr)),add(add(mul(4096,kw),mul(16,tw)),mul(4,jw)))
+    _PhaseResidentProfile(p,c,h,bytes)
+end
+function _phase_reserve_locked!(profile,epoch)
+    g=_observer_generation!(_PHASE_GENERATION_COUNTER)
+    r=_PhaseLifetime(profile,g,epoch,Threads.Atomic{Bool}(false),Threads.Atomic{Bool}(false),nothing,nothing)
+    _PHASE_RESIDENCY[]=r;_PHASE_WRITER_SLOT[]=true;r
+end
+_phase_closed(o)=o.closed[] || o.owner_epoch!=0 && _P05_PHASE_RELEASE_EPOCH[]>=o.owner_epoch
 
 # Counters saturate honestly instead of wrapping; fault bit 4 marks unavailable totals.
 function _phase_add!(value::Threads.Atomic{Int}, amount::Int=1)
@@ -134,13 +202,31 @@ The descriptor locates a configured source; its initial Current may still be pen
 """
 function _start_phase_observer(directory::AbstractString;artifact_root::AbstractString,
     identity::AbstractDict,source_session::AbstractString,policy::PhaseObservationPolicy,
-    capacity_events::Int,proc_root::String="/proc",publication_hook::Function=(stage,path)->nothing)
+    capacity_events::Int,proc_root::String="/proc",publication_hook::Function=_NO_PHASE_PUBLICATION_HOOK,
+    admission::Union{Nothing,_P05ObserverAdmission}=nothing)
     capacity_events>0 && policy.batch_events<=capacity_events || throw(ArgumentError("invalid event capacity"))
     root=abspath(artifact_root);directory=abspath(directory);_phase_relative(root,directory)
     session=_phase_portable_id(String(source_session));owned=_phase_identity(identity)
-    # This process-local slot bounds retained tasks/batches even if close cannot stop blocked I/O.
-    Threads.atomic_cas!(_PHASE_WRITER_SLOT,false,true) &&
-        throw(_PhaseObserverUnavailable(:previous_phase_writer_pending))
+    profile=_phase_profile(directory,root,owned,session,policy,capacity_events;hook=publication_hook)
+    trylock(_PHASE_RESIDENCY_LOCK) || throw(_PhaseObserverUnavailable(:observer_residency_snapshot_contended))
+    local r
+    try
+        _P05_OBSERVER_EPOCH[]==0 && _phase_reap_locked!()
+        if admission===nothing
+            _P05_OBSERVER_EPOCH[]==0 || throw(_PhaseObserverUnavailable(:observer_epoch_active))
+            (_PHASE_WRITER_SLOT[] || _PHASE_RESIDENCY[]!==nothing) &&
+                throw(_PhaseObserverUnavailable(:previous_phase_writer_pending))
+            r=_phase_reserve_locked!(profile,UInt64(0))
+        else
+            r=_PHASE_RESIDENCY[]
+            _P05_OBSERVER_EPOCH[]==admission.epoch && admission.start_phase && r!==nothing &&
+                r.owner_epoch==admission.epoch && r.generation==admission.phase_generation &&
+                profile!==nothing && r.profile==profile || throw(ArgumentError("phase admission differs"))
+        end
+        Threads.atomic_cas!(r.started,false,true)==false || throw(_PhaseObserverUnavailable(:previous_phase_writer_pending))
+    finally
+        unlock(_PHASE_RESIDENCY_LOCK)
+    end
     try
     # Session-local process monotonic clock; boot identity is deliberately not fabricated/probed.
     source=Dict{String,Any}("session_id"=>session,"clock_domain_id"=>"julia-monotonic:$(getpid()):$session",
@@ -150,12 +236,17 @@ function _start_phase_observer(directory::AbstractString;artifact_root::Abstract
     o=_NativePhaseObserver(directory,root,owned,source,policy,ring,1,1,0,0,ReentrantLock(),
         Threads.Atomic{Bool}(false),Threads.Atomic{Bool}(false),atom(),atom(),atom(),atom(),
         atom(),atom(),atom(),atom(),atom(),Threads.Atomic{UInt64}(0),ntuple(_->atom(),6),atom(),atom(),atom(),atom(),atom(),
-        atom(),atom(),atom(),Tuple{Symbol,String,String}[],0,nothing,publication_hook,nothing)
+        atom(),atom(),atom(),Tuple{Symbol,String,String}[],0,nothing,publication_hook,nothing,
+        r.generation,r.owner_epoch,r.caller_released,Threads.Atomic{Bool}(false),Threads.Atomic{UInt8}(0))
+    @atomic :release r.owner=o
     o.task=Threads.@spawn _phase_worker!(o)
+    @atomic :release r.task=o.task
     o
     catch
-        # Only this successful acquirer owns the slot. Refused starts never enter this block.
-        _PHASE_WRITER_SLOT[]=false
+        # Known pre-spawn allocation failure; a task with an uncertain attachment is retained.
+        if (@atomic :acquire r.owner)===nothing
+            r.started[]=false;r.caller_released[]=true
+        end
         rethrow()
     end
 end
@@ -167,9 +258,10 @@ function _phase_event_charge(event,limit)
     length(event.metrics)<=128 || throw(ArgumentError("too many phase metrics"))
     remaining=Ref(limit)
     _telemetry_charge!(remaining,256)
-    for text in (String(event.action),String(event.stage),event.label,String(event.status),event.message)
-        isvalid(text) || throw(ArgumentError("invalid phase text"))
-        _telemetry_charge!(remaining,6*ncodeunits(text)+8)
+    for text in (event.action,event.stage,event.label,event.status,event.message)
+        bytes=text isa Symbol ? sizeof(text) : ncodeunits(text)
+        _telemetry_charge!(remaining,Base.checked_add(Base.checked_mul(6,bytes),8))
+        isvalid(String(text)) || throw(ArgumentError("invalid phase text"))
     end
     isempty(event.label) && throw(ArgumentError("phase name missing"))
     !isempty(String(event.stage)) && !isempty(String(event.status)) ||
@@ -178,11 +270,12 @@ function _phase_event_charge(event,limit)
         (event.iteration,event.total,event.outer_iteration,event.inner_iteration)) ||
         throw(ArgumentError("invalid phase context"))
     for (index,m) in enumerate(event.metrics)
-        !isempty(String(m.name)) && (m.reason===nothing || !isempty(String(m.reason))) ||
+        sizeof(m.name)>0 && (m.reason===nothing || sizeof(m.reason)>0) ||
             throw(ArgumentError("metric name/reason missing"))
-        for text in (String(m.name),m.unit,m.reason===nothing ? "" : String(m.reason))
-            isvalid(text) || throw(ArgumentError("invalid metric text"))
-            _telemetry_charge!(remaining,6*ncodeunits(text)+8)
+        for text in (m.name,m.unit,m.reason===nothing ? "" : m.reason)
+            bytes=text isa Symbol ? sizeof(text) : ncodeunits(text)
+            _telemetry_charge!(remaining,Base.checked_add(Base.checked_mul(6,bytes),8))
+            isvalid(String(text)) || throw(ArgumentError("invalid metric text"))
         end
         m.value isa String && !isvalid(m.value) && throw(ArgumentError("invalid metric value text"))
         _telemetry_charge!(remaining,m.value isa String ? 6*ncodeunits(m.value)+2 : 96)
@@ -196,12 +289,30 @@ function _phase_event_charge(event,limit)
 end
 
 """Bounded scalar admission only. Returns false for technical loss, never waits for the writer."""
+function _phase_try_producer!(o::_NativePhaseObserver)::Bool
+    state=Threads.atomic_cas!(o.producer_state,UInt8(0),UInt8(1))
+    if state!=0
+        _phase_drop!(o,state & UInt8(2)!=0 ? 4 : 2);return false
+    end
+    if _phase_closed(o) || Threads.atomic_cas!(o.admitting,false,true)
+        _phase_drop!(o,_phase_closed(o) ? 4 : 2)
+        Threads.atomic_and!(o.producer_state,UInt8(2)) # last admitted-lane access
+        return false
+    end
+    true
+end
+function _phase_release_producer!(o::_NativePhaseObserver)
+    o.admitting[]=false
+    Threads.atomic_and!(o.producer_state,UInt8(2))
+    nothing
+end
 function _enqueue_phase!(o::_NativePhaseObserver,event::QCLNEGF.SolverEvent)::Bool
     event.action in (:phase_begin,:phase_end) || return false
     started=time_ns();sequence=_phase_add!(o.seen)
+    _phase_try_producer!(o) || return false
     try
-        if o.closed[] || o.failed[]
-            _phase_drop!(o,o.closed[] ? 4 : 6);return false
+        if _phase_closed(o) || o.failed[]
+            _phase_drop!(o,_phase_closed(o) ? 4 : 6);return false
         end
         bytes=try
             _phase_event_charge(event,o.policy.maximum_event_bytes)
@@ -213,8 +324,8 @@ function _enqueue_phase!(o::_NativePhaseObserver,event::QCLNEGF.SolverEvent)::Bo
             _phase_drop!(o,2);return false
         end
         try
-            if o.closed[] || o.failed[]
-                _phase_drop!(o,o.closed[] ? 4 : 6);return false
+            if _phase_closed(o) || o.failed[]
+                _phase_drop!(o,_phase_closed(o) ? 4 : 6);return false
             elseif o.queued[]==length(o.ring) || bytes>o.policy.capacity_bytes-o.buffered[]
                 _phase_drop!(o,1);return false
             elseif sequence<=o.last_sequence
@@ -234,10 +345,16 @@ function _enqueue_phase!(o::_NativePhaseObserver,event::QCLNEGF.SolverEvent)::Bo
         end
     finally
         _phase_add!(o.enqueue_ns,Int(time_ns()-started))
+        _phase_release_producer!(o)
     end
 end
 _record_native_phase!(o::_NativePhaseObserver,event::QCLNEGF.SolverEvent)=_enqueue_phase!(o,event)
-_close_phase_observer!(o::_NativePhaseObserver)=(o.closed[]=true;nothing)
+function _close_phase_observer!(o::_NativePhaseObserver)
+    Threads.atomic_or!(o.producer_state,UInt8(2))
+    o.closed[]=true
+    o.owner_epoch==0 && (o.caller_released[]=true)
+    nothing
+end
 function _phase_observer_statistics(o::_NativePhaseObserver)
     oldest=o.oldest_ns[]
     (events_seen=o.seen[],enqueued=o.enqueued[],sealed_events=o.sealed[],coalesced_events=o.coalesced[],
@@ -553,12 +670,12 @@ function _phase_worker!(o)
         _phase_prepare_directory!(o);prepared=true;_phase_current!(o)
         last_snapshot=time_ns();last_flush=last_snapshot
         while true
-            if o.queued[]>0 && (o.closed[] || o.queued[]>=o.policy.batch_events ||
+            if o.queued[]>0 && (_phase_closed(o) || o.queued[]>=o.policy.batch_events ||
                 o.buffered[]>=o.policy.batch_bytes || (time_ns()-last_flush)/1e9>=o.policy.flush_seconds)
                 batch=_phase_take_batch!(o)
                 _phase_seal!(o,batch);last_flush=time_ns();last_snapshot=last_flush
             end
-            if o.closed[] && o.queued[]==0
+            if _phase_closed(o) && o.queued[]==0
                 _phase_current!(o;closing=true);break
             end
             if (time_ns()-last_snapshot)/1e9>=o.policy.snapshot_seconds
@@ -580,8 +697,8 @@ function _phase_worker!(o)
         catch
         end
     finally
-        # Actual task exit, including failed initialization; close is deliberately not a release.
-        _PHASE_WRITER_SLOT[]=false
+        # Tail is not istaskdone. Only later metadata maintenance can reap this generation.
+        o.closed[]=true
     end
     nothing
 end

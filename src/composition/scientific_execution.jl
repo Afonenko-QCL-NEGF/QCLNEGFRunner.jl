@@ -2,6 +2,56 @@ struct _ScientificPause <: Exception
     commit_path::Union{Nothing,String}
     reason::Symbol
 end
+
+function _p05_prepare_scientific_request!(recorder::ScientificHistoryRecorder,
+    capture::_P05PlanCapture,configuration,point::ScientificPoint;
+    grant_bytes::Int,live_roots::NamedTuple,observer_admission::_P05ObserverAdmission)
+    capture.kind===:scientific_plan_v2 || throw(ArgumentError("scientific request requires scientific plan"))
+    resolved=_point_resolved_configuration(configuration,point)
+    model_preimage=_snapshot_model(resolved)
+    bytes2hex(sha256(canonical_bytes(model_preimage)))==recorder.identity["model_sha256"] ||
+        throw(ArgumentError("actual point model differs from native identity"))
+    roots=merge(live_roots,(;inputs_publication=(live_roots.inputs_publication...,capture,resolved,model_preimage)))
+    limit=_p05_input_metadata_limit(grant_bytes,roots;observer_admission)
+    request=publish_final_point_request!(recorder;plan_bytes=capture.bytes,model_preimage,
+        temperature_K=point.temperature_K,voltage_per_period_V=point.voltage_per_period_V,
+        scattering_requested=resolved.scattering,kind=capture.kind,maximum_metadata_bytes=limit)
+    return (;request,model_preimage,resolved_configuration=resolved)
+end
+function _p05_emit_scalar!(sender,event::QCLNEGF.SolverEvent,header::NamedTuple)::Bool
+    _scalar_try_producer!(sender) || return false
+    try
+        keys(header)==(:point_id,:execution_id,:attempt) || throw(ArgumentError("unknown scalar event header"))
+        length(event.metrics)<=128 || throw(ArgumentError("too many scalar metrics"))
+        # Symbol conversion itself must be bounded, before building attribute dictionaries.
+        for symbol in (event.action,event.stage,event.status)
+            sizeof(symbol)<=sender.maximum_event_bytes÷6 || throw(ArgumentError("oversized scalar symbol"))
+        end
+        remaining=Ref(sender.maximum_event_bytes)
+        attributes=Dict{String,Any}("point_id"=>header.point_id,"execution_id"=>header.execution_id,
+            "attempt"=>header.attempt,"stage"=>String(event.stage),"iteration"=>event.iteration,
+            "total"=>event.total,"message"=>event.message,"metrics"=>Dict{String,Any}())
+        copied=_telemetry_scalar_copy(Dict{String,Any}("schema"=>"qcl-runtime-event-v1",
+            "event"=>String(event.action),"name"=>event.label,"status"=>String(event.status),
+            "timestamp_unix_seconds"=>time(),"attributes"=>attributes),0,remaining)
+        metrics=copied["attributes"]["metrics"]
+        for m in event.metrics
+            for symbol in (m.name,m.measurement_status,m.reason)
+                symbol===nothing || sizeof(symbol)<=remaining[]÷6 || throw(ArgumentError("oversized scalar metric symbol"))
+            end
+            name=String(m.name)
+            _telemetry_charge!(remaining,Base.checked_add(Base.checked_mul(6,ncodeunits(name)),4))
+            metrics[name]=_telemetry_scalar_copy(Dict{String,Any}("value"=>m.value,"unit"=>m.unit,
+                "measurement_status"=>String(m.measurement_status),"reason"=>m.reason===nothing ? nothing : String(m.reason)),3,remaining)
+        end
+        _enqueue_scalar_copy!(sender,copied)
+    catch error
+        error isa InterruptException && rethrow()
+        Threads.atomic_add!(sender.dropped,1);false
+    finally
+        _scalar_release_producer!(sender)
+    end
+end
 _ScientificPause(path::String) = _ScientificPause(path, :paused)
 
 # A paused execution may carry an older, already verified coherent commit.
@@ -106,10 +156,15 @@ function _point_result(
     observables = Dict{String,Any}(),
     data = Dict{String,Any}(),
     postprocessing = Dict{String,Any}(),
+    phase_source = nothing,
 )
-    if status in (:skipped,:failed,:cancelled) && get(data,"full_state",nothing)===nothing
-        data["full_state"]=nothing
-        data["state_absence_reason"]=status===:skipped ? "solver_not_run" : "solver_did_not_publish_a_final_state"
+    data["phase_source"] = _phase_source_projection(phase_source)
+    get!(data,"native_source") do
+        _p05_native_source(".";reason=status===:skipped ? "solver_not_run" : "no_selected_native_state")
+    end
+    get!(data,"optical_attachment",nothing)
+    if isempty(postprocessing)
+        postprocessing=Dict{String,Any}("optical"=>Dict{String,Any}("status"=>"not_requested","error"=>nothing))
     end
     return ScientificPointResult(
         point.id,
@@ -207,6 +262,17 @@ function _scientific_memory_reservation(config, resource_plan,
         result["margin"]=_resource_margin_budget(config,resource_plan,hardware,policy;envelope,numerical_required_bytes=required)
     end
     return result
+end
+
+# SOURCE admission before allocating a configured grid/basis/kernel or base cache.
+# The caller selected config/P/plan once; this gate consumes that same authority.
+function _p05_scientific_build_admission!(config,resource_plan,reservation,live_roots;
+    observer_admission::_P05ObserverAdmission)
+    grant=min(resource_plan.memory_budget_bytes,reservation["memory_budget_bytes"],config.production.memory_budget_bytes)
+    available=_p05_input_metadata_limit(grant,live_roots;observer_admission)
+    reservation["estimated_peak_bytes"]<=available ||
+        throw(ArgumentError("observer payload exceeds scientific build grant"))
+    available
 end
 
 """Record Hamiltonian coverage before allocating production iteration workspaces.
@@ -316,25 +382,80 @@ function _scientific_charge_observables(solution)
     return fields
 end
 
-function _scientific_progress(root, point, attempt, status, artifact_root; event = nothing)
+function _scientific_run_id(plan::ScientificPlan,sources::AbstractDict,requested::Union{Nothing,AbstractString})
+    if requested === nothing
+        records=get(sources,"solver_source_files",nothing)
+        records isa AbstractVector && !isempty(records) || throw(ArgumentError("exact_execution_runtime_unavailable:source_files"))
+        return content_id("run",Dict("plan_fingerprint"=>plan.fingerprint,"source_files"=>records))
+    end
+    run=String(requested)
+    occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z",run) || throw(ArgumentError("invalid run identity"))
+    return run
+end
+
+function _scientific_point_identity(plan::ScientificPlan,execution::ScientificExecution,
+    point::ScientificPoint,attempt::Integer;run_id::AbstractString,plan_sha256::AbstractString)
+    attempt isa Bool && throw(ArgumentError("attempt must be a positive integer"))
+    0 < attempt <= typemax(UInt64) || throw(ArgumentError("attempt must be a positive UInt64"))
+    run=String(run_id)
+    occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z",run) || throw(ArgumentError("invalid run identity"))
+    occursin(r"^[0-9a-f]{64}\z",plan_sha256) || throw(ArgumentError("invalid plan SHA256"))
+    selected_executions=filter(e->e.id==execution.id,plan.executions)
+    length(selected_executions)==1 && only(selected_executions) === execution ||
+        throw(ArgumentError("execution is not the selected plan execution"))
+    selected_points=filter(p->p.id==point.id,plan.points)
+    length(selected_points)==1 && _point_dict(only(selected_points))==_point_dict(point) &&
+        point.execution_id==execution.id && point.id in execution.point_ids ||
+        throw(ArgumentError("point is not the selected plan point"))
+    passport=_point_passport(execution.configuration,point)
+    return Dict{String,Any}("run_id"=>run,"execution_id"=>execution.id,"point_id"=>point.id,
+        "attempt"=>string(attempt),
+        "branch_id"=>content_id("branch",Dict("execution_id"=>point.execution_id,"branch"=>point.branch)),
+        "model_sha256"=>passport["model_sha256"],"plan_sha256"=>String(plan_sha256))
+end
+
+function _phase_source_projection(source)
+    source === nothing && return Dict{String,Any}(
+        "status"=>"unavailable", "session_id"=>nothing, "current_path"=>nothing,
+        "reason"=>"phase_source_not_initialized")
+    status = source.status
+    status in (:available, :disabled, :unavailable) || throw(ArgumentError("invalid phase source status"))
+    if status === :available
+        source.session_id isa AbstractString && !isempty(source.session_id) &&
+            source.current_path isa AbstractString && !isempty(source.current_path) &&
+            source.reason === nothing || throw(ArgumentError("invalid available phase source"))
+    else
+        source.session_id === nothing && source.current_path === nothing &&
+            source.reason isa Union{AbstractString,Symbol} && !isempty(String(source.reason)) ||
+            throw(ArgumentError("invalid unavailable phase source"))
+    end
+    return Dict{String,Any}("status"=>String(status), "session_id"=>source.session_id,
+        "current_path"=>source.current_path, "reason"=>source.reason === nothing ? nothing : String(source.reason))
+end
+
+function _scientific_progress(root, point, attempt, status, artifact_root; event = nothing, phase_source = nothing,native_source=nothing)
     # Producer phases have their own append-only timeline. They must not replace
     # the last physical residual row in the current-point progress projection.
     event !== nothing && event.action in (:phase_begin, :phase_end) && return nothing
     data=Dict{String,Any}(
-        "schema"=>"qcl-negf-current-point-v1",
+        "schema"=>"qcl-negf-current-point-v2",
         "point_id"=>point.id,
         "execution_id"=>point.execution_id,
         "attempt"=>attempt,
         "status"=>String(status),
         "updated_unix"=>time(),
         "artifact_root"=>replace(relpath(artifact_root, root), '\\'=>'/'),
+        "phase_source"=>_phase_source_projection(phase_source),
+        "native_source"=>native_source===nothing ? _p05_native_source(".";reason="no_selected_native_state") : deepcopy(native_source),
     )
     if event!==nothing
         data["stage"]=String(event.stage)
         data["iteration"]=event.iteration
         data["total"]=event.total
         data["metrics"]=[
-            Dict("name"=>String(m.name), "value"=>m.value, "unit"=>m.unit) for
+            Dict("name"=>String(m.name), "value"=>m.value isa AbstractFloat && !isfinite(m.value) ? nothing : m.value,
+                "unit"=>m.unit,"measurement_status"=>m.value isa AbstractFloat && !isfinite(m.value) ? "error" : String(m.measurement_status),
+                "reason"=>m.value isa AbstractFloat && !isfinite(m.value) ? "nonfinite_display_value" : m.reason===nothing ? nothing : String(m.reason)) for
             m in event.metrics
         ]
         data["message"]=event.message
@@ -456,7 +577,20 @@ function execute_scientific_plan(
     resource_policy::Symbol = :standalone,
     envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
     margin_context=nothing,
+    frozen_plan_bytes::Union{Nothing,Vector{UInt8}}=nothing,
+    frozen_plan_capture::Union{Nothing,_P05PlanCapture}=nothing,
+    run_id::Union{Nothing,AbstractString}=nothing,
+    source_graph::Union{Nothing,AbstractDict}=nothing,
+    parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
+    phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
 )
+    frozen_plan_bytes===nothing || frozen_plan_capture===nothing || throw(ArgumentError("choose one frozen plan source"))
+    source_graph=_require_source_graph(source_graph)
+    recovery_bundle === nothing || throw(ArgumentError("unsupported_format: legacy recovery bundle"))
+    if parent_checkpoint !== nothing
+        _p05_parent_root_check(parent_checkpoint,output_directory)
+        attempt === nothing && throw(ArgumentError("native5 parent requires an explicit child attempt"))
+    end
     _scientific_resource_preflight(resource_policy,envelope)
     capture_reserve_bytes>=0 || throw(ArgumentError("capture reserve must be nonnegative"))
     archive_byte_budget>0 || throw(ArgumentError("archive byte budget must be positive"))
@@ -469,25 +603,50 @@ function execute_scientific_plan(
     isempty(selected_executions) && throw(ArgumentError("unknown selected execution"))
     selected_ids=Set(e.id for e in selected_executions)
     selected_points=[p for p in plan.points if p.execution_id in selected_ids]
+    if parent_checkpoint !== nothing
+        length(selected_points)==1 || throw(ArgumentError("native5 parent requires exactly one selected point"))
+        source_identity=checkpoint_reference(parent_checkpoint)["identity"]
+        source_identity["point_id"]==only(selected_points).id &&
+            source_identity["execution_id"]==only(selected_points).execution_id ||
+            throw(ArgumentError("native5 parent does not match selected point"))
+        frozen_plan_bytes===nothing && frozen_plan_capture===nothing &&
+            throw(ArgumentError("native5_parent_plan_bytes_required"))
+        original=frozen_plan_capture===nothing ? frozen_plan_bytes : frozen_plan_capture.bytes
+        frozen_plan_capture===nothing || frozen_plan_capture.kind===:scientific_plan_v2 ||
+            throw(ArgumentError("native5 parent scientific plan kind differs"))
+        length(original)<=CONFIGURATOR_PLAN_BYTES || throw(ArgumentError("scientific plan exceeds byte limit"))
+        bytes2hex(sha256(original))==source_identity["plan_sha256"] ||
+            throw(ArgumentError("native5 parent original plan bytes differ"))
+    end
+    # The mandatory final native5 writer is owned by the concurrent persistence
+    # integration. Refuse before output creation or compute until it is joined.
+    any(e->e.operation===:stationary,selected_executions) &&
+        throw(ArgumentError("native5_final_writer_unavailable: typed Results/AiiDA/Q1 transport qualification pending"))
     root=abspath(output_directory)
     mkpath(root)
     attempt===nothing || attempt>0 || throw(ArgumentError("attempt must be positive"))
     requested_attempt=attempt
     _check_storage_free(root,Base.checked_add(_minimum_scientific_output_bytes(plan)+maximum(e.outputs.recovery.reserve_bytes for e in selected_executions),capture_reserve_bytes))
-    plan_path=joinpath(root, "scientific_plan.json")
-    if isfile(plan_path)
-        stored=load_scientific_plan(plan_path)
-        stored.fingerprint==plan.fingerprint ||
-            throw(ArgumentError("output directory belongs to a different scientific plan"))
-    else
-        _scientific_json(plan_path, scientific_plan_dict(plan))
+    if margin_context !== nothing
+        margin_bytes=Vector{UInt8}(codeunits(margin_context.raw_plan))
+        frozen_plan_bytes === nothing || frozen_plan_bytes == margin_bytes ||
+            throw(ArgumentError("frozen plan differs from admitted resource entry"))
+        frozen_plan_capture===nothing || frozen_plan_capture.bytes==margin_bytes ||
+            throw(ArgumentError("frozen plan differs from admitted resource entry"))
+        frozen_plan_capture===nothing && (frozen_plan_bytes=margin_bytes)
     end
+    plan_binding=_freeze_scientific_plan(plan,root;frozen_plan_bytes,frozen_plan_capture)
+    solver_sources=_capture_solver_sources()
+    selected_run_id = run_id===nothing && parent_checkpoint!==nothing ?
+        checkpoint_reference(parent_checkpoint)["identity"]["run_id"] : run_id
+    scientific_run_id=_scientific_run_id(plan,solver_sources,selected_run_id)
     results=ScientificPointResult[]
     history=ScientificPointResult[]
     existing=Dict{String,ScientificPointResult}()
     result_path=joinpath(root, "series_result.json")
     if isfile(result_path)
         document, _=_read_series(root)
+        document["schema"]=="qcl-negf-series-result-v4" || throw(ArgumentError("native5_legacy_series_requires_explicit_migration"))
         document["plan_fingerprint"]==plan.fingerprint ||
             throw(ArgumentError("result/plan fingerprint mismatch"))
         _scientific_validate_raw_source_rows(plan, document)
@@ -503,42 +662,7 @@ function execute_scientific_plan(
                 (existing[record.id]=record)
         end
     end
-    inherited_history=Dict{String,String}()
-    if recovery_bundle!==nothing
-        requested_attempt===nothing && throw(ArgumentError("recovery import requires an explicit new attempt"))
-        source=abspath(recovery_bundle)
-        receipt=verify_recovery_receipt(joinpath(source,"commit.json"))
-        identity=receipt["identity"]
-        get(identity,"plan_fingerprint",nothing)==plan.fingerprint || throw(ArgumentError("recovery scientific plan differs"))
-        point=only(filter(p->p.id==get(identity,"point_id",nothing),selected_points))
-        point.execution_id==get(identity,"execution_id",nothing) || throw(ArgumentError("recovery execution identity differs"))
-        source_attempt=Int(identity["attempt"])
-        requested_attempt>source_attempt || throw(ArgumentError("new attempt must exceed recovery source attempt"))
-        target=joinpath(root,"recovery",point.execution_id,point.id,"imported-$(source_attempt)")
-        ispath(target) && throw(ArgumentError("recovery import destination already exists"))
-        policy=only(e.outputs.recovery for e in selected_executions if e.id==point.execution_id)
-        progress_path=joinpath(source,"execution_progress.json")
-        isfile(progress_path) || throw(ArgumentError("portable recovery lacks execution_progress.json"))
-        progress=YAML.load_file(progress_path;dicttype=Dict{String,Any})
-        get(progress,"identity",nothing)==identity && get(progress,"active_point_id",nothing)==point.id &&
-        get(progress,"plan_fingerprint",nothing)==plan.fingerprint || throw(ArgumentError("portable recovery progress identity differs"))
-        imported_records=_import_completed_archives!(progress,archive_bundle,root,policy;archive_byte_budget,resource_policy,capture_reserve_bytes)
-        for record in imported_records
-            haskey(existing,record.id) && throw(ArgumentError("imported completed point already exists"))
-            existing[record.id]=record
-            push!(history,record)
-        end
-        imported_bytes=_storage_bytes([source])
-        _check_storage_budget([joinpath(root,"executions"),joinpath(root,"recovery")],policy.byte_budget,policy.reserve_bytes,Base.checked_add(imported_bytes,capture_reserve_bytes))
-        capture_reserve_bytes==0 || _check_storage_free(root,Base.checked_add(imported_bytes,Base.checked_add(policy.reserve_bytes,capture_reserve_bytes)))
-        mkpath(dirname(target))
-        _copy_regular_tree_buffered(source,target)
-        verify_recovery_receipt(joinpath(target,"commit.json"))
-        commit_relative=replace(relpath(joinpath(target,"commit.json"),root),'\\'=>'/')
-        data=Dict{String,Any}("result_commit"=>commit_relative,"full_state"=>replace(relpath(joinpath(target,"physics.h5"),root),'\\'=>'/'))
-        existing[point.id]=_point_result(point,source_attempt,_initialization("checkpoint"),:paused,:unconverged,false;data)
-        isfile(joinpath(target,"history.h5")) && (inherited_history[point.id]=joinpath(target,"history.h5"))
-    end
+    inherited_history=Dict{String,String}() # removed when final native5 persistence is joined
     point_order=[p.id for p in selected_points]
     for point in selected_points
         haskey(existing,point.id) && _upsert_scientific_point!(results,existing[point.id],point_order)
@@ -685,6 +809,8 @@ function execute_scientific_plan(
         configured=nothing
         base_cache=nothing
         preparation_error=nothing
+        build_admission=nothing
+        build_roots=nothing
         try
             if margin_context===nothing
                 config, resource_plan=resolve_execution_strategy(config;envelope)
@@ -707,6 +833,17 @@ function execute_scientific_plan(
             config.execution.solver_backend!==:production &&
                 config.domain_adaptation.mode!==:none &&
                 throw(ArgumentError("domain adaptation requires the production backend"))
+            # Reserve existing busy/draining entries before any numerical build.
+            # No producer starts in this temporary epoch. The point epoch later
+            # rechecks the actual built residents before starting its producers.
+            build_admission=_p05_begin_observers!(;phase_request=nothing,scalar_request=nothing)
+            build_roots=(;entry=(plan,selected_executions,selected_points,points,execution,config,source_graph),
+                resources=(resource_plan,reservation,envelope,margin_context,solver_sources,config.production),
+                construction=(),continuation=(parent_checkpoint,),
+                history=(results,history,existing,point_order,inherited_history),
+                observers=(telemetry_sink,),inputs_publication=(plan_binding,))
+            _p05_scientific_build_admission!(config,resource_plan,reservation,build_roots;
+                observer_admission=build_admission)
             configured=build_configured_problem(config)
             coverage=_scientific_representation_preflight(configured.problem)
             _scientific_json(
@@ -721,6 +858,9 @@ function execute_scientific_plan(
         catch error
             error isa InterruptException && rethrow()
             preparation_error=sprint(showerror, error)
+        finally
+            build_roots=nothing
+            build_admission===nothing || _p05_end_observers!(build_admission)
         end
         previous=nothing
         previous_id=nothing
@@ -740,129 +880,17 @@ function execute_scientific_plan(
             return nothing
         end
 
-        stored_scba, stored_outer=preparation_error===nothing ?
-                                  scientific_history_counts(execution_dir) : (0, 0)
-        archive_history=joinpath(root,"archive",execution.id)
-        if isdir(archive_history)
-            for (directory,_,files) in walkdir(archive_history)
-                "history.h5" in files || continue
-                h5open(joinpath(directory,"history.h5"),"r") do file
-                    for (kind,previous_count) in (("scba",stored_scba),("outer",stored_outer))
-                        column=file[kind*"/sequence"]
-                        value=length(column)==0 ? 0 : Int(column[length(column)])
-                        kind=="scba" ? (stored_scba=max(stored_scba,value)) : (stored_outer=max(stored_outer,value))
-                    end
-                end
-            end
-        end
-        scba_count=Ref(stored_scba)
-        outer_count=Ref(stored_outer)
         for point_id in execution.point_ids
             point=points[point_id]
             old=get(existing, point_id, nothing)
+            resume && old !== nothing && parent_checkpoint===nothing &&
+                throw(ArgumentError("native5_explicit_parent_selection_required"))
             attempt=requested_attempt===nothing ? (old===nothing ? 1 : old.attempt+1) : requested_attempt
             initialization=_initialization("cold")
-            if resume &&
-               old!==nothing &&
-               old.status===:completed &&
-               point.predecessor_id===nothing &&
-               execution.policies.voltage.mode===:independent
-                # Completed independent points can be resumed without a solver state.
-                all(
-                    pair->first(pair)=="artifact_root" ? isdir(joinpath(root, last(pair))) :
-                          first(pair) in ("state_absence_reason","resume_kind","pause_reason","recovery_origin","checkpoint_source_attempt") || last(pair)===nothing || isfile(joinpath(root, last(pair))),
-                    pairs(old.data),
-                ) || throw(ArgumentError("saved final artifacts missing for $point_id"))
-                commit=get(old.data, "result_commit", nothing)
-                commit===nothing && throw(
-                    ArgumentError("saved final point $point_id lacks its native commit"),
-                )
-                verify_point_artifacts(joinpath(root, commit))
-                _upsert_scientific_point!(results,old,point_order)
-                publish()
-                continue
-            end
-            if resume &&
-               old!==nothing &&
-               old.status===:completed &&
-               get(old.data, "full_state", nothing)!==nothing
-                verified_commit=verify_point_artifacts(joinpath(root, old.data["result_commit"]))
-                recovery=joinpath(root, old.data["full_state"])
-                raw=load_resolved_configuration_envelope(
-                    joinpath(dirname(recovery), "resolved_configuration.json"),
-                )
-                restored_config=_resolve_configuration(
-                    raw,
-                    ConfigurationProvenance(
-                        String[],
-                        String[],
-                        Dict{String,Vector{String}}(),
-                    ),
-                )
-                saved_problem=build_configured_problem(restored_config).problem
-                saved=load_production_restart(
-                    recovery,
-                    saved_problem;
-                    algorithms = config.algorithms,
-                    solver_options = config.solver,
-                )
-                seed_summary=_restored_voltage_seed_summary(verified_commit, saved, old)
-                previous=nothing
-                if _usable_voltage_state(seed_summary, execution.policies.voltage.mode)
-                    state=saved.scba
-                    restored_scba=SCBAResult(
-                        state.green,
-                        state.scattering,
-                        state.embedding,
-                        state.embedding_plus,
-                        state.embedding_minus,
-                        state.history,
-                        saved.original_scba_converged,
-                        saved.original_scba_status,
-                        saved.original_scba_quality,
-                        state.restart_contract,
-                        state.mixer_state,
-                    )
-                    previous=(; Uᴴ=saved.Uᴴ, scba=restored_scba)
-                end
-                previous===nothing && execution.policies.voltage.mode===:strict &&
-                    remember_failure(old,seed_summary,nothing;decorate=false)
-                previous_id=point_id
-                _upsert_scientific_point!(results,old,point_order)
-                publish()
-                continue
-            end
-            if resume && old!==nothing && old.status===:skipped &&
-               (requested_attempt===nothing || requested_attempt<=old.attempt)
-                _upsert_scientific_point!(results,old,point_order)
-                previous=nothing
-                previous_id=point_id
-                branch_failed |= execution.policies.voltage.mode===:strict
-                publish()
-                continue
-            end
-            if resume && old!==nothing && old.status===:completed
-                commit=get(old.data,"result_commit",nothing)
-                commit===nothing || verify_point_artifacts(joinpath(root,commit))
-                previous=nothing
-                previous_id=point_id
-                remember_failure(old,nothing,nothing;decorate=false)
-                _upsert_scientific_point!(results,old,point_order)
-                publish()
-                continue
-            end
-            restoring=resume &&
-                      old!==nothing &&
-                      old.status in (:paused, :running, :failed) &&
-                      get(old.data, "full_state", nothing)!==nothing
-            if resume && old!==nothing && old.status in (:paused,:running) && !restoring
-                throw(ArgumentError("unfinished point has no validated recovery; explicit fresh execution is required"))
-            end
+            restoring=parent_checkpoint!==nothing
             if restoring
-                initialization=_initialization(
-                    "checkpoint";
-                    checkpoint = old.data["full_state"],
-                )
+                initialization=_initialization("checkpoint";
+                    checkpoint=checkpoint_reference(parent_checkpoint)["manifest"]["path"])
             elseif point.predecessor_id===nothing
                 previous=nothing
                 previous_id=nothing
@@ -948,7 +976,11 @@ function execute_scientific_plan(
             solution=nothing
             reporter=nothing
             telemetry_sender=nothing
+            phase_observer=nothing
+            observer_admission=nothing
+            phase_source=(status=:disabled,session_id=nothing,current_path=nothing,reason="telemetry_disabled")
             history_recorder=nothing
+            callbacks=nothing;committed=nothing;recorded=nothing;final_phase=false
             latest_commit=Ref{Union{Nothing,String}}(
                 restoring &&
                 old !== nothing &&
@@ -957,8 +989,44 @@ function execute_scientific_plan(
             )
             terminal_status=:failed
             point_primary=nothing
-            _scientific_progress(root, point, attempt, :running, directory)
             try
+                phase_identity=execution.outputs.telemetry.enabled ?
+                    _scientific_point_identity(plan,execution,point,attempt;
+                        run_id=scientific_run_id,plan_sha256=plan_binding.plan_sha256) : nothing
+                session="phase-"*string(time_ns())
+                phase_policy=phase_observation_policy===nothing ?
+                    _normal_phase_policy(execution.outputs.telemetry.buffer_events) : phase_observation_policy
+                phase_request=execution.outputs.telemetry.enabled ?
+                    (;directory=joinpath(directory,"progress","phases",session),artifact_root=root,
+                        identity=phase_identity,source_session=session,policy=phase_policy,
+                        capacity_events=execution.outputs.telemetry.buffer_events) : nothing
+                scalar_request=execution.outputs.telemetry.enabled && telemetry_sink!==nothing ?
+                    (;sink=telemetry_sink,capacity=execution.outputs.telemetry.buffer_events,
+                        maximum_event_bytes=16384,poll_seconds=.01) : nothing
+                observer_admission=_p05_begin_observers!(;phase_request,scalar_request)
+                pre_roots=(;entry=(plan,selected_executions,selected_points,points,execution,point,config,source_graph),
+                    resources=(resource_plan,reservation,envelope,margin_context,solver_sources,config.production,observer_admission),
+                    construction=(configured,base_cache),continuation=(previous,previous_id,parent_checkpoint,branch_cause,initialization),
+                    history=(results,history,existing,old,latest_commit,point_order,inherited_history),
+                    observers=(telemetry_sink,),inputs_publication=(plan_binding,phase_source,phase_identity))
+                admitted_grant=min(reservation["memory_budget_bytes"],config.production.memory_budget_bytes)
+                available=_p05_input_metadata_limit(admitted_grant,pre_roots;observer_admission)
+                planned=QCLNEGF.estimate_production_memory(config.numerical,config.scattering;options=config.production)
+                planned.peak_bytes<=available || throw(ArgumentError("observer payload exceeds scientific grant"))
+                if execution.outputs.telemetry.enabled
+                    try
+                        observer_admission.start_phase || throw(_PhaseObserverUnavailable(:previous_phase_writer_pending))
+                        phase_observer=_start_phase_observer(joinpath(directory,"progress","phases",session);
+                            artifact_root=root,identity=phase_identity,source_session=session,
+                            policy=phase_policy,capacity_events=execution.outputs.telemetry.buffer_events,admission=observer_admission)
+                        phase_source=_phase_source_descriptor(phase_observer)
+                    catch phase_error
+                        phase_error isa InterruptException && rethrow()
+                        reason=phase_error isa _PhaseObserverUnavailable ? phase_error.reason : :phase_source_initialization_failed
+                        phase_source=(status=:unavailable,session_id=nothing,current_path=nothing,reason=reason)
+                    end
+                end
+                _scientific_progress(root, point, attempt, :running, directory;phase_source)
                 reporter=ProgressReporter(;
                     machine_directory = joinpath(directory, "progress"),
                     human_io = nothing,
@@ -972,24 +1040,24 @@ function execute_scientific_plan(
                     total = 1,
                 )
                 if execution.outputs.telemetry.enabled && telemetry_sink!==nothing
-                    telemetry_sender=ScalarTelemetrySender(telemetry_sink;capacity=execution.outputs.telemetry.buffer_events)
+                    if observer_admission.start_scalar
+                        telemetry_sender=_start_scalar_sender(telemetry_sink;capacity=execution.outputs.telemetry.buffer_events,
+                            maximum_event_bytes=16384,poll_seconds=.01,admission=observer_admission)
+                    else
+                        @warn "scalar telemetry unavailable" reason=:previous_scalar_sender_pending
+                    end
                 end
                 function observe_solver_event(event)
+                    event.action in (:phase_begin,:phase_end) && return nothing
                     if telemetry_sender!==nothing
-                        attributes=Dict{String,Any}("point_id"=>point.id,"execution_id"=>execution.id,
-                            "attempt"=>attempt,"stage"=>String(event.stage),"iteration"=>event.iteration,
-                            "total"=>event.total,"message"=>event.message,
-                            "metrics"=>Dict(String(m.name)=>Dict("value"=>m.value,"unit"=>m.unit) for m in event.metrics))
-                        emit_telemetry!(telemetry_sender,Dict("schema"=>"qcl-runtime-event-v1",
-                            "event"=>String(event.action),"name"=>event.label,"status"=>String(event.status),
-                            "timestamp_unix_seconds"=>time(),"attributes"=>attributes))
+                        _p05_emit_scalar!(telemetry_sender,event,(;point_id=point.id,execution_id=execution.id,attempt))
                     end
-                    _scientific_progress(root,point,attempt,:running,directory;event)
+                    _scientific_progress(root,point,attempt,:running,directory;event,phase_source)
                 end
-                event_sink=_progress_event_sink(reporter;solver_event_observer=observe_solver_event)
+                event_sink=_progress_event_sink(reporter;solver_event_observer=observe_solver_event,phase_observer)
                 runtime_options=with_production_options(
                     config.production;
-                    event_sink,
+                    event_sink=nothing,
                     phase_request = _native_phase_request(reporter.machine_directory;resource_policy),
                 )
                 problem=retarget_problem(
@@ -1001,59 +1069,6 @@ function execute_scientific_plan(
                 )
                 cache=base_cache===nothing ? nothing :
                       retarget_production_cache(base_cache, problem)
-                restart=nothing
-                if restoring
-                    source_path=joinpath(root,old.data["result_commit"])
-                    recovery_directory=joinpath(root,"recovery",execution.id,point.id)
-                    if isfile(joinpath(recovery_directory,"current.json"))
-                        source_path=load_recovery_commit(directory;recovery_root=recovery_directory)
-                    else
-                        verify_recovery_receipt(source_path)
-                    end
-                    recovery=joinpath(dirname(source_path),"physics.h5")
-                    source_commit=verify_point_artifacts(source_path)
-                    initialization=_initialization("checkpoint";checkpoint=replace(relpath(recovery,root),'\\'=>'/'))
-                    isfile(joinpath(dirname(source_path),"history.h5")) &&
-                        (inherited_history[point.id]=joinpath(dirname(source_path),"history.h5"))
-                    _scientific_validate_checkpoint_identity(
-                        source_commit,
-                        old,
-                        point,
-                        plan.fingerprint;
-                        acknowledged_fallback=source_path!=joinpath(root,old.data["result_commit"]),
-                    )
-                    saved_inputs=joinpath(dirname(recovery), "resolved_configuration.json")
-                    isfile(saved_inputs) || throw(
-                        ArgumentError("checkpoint has no immutable resolved configuration"),
-                    )
-                    inputs=load_resolved_configuration_envelope(saved_inputs)
-                    restored_config=_resolve_configuration(
-                        inputs,
-                        ConfigurationProvenance(
-                            String[],
-                            String[],
-                            Dict{String,Vector{String}}(),
-                        ),
-                    )
-                    problem=build_configured_problem(restored_config).problem
-                    cache=build_production_cache(problem; options = runtime_options)
-                    restart=load_production_restart(
-                        recovery,
-                        problem;
-                        incompatible = :error,
-                        algorithms = config.algorithms,
-                        solver_options = config.solver,
-                    )
-                    if restart.status in (:running, :snapshot)
-                        candidate, _, _, _=solve_periodic_poisson(
-                            problem,
-                            _electron_density_bar(problem, restart.scba.green.Gˡ),
-                        )
-                        updated=(1-config.solver.α_P) .* restart.Uᴴ .+
-                                config.solver.α_P .* candidate
-                        restart=merge(restart, (Uᴴ = updated,))
-                    end
-                end
                 coverage=_scientific_representation_preflight(problem)
                 coverage["voltage_per_period_V"]=point.voltage_per_period_V
                 coverage["temperature_K"]=point.temperature_K
@@ -1070,112 +1085,19 @@ function execute_scientific_plan(
                         ),
                     )
                 end
-                identity=Dict{String,Any}(
-                    "point_id"=>point.id,
-                    "execution_id"=>execution.id,
-                    "attempt"=>attempt,
-                    "plan_fingerprint"=>plan.fingerprint,
-                )
-                if haskey(inherited_history,point.id)
-                    inherited=joinpath(directory,"inherited-history.h5")
-                    cp(inherited_history[point.id],inherited;force=false)
-                    inherited_history[point.id]=inherited
-                    h5open(inherited,"r") do file
-                        for (kind,counter) in (("scba",scba_count),("outer",outer_count))
-                            sequences=read(file[kind*"/sequence"])
-                            isempty(sequences) || (counter[]=max(counter[],maximum(sequences)))
-                        end
-                    end
-                end
-                history_recorder=ScientificHistoryRecorder(
-                    directory,
-                    identity,
-                    scba_count,
-                    outer_count;
-                    resource_policy,
-                )
-                history_observer=(kind, outer, row, source)->record_scientific_history!(
-                    history_recorder,
-                    kind,
-                    outer,
-                    row,
-                    source,
-                )
+                identity=_scientific_point_identity(plan,execution,point,attempt;
+                    run_id=scientific_run_id,plan_sha256=plan_binding.plan_sha256)
+                unmeasured()=Dict{String,Any}("state"=>"not_measured","reason"=>"pending_scientific_assessment","evidence"=>nothing)
+                running_status=Dict{String,Any}("process"=>Dict{String,Any}("state"=>"running","exit_code"=>nothing,"reason"=>nothing),
+                    (name=>unmeasured() for name in ("convergence","physics","discretization","experimental"))...)
+                history_recorder=ScientificHistoryRecorder(directory;artifact_root=root,identity,
+                    source_epoch="epoch-"*string(time_ns()),provenance=source_graph,status=running_status,
+                    maximum_scba_rows=config.solver.max_scba,parent_checkpoint,resource_policy)
                 recovery_policy=execution.outputs.recovery
                 recovery_directory=joinpath(root,"recovery",execution.id,point.id)
                 archive_directory=joinpath(root,"archive",execution.id,point.id)
                 operational_directories=[joinpath(root,"executions"),joinpath(root,"recovery")]
                 checkpoint_clock=CheckpointDeadline(;interval_seconds=recovery_policy.interval_seconds)
-                function durable_state(state; analysis = true)
-                    state.observables[:representation_preflight]=coverage
-                    state.observables[:model_capabilities]=model_capabilities(
-                        state.problem,
-                        config.algorithms,
-                    )
-                    flush_scientific_history!(history_recorder; resource_policy)
-                    history_paths=scientific_history_sources(haskey(inherited_history,point.id) ? directory : dirname(directory))
-                    haskey(inherited_history,point.id) && pushfirst!(history_paths,inherited_history[point.id])
-                    commit=commit_point_artifacts(
-                        directory,
-                        state;
-                        resource_policy,
-                        identity,
-                        algorithms = config.algorithms,
-                        configuration = _point_resolved_raw(config, point),
-                        history_paths,
-                        analysis,
-                        terminal_status = state.status in
-                                          (:running, :running_scba, :snapshot) ? "running" :
-                                          "completed",
-                        checkpoint_metadata = checkpoint_policy(checkpoint_clock),
-                        storage_class = :recovery,
-                        recovery_root = recovery_directory,
-                        retain_generations = recovery_policy.retain_generations,
-                        byte_budget = recovery_policy.byte_budget,
-                        capture_reserve_bytes,
-                        reserve_bytes = recovery_policy.reserve_bytes,
-                        operational_roots = operational_directories,
-                        state_sequence = _scientific_next_state_sequence(recovery_directory),
-                        execution_progress = _scientific_execution_progress(results,point,root,plan.fingerprint),
-                    )
-                    checkpoint_completed!(checkpoint_clock)
-                    latest_commit[]=commit
-                    _resident_writer_preflight(resource_policy, :checkpoint_import_cleanup)
-                    for name in readdir(recovery_directory)
-                        startswith(name,"imported-") && rm(joinpath(recovery_directory,name);recursive=true)
-                    end
-                    current_data=Dict{String,Any}(
-                        "artifact_root"=>replace(relpath(directory, root), '\\'=>'/'),
-                        "result_commit"=>replace(relpath(commit, root), '\\'=>'/'),
-                        "full_state"=>replace(
-                            relpath(joinpath(dirname(commit), "physics.h5"), root),
-                            '\\'=>'/',
-                        ),
-                    )
-                    running_record=_point_result(
-                        point,
-                        attempt,
-                        initialization,
-                        :running,
-                        Symbol(solution_quality(state)),
-                        false;
-                        data = current_data,
-                    )
-                    _upsert_scientific_point!(results,running_record,point_order)
-                    publish()
-                    if pause_requested(root,identity)
-                        write_pause_receipt(root,commit,identity;archive_byte_budget)
-                        throw(_ScientificPause(commit))
-                    end
-                    return nothing
-                end
-                function observer(state)
-                    state.status===:snapshot || return
-                    outer=length(state.outer_history)
-                    cadence=config.output.snapshot_every_outer
-                    cadence>0 && (outer==1 || outer%cadence==0) || return
-                    recovery_policy.enabled && durable_state(state)
-                end
                 function checkpoint_request(context)
                     pause_requested(root,identity) && return true
                     recovery_policy.enabled || return false
@@ -1187,199 +1109,89 @@ function execute_scientific_plan(
                 end
                 runtime_options =
                     with_production_options(runtime_options; checkpoint_request)
-                function checkpoint_sink(state)
-                    state.status in (:running, :running_scba) || return nothing
-                    durable_state(state; analysis = false)
-                end
+                input_roots=(;
+                    entry=(plan,selected_executions,selected_points,points,execution,point,config,source_graph),
+                    resources=(resource_plan,reservation,envelope,margin_context,solver_sources,runtime_options,observer_admission),
+                    construction=(configured,base_cache,problem,cache),
+                    continuation=(previous,previous_id,parent_checkpoint,branch_cause,initialization),
+                    history=(results,history,existing,old,history_recorder,latest_commit,point_order,inherited_history),
+                    observers=(phase_observer,telemetry_sender,reporter,event_sink,observe_solver_event,
+                        publish,result_document,publish_unrun_descendants,remember_failure),
+                    inputs_publication=(plan_binding,running_status,coverage,checkpoint_clock,phase_source,identity))
+                admitted_grant=min(reservation["memory_budget_bytes"],runtime_options.memory_budget_bytes)
+                prepared_final_request=_p05_prepare_scientific_request!(history_recorder,plan_binding,config,point;
+                    grant_bytes=admitted_grant,live_roots=input_roots,observer_admission)
+                exact_capture=_capture_exact_execution(runtime_options,solver_sources)
+                kernel_binding=config.domain_adaptation.mode===:none ? nothing : config.kernels
+                callback_roots=merge(input_roots,(;inputs_publication=(input_roots.inputs_publication...,prepared_final_request,exact_capture)))
+                intermediate_cap=Base.checked_sub(_p05_input_metadata_limit(admitted_grant,callback_roots;observer_admission),reservation["estimated_peak_bytes"])
+                intermediate_cap>0 || throw(ArgumentError("intermediate input IO exceeds scientific grant"))
+                callbacks=_p05_science_callbacks(history_recorder,problem;options=config.solver,
+                    production_options=runtime_options,execution=exact_capture.execution,
+                    domain_adaptation=config.domain_adaptation,kernel_options=kernel_binding,
+                    status=()->running_status,request=prepared_final_request.request,
+                    maximum_metadata_bytes=intermediate_cap)
+                parent_state=parent_checkpoint===nothing ? nothing : load_exact_solver_state(parent_checkpoint)
+                restored=parent_state===nothing ? nothing : QCLNEGF.restore_exact_state(problem,parent_state;
+                    options=config.solver,production_options=runtime_options,execution=exact_capture.execution,
+                    domain_adaptation=config.domain_adaptation,kernel_options=kernel_binding)
                 started=time_ns()
-                solution=if config.execution.solver_backend===:production
-                    solve_adaptive_production(
-                        problem;
-                        domain_adaptation = config.domain_adaptation,
-                        kernel_options = config.kernels,
-                        options = config.solver,
-                        production_options = runtime_options,
-                        cache,
-                        initial_Uᴴ = restart===nothing ?
-                                     (previous===nothing ? nothing : previous.Uᴴ) :
-                                     restart.Uᴴ,
-                        initial_scba = restart===nothing ?
-                                       (previous===nothing ? nothing : previous.scba) :
-                                       restart.scba,
-                        initial_outer_history = restart===nothing ? OuterIteration[] :
-                                                restart.outer_history,
-                        initial_warnings = restart===nothing ? Dict{String,Any}[] :
-                                           restart.warnings,
-                        resume_scba = restart!==nothing && restart.resume_scba,
-                        # A loaded checkpoint belongs exclusively to this
-                        # attempt. Transfer its arrays and release this outer
-                        # owner before solving; voltage warm starts stay shared
-                        # and use the normal copying contract.
-                        consume_initial = restoring,
-                        initial_adaptation = let adaptation=restart===nothing ? nothing :
-                                                            restart.adaptation
-                            restart=nothing
-                            adaptation
-                        end,
-                        state_observer = observer,
-                        checkpoint_sink,
-                        history_observer,
-                    )
+                solution=if restored !== nothing && parent_state.boundary===:final
+                    QCLNEGF.restore_completed_solution(restored;revalidation=:selected_map,
+                        independent_oracle=:if_supported)
+                elseif restored !== nothing
+                    solve_adaptive_production(problem;restart=restored,
+                        observation_sink=event_sink,checkpoint_context_sink=callbacks.checkpoint_context_sink,
+                        history_observer=callbacks.history_observer)
+                elseif config.execution.solver_backend===:production
+                    solve_adaptive_production(problem;domain_adaptation=config.domain_adaptation,
+                        kernel_options=config.kernels,options=config.solver,
+                        production_options=runtime_options,execution=exact_capture.execution,
+                        cache,initial_Uᴴ=previous===nothing ? nothing : previous.Uᴴ,
+                        initial_scba=previous===nothing ? nothing : previous.scba,
+                        observation_sink=event_sink,checkpoint_context_sink=callbacks.checkpoint_context_sink,
+                        history_observer=callbacks.history_observer)
                 else
-                    previous===nothing || throw(
-                        ArgumentError(
-                            "educational backend has no voltage warm-start port; select independent points",
-                        ),
-                    )
-                    solve(problem; options = config.solver, history_observer)
+                    throw(ArgumentError("native5_educational_consumer_unavailable"))
                 end
-                observables=Dict{String,Any}(
-                    "current_density_A_per_m2"=>Float64(
-                        ustrip(u"A/m^2", solution.observables[:electron_flow_current]),
-                    ),
-                    "wall_seconds"=>(time_ns()-started)*1e-9,
-                    "outer_iterations"=>length(solution.outer_history),
-                    "scba_iterations"=>length(solution.scba.history),
-                )
-                merge!(observables, _scientific_charge_observables(solution))
-                observables["representation_preflight"]=coverage
-                solution.observables[:representation_preflight]=coverage
-                observables["scientific_assessment"]=solution_scientific_assessment(
-                    solution,
-                )
-                warnings=Dict{String,Any}[
-                    deepcopy(w) for
-                    w in get(solution.observables, :warnings, Dict{String,Any}[])
-                ]
-                data=Dict{String,Any}(
-                    "artifact_root"=>replace(relpath(directory, root), '\\'=>'/'),
-                    "full_state"=>nothing,
-                    "optical"=>nothing,
-                    "progress_events"=>replace(
-                        relpath(joinpath(directory, "progress", "events.jsonl"), root),
-                        '\\'=>'/',
-                    ),
-                    "progress_latest"=>replace(
-                        relpath(joinpath(directory, "progress", "progress.yaml"), root),
-                        '\\'=>'/',
-                    ),
-                )
-                derived=Dict{String,Any}(
-                    "optical"=>Dict{String,Any}(
-                        "status"=>execution.outputs.optical ? "pending" : "not_requested",
-                        "error"=>nothing,
-                    ),
-                )
-                record=_point_result(
-                    point,
-                    attempt,
-                    initialization,
-                    :saving,
-                    Symbol(solution_quality(solution)),
-                    solution.converged;
-                    warnings,
-                    observables,
-                    data,
-                    postprocessing = derived,
-                )
-                _upsert_scientific_point!(results,record,point_order)
-                publish()
-                # Required stationary data are durable before optional work starts.
-                solution.observables[:model_capabilities]=model_capabilities(
-                    solution.problem,
-                    config.algorithms,
-                )
-                flush_scientific_history!(history_recorder; resource_policy)
-                history_paths=scientific_history_sources(haskey(inherited_history,point.id) ? directory : dirname(directory))
-                haskey(inherited_history,point.id) && pushfirst!(history_paths,inherited_history[point.id])
-                commit=commit_point_artifacts(
-                    directory,
-                    solution;
-                    resource_policy,
-                    identity,
-                    algorithms = config.algorithms,
-                    configuration = _point_resolved_raw(config, point),
-                    history_paths,
-                    checkpoint_metadata = checkpoint_policy(checkpoint_clock),
-                    storage_class = :archive,
-                    archive_root = archive_directory,
-                    recovery_root = recovery_directory,
-                    state_sequence = _scientific_next_state_sequence(recovery_directory),
-                    reserve_bytes = recovery_policy.reserve_bytes,
-                    capture_reserve_bytes,
-                    execution_progress = _scientific_execution_progress(results,point,root,plan.fingerprint),
-                )
-                checkpoint_completed!(checkpoint_clock)
-                data["result_commit"]=replace(relpath(commit, root), '\\'=>'/')
-                data["analysis_physics"]=replace(
-                    relpath(joinpath(dirname(commit), "analysis.h5"), root),
-                    '\\'=>'/',
-                )
-                data["full_state"]=replace(
-                    relpath(joinpath(dirname(commit), "physics.h5"), root),
-                    '\\'=>'/',
-                )
-                observables["sheet_density_per_m2"]=real(
-                    tr(_sheet_density_matrix_bar(solution.problem, solution.scba.green.Gˡ)),
-                )/solution.problem.scales.L₀_m^2
-                record=_point_result(
-                    point,
-                    attempt,
-                    initialization,
-                    :completed,
-                    Symbol(solution_quality(solution)),
-                    solution.converged;
-                    warnings,
-                    observables,
-                    data,
-                    postprocessing = derived,
-                )
-                seed_summary=_live_voltage_seed_summary(
-                    solution,solution_quality(solution),observables["scientific_assessment"],
-                )
-                if execution.policies.voltage.mode===:strict &&
-                   !_usable_voltage_state(seed_summary,execution.policies.voltage.mode)
+                final_phase=true
+                terminal=parent_state!==nothing && parent_state.boundary===:final ? parent_state : callbacks.terminal[]
+                terminal===nothing && throw(ArgumentError("global final checkpoint missing"))
+                final_status=_p05_final_status_input(Dict("state"=>"succeeded","exit_code"=>0,"reason"=>nothing),running_status)
+                final_roots=merge(input_roots,(;construction=(configured,base_cache,problem,cache,solution,terminal),
+                    continuation=(previous,previous_id,parent_checkpoint,parent_state,restored,branch_cause,initialization),
+                    history=(input_roots.history...,callbacks),
+                    inputs_publication=(input_roots.inputs_publication...,prepared_final_request,exact_capture,final_status)))
+                limits=_p05_final_limits(solution,terminal,history_recorder,prepared_final_request.request,final_status;
+                    production_options=runtime_options,grant_bytes=admitted_grant,live_roots=final_roots,
+                    input_documents=(;plan=plan_binding.document,model=prepared_final_request.model_preimage),observer_admission)
+                committed,presentation=_p05_commit_final_with_presentation!(history_recorder,solution,terminal;
+                    options=config.solver,production_options=runtime_options,execution=exact_capture.execution,
+                    domain_adaptation=config.domain_adaptation,kernel_options=kernel_binding,status=final_status,
+                    request=prepared_final_request.request,
+                    source_mode=parent_state!==nothing && parent_state.boundary===:final ? :completed_restore : :produced,limits...)
+                recorded=_p05_recorded_final(committed,limits.maximum_metadata_bytes)
+                observables=Dict{String,Any}("current_density_A_per_m2"=>recorded.current,
+                    "sheet_density_per_m2"=>recorded.sheet_density,"wall_seconds"=>(time_ns()-started)*1e-9,
+                    "outer_iterations"=>length(terminal.outer_history),"scba_iterations"=>length(terminal.scba.history),
+                    "representation_preflight"=>coverage,"scientific_assessment"=>presentation.stationary_assessment,
+                    "validation"=>presentation.validation,"positivity"=>presentation.positivity)
+                warnings=Dict{String,Any}[deepcopy(w) for w in get(solution.observables,:warnings,Dict{String,Any}[])]
+                data=Dict{String,Any}("native_source"=>_p05_native_source(".";committed...),"optical_attachment"=>nothing,
+                    "phase_source"=>_phase_source_projection(phase_source))
+                derived=Dict{String,Any}("optical"=>Dict{String,Any}("status"=>execution.outputs.optical ? "pending" : "not_requested","error"=>nothing))
+                # Terminal result appears only after successful final triple return.
+                record=_point_result(point,attempt,initialization,execution.outputs.optical ? :saving : :completed,Symbol(recorded.summary["quality"]),recorded.summary["converged"];
+                    warnings,observables,data,postprocessing=derived,phase_source)
+                seed_summary=_live_voltage_seed_summary(solution,recorded.summary["quality"],presentation.stationary_assessment)
+                if execution.policies.voltage.mode===:strict && !_usable_voltage_state(seed_summary,execution.policies.voltage.mode)
                     remember_failure(record,seed_summary,solution.status)
                 end
                 _upsert_scientific_point!(results,record,point_order)
                 publish()
                 if execution.outputs.optical
                     try
-                        photon_energies=[
-                            config.study.photon_energy_min+(i-1)/(
-                                config.study.photon_energy_points-1
-                            )*(
-                                config.study.photon_energy_max-config.study.photon_energy_min
-                            ) for i = 1:config.study.photon_energy_points
-                        ]
-                        metrics=Dict{Symbol,Float64}()
-                        response=_configured_optical_response!(
-                            metrics,
-                            solution,
-                            photon_energies,
-                            nothing;
-                            edge_tolerance = config.study.optical_edge_tolerance,
-                            threaded = config.production.parallel_backend===:threads,
-                        )
-                        optical_path=joinpath(dirname(commit),"optical.h5")
-                        _resident_writer_preflight(resource_policy, :optical)
-                        temporary_optical=optical_path*".pending"
-                        source_receipt=verify_recovery_receipt(commit)
-                        try
-                            save_optical_physics(temporary_optical,response;
-                                source_sha256=bytes2hex(open(sha256,joinpath(dirname(commit),"physics.h5"))),
-                                stationary_quality=String(solution_quality(solution)),
-                                stationary_assessment=solution_scientific_assessment(solution),
-                                source_receipt,identity=source_receipt["identity"])
-                            _sync_artifact_file(temporary_optical)
-                            mv(temporary_optical,optical_path;force=false)
-                            _sync_artifact_directory(dirname(commit))
-                        finally
-                            isfile(temporary_optical) && rm(temporary_optical)
-                        end
-                        data["optical"]=replace(relpath(optical_path,root),'\\'=>'/')
-                        merge!(observables, Dict(String(k)=>v for (k, v) in metrics))
-                        derived["optical"]["status"]="completed"
+                        throw(ArgumentError("native5_optical_provenance_join_pending"))
                     catch error
                         error isa InterruptException && rethrow()
                         derived["optical"]["status"]="failed"
@@ -1394,12 +1206,17 @@ function execute_scientific_plan(
                         )
                     end
                 end
+                if execution.outputs.optical
+                    record=_point_result(point,attempt,initialization,:completed,Symbol(recorded.summary["quality"]),recorded.summary["converged"];
+                        warnings,observables,data,postprocessing=derived,phase_source)
+                    _upsert_scientific_point!(results,record,point_order)
+                end
                 _continuation_record_history!(history,record)
                 publish()
                 terminal_status=:completed
-                _scientific_progress(root, point, attempt, :completed, directory)
+                _scientific_progress(root, point, attempt, :completed, directory;phase_source,native_source=data["native_source"])
                 seed_summary=_live_voltage_seed_summary(
-                    solution, solution_quality(solution), observables["scientific_assessment"],
+                    solution, recorded.summary["quality"], presentation.stationary_assessment,
                 )
                 previous=_usable_voltage_state(seed_summary, execution.policies.voltage.mode) ?
                          solution : nothing
@@ -1409,6 +1226,17 @@ function execute_scientific_plan(
                 end
             catch error
                 point_primary=error
+                # A final publication or mandatory callback failure cannot be
+                # converted to a terminal point/light row or replayed as repair.
+                callback_failure=callbacks===nothing ? nothing : callbacks.failure[]
+                if final_phase || callback_failure!==nothing || (history_recorder!==nothing && history_recorder.failed)
+                    callback_failure===nothing || callback_failure===error || throw(callback_failure)
+                    rethrow()
+                end
+                error_source=callbacks!==nothing && callbacks.latest[]!==nothing ?
+                    _p05_native_source(".";checkpoint=callbacks.latest[],reason="last_accepted_boundary_before_failure") :
+                    parent_checkpoint!==nothing ? _p05_native_source(".";checkpoint=parent_checkpoint,relation="retained_source",reason="selected_parent_before_failure") :
+                    _p05_native_source(".";reason="no_selected_native_state")
                 resource_pressure = error isa _NativePhasePressure
                 pressure_message = resource_pressure ? sprint(showerror, error) : ""
                 if resource_pressure
@@ -1418,13 +1246,7 @@ function execute_scientific_plan(
                 end
                 if error isa _ScientificPause
                     terminal_status=error.reason
-                    data = _scientific_pause_data(
-                        root,
-                        directory,
-                        error.commit_path,
-                        attempt;
-                        resource_pressure,
-                    )
+                    data=Dict{String,Any}("native_source"=>error_source,"phase_source"=>_phase_source_projection(phase_source),"optical_attachment"=>nothing)
                     record=_point_result(
                         point,
                         attempt,
@@ -1443,10 +1265,11 @@ function execute_scientific_plan(
                         ] : Dict{String,Any}[],
                     )
                     remember_failure(record;interruption=error.reason)
+                    record.data["phase_source"]=_phase_source_projection(phase_source)
                     _upsert_scientific_point!(results,record,point_order)
                     _continuation_record_history!(history,record)
                     publish_unrun_descendants(record,"interrupted",error.reason)
-                    _scientific_progress(root, point, attempt, error.reason, directory)
+                    _scientific_progress(root, point, attempt, error.reason, directory;phase_source)
                     return result_document(error.reason)
                 end
                 if error isa InterruptException
@@ -1455,16 +1278,18 @@ function execute_scientific_plan(
                     if retained!==nothing && retained.status===:completed
                         _continuation_record_history!(history,retained)
                         publish_unrun_descendants(retained,"interrupted",:cancelled)
-                        _scientific_progress(root,point,attempt,:cancelled,directory)
+                        _scientific_progress(root,point,attempt,:cancelled,directory;phase_source)
                         rethrow()
                     end
                     record=_point_result(point,attempt,initialization,:cancelled,:not_evaluated,false;
+                        data=Dict{String,Any}("native_source"=>error_source),
                         warnings=[Dict{String,Any}("code"=>"CANCELLED","scope"=>"point","message"=>"cooperative cancellation")])
                     remember_failure(record;interruption=:cancelled)
+                    record.data["phase_source"]=_phase_source_projection(phase_source)
                     _upsert_scientific_point!(results,record,point_order)
                     _continuation_record_history!(history,record)
                     publish_unrun_descendants(record,"interrupted",:cancelled)
-                    _scientific_progress(root,point,attempt,:cancelled,directory)
+                    _scientific_progress(root,point,attempt,:cancelled,directory;phase_source)
                     rethrow()
                 end
                 # Preserve a computed current if the mandatory artifact sink failed.
@@ -1477,7 +1302,7 @@ function execute_scientific_plan(
                     previous_id=point_id
                     execution.policies.on_child_failure===:stop && (stop_campaign=true)
                     publish()
-                    _scientific_progress(root,point,attempt,:failed,directory)
+                    _scientific_progress(root,point,attempt,:failed,directory;phase_source)
                     continue
                 end
                 warnings=prior===nothing ? Dict{String,Any}[] : copy(prior.warnings)
@@ -1495,27 +1320,29 @@ function execute_scientific_plan(
                     attempt,
                     initialization,
                     :failed,
-                    solution===nothing ? :invalid : Symbol(solution_quality(solution)),
+                    recorded===nothing ? :not_evaluated : Symbol(recorded.summary["quality"]),
                     solution===nothing ? false : solution.converged;
                     warnings,
                     observables = prior===nothing ? Dict{String,Any}() : deepcopy(prior.observables),
-                    data = prior===nothing ? Dict{String,Any}() : deepcopy(prior.data),
+                    data = prior===nothing ? Dict{String,Any}("native_source"=>error_source) : deepcopy(prior.data),
                     postprocessing = prior===nothing ? Dict{String,Any}() :
                                      deepcopy(prior.postprocessing),
                 )
                 remember_failure(record,nothing,solution===nothing ? nothing : solution.status;
                     artifact_error=solution===nothing ? nothing : sprint(showerror,error))
+                record.data["phase_source"]=_phase_source_projection(phase_source)
                 _upsert_scientific_point!(results,record,point_order)
                 _continuation_record_history!(history,record)
                 publish()
-                _scientific_progress(root, point, attempt, :failed, directory)
+                _scientific_progress(root, point, attempt, :failed, directory;phase_source)
                 previous=nothing
                 previous_id=point_id
                 execution.policies.on_child_failure===:stop && (stop_campaign=true)
             finally
+                try
+                phase_observer===nothing || _close_phase_observer!(phase_observer)
                 telemetry_sender===nothing || close(telemetry_sender)
-                history_recorder===nothing || flush_scientific_history_finalizer!(history_recorder;
-                    resource_policy, primary=point_primary)
+                _p05_flush_open_history!(history_recorder,point_primary)
                 if reporter!==nothing
                     try
                         while !isempty(reporter.stack)
@@ -1545,8 +1372,31 @@ function execute_scientific_plan(
                         close(reporter)
                     end
                 end
+                finally
+                    # No callback-bearing object escapes into the point/history record.
+                    phase_observer=nothing;telemetry_sender=nothing;event_sink=nothing
+                    observe_solver_event=nothing;runtime_options=nothing;callbacks=nothing
+                    input_roots=nothing;pre_roots=nothing
+                    reporter=nothing;history_recorder=nothing;latest_commit=nothing
+                    # Only `previous` remains an intentional numerical continuation.
+                    # Other point locals have reached their last use; retaining them
+                    # would hide old problem/cache/restoration payload from the next
+                    # build/point admission's declared stable roots.
+                    solution=nothing;problem=nothing;cache=nothing
+                    terminal=nothing;committed=nothing;presentation=nothing;recorded=nothing
+                    final_roots=nothing;final_status=nothing;limits=nothing;callbacks=nothing;callback_roots=nothing;intermediate_cap=nothing
+                    error_source=nothing;callback_failure=nothing
+                    parent_state=nothing;restored=nothing;prepared_final_request=nothing
+                    exact_capture=nothing;kernel_binding=nothing
+                    checkpoint_request=nothing;checkpoint_clock=nothing
+                    response=nothing;photon_energies=nothing
+                    observer_admission===nothing || _p05_end_observers!(observer_admission)
+                end
             end
         end
+        # Last use in this execution: do not retain prior numerical residents
+        # invisibly across the next execution's pre-build admission.
+        previous=nothing;solution=nothing;configured=nothing;base_cache=nothing
         GC.gc()
     end
     final_status=(stop_campaign || branch_failed) ? :failed :
@@ -1560,10 +1410,8 @@ function execute_scientific_plan(
     ) : :failed
     publish(final_status)
     document=result_document(final_status)
-    for execution in selected_executions
-        records=filter(r->r.execution_id==execution.id,results)
-        isempty(records) || write_stop_receipt(root,execution.id,maximum(r.attempt for r in records),document;archive_byte_budget)
-    end
+    # Native v4 has no legacy result_commit receipt. Q1 typed transport-close
+    # remains an explicit release dependency; do not manufacture its success.
     return document
 end
 

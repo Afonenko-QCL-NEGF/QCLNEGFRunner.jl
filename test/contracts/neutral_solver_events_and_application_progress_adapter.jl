@@ -21,7 +21,7 @@ using HDF5
         push!(events, event)
         true
     end)
-    owned = BN._begin_solver_stage(
+    owned = BN._runner_begin_stage(
         options,
         :scba;
         label = "fixture",
@@ -29,7 +29,7 @@ using HDF5
         metrics = metrics[1],
     )
     @test owned
-    @test BN._update_solver_stage(
+    @test BN._runner_update_stage(
         options,
         :scba;
         iteration = 1,
@@ -37,7 +37,7 @@ using HDF5
         metrics = (metrics[2], metrics[3]),
         message = "advanced",
     )
-    BN._end_solver_stage(
+    BN._runner_end_stage(
         options,
         :scba,
         owned;
@@ -51,7 +51,7 @@ using HDF5
     @test events[1].label == "fixture"
     @test events[2].message == "advanced"
     @test events[3].status === :completed
-    @test all(event -> event.metrics isa Vector{BN.SolverMetric}, events)
+    @test all(event -> event.metrics isa Tuple{Vararg{BN.SolverMetric}}, events)
 
     snapshots = BN.ProgressSnapshot[]
     reporter = BN.ProgressReporter(;

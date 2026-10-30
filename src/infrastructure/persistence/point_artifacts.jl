@@ -38,13 +38,14 @@ function _prepare_generation!(root)
 end
 
 # Native5 publication uses new immutable files only; it never traverses old payloads.
-function _p04_validate_status(status)
-    _p04_keys(status,("process","convergence","physics","discretization","experimental"))
+function _p04_validate_status(status;final_input::Bool=false)
+    records=final_input ? ("discretization","experimental") : ("convergence","physics","discretization","experimental")
+    _p04_keys(status,("process",records...))
     process=status["process"];_p04_keys(process,("state","exit_code","reason"))
     _p04_require(process["state"] in ("pending","running","succeeded","failed","cancelled","interrupted","unknown") &&
         (process["exit_code"]===nothing || process["exit_code"] isa Integer && !(process["exit_code"] isa Bool)) &&
         (process["reason"]===nothing || process["reason"] isa String && !isempty(process["reason"])),"invalid process status")
-    for name in ("convergence","physics","discretization","experimental")
+    for name in records
         record=status[name];_p04_keys(record,("state","reason","evidence"))
         measured=record["state"]=="recorded"
         _p04_require(measured ? record["evidence"] isa AbstractDict &&
@@ -62,9 +63,10 @@ function _p04_validate_provenance(value)
         _p04_require(c["path"] isa String && occursin(r"^[0-9a-f]{40}\z",c["revision"]) && c["url"] isa String,"invalid graph component")
     end
 end
-function _p04_verify_status(root,status,verified)
-    _p04_validate_status(status)
-    for name in ("convergence","physics","discretization","experimental")
+function _p04_verify_status(root,status,verified;final_input::Bool=false)
+    _p04_validate_status(status;final_input)
+    records=final_input ? ("discretization","experimental") : ("convergence","physics","discretization","experimental")
+    for name in records
         evidence=status[name]["evidence"];evidence===nothing && continue
         _p04_keys(evidence,("path","bytes","sha256","media_type","schema"))
         path=_p04_path(root,evidence["path"]);known=get(verified,evidence["path"],nothing)
@@ -182,12 +184,25 @@ end
 function commit_exact_checkpoint!(r::ScientificHistoryRecorder,problem::QCLNEGF.NEGFProblem,state::QCLNEGF.ExactSolverState;
     options::QCLNEGF.SolverOptions,production_options::QCLNEGF.ProductionOptions,execution::QCLNEGF.ExactExecutionIdentity,
     domain_adaptation::QCLNEGF.DomainAdaptationPolicy,kernel_options::Union{Nothing,QCLNEGF.ProductionKernelOptions},
-    status::AbstractDict,closed::Bool=false,publication_hook::Function=stage->nothing)::VerifiedExactCheckpoint
+    status::AbstractDict,closed::Bool=false,publication_hook::Function=stage->nothing,
+    request::Union{Nothing,FinalPointRequest}=nothing,maximum_metadata_bytes::Union{Nothing,Int}=nothing)::VerifiedExactCheckpoint
+    inputs=if request===nothing
+        _p04_require(maximum_metadata_bytes===nothing,"metadata cap requires explicit checkpoint request")
+        nothing
+    else
+        _p04_require(maximum_metadata_bytes!==nothing,"checkpoint request requires actual metadata cap")
+        _p05_checkpoint_inputs(r.root,r.identity,request.plan_ref,request.model_ref,maximum_metadata_bytes;request)
+    end
     _p04_require(!r.failed && !r.closed,"recorder closed or needs reconciliation")
     _p04_verify_status(r.root,status,r.verified)
     _p04_require(!closed || state.boundary===:final && status["process"]["state"] in ("succeeded","failed","cancelled","interrupted"),"closed checkpoint requires explicit terminal global-final state")
     QCLNEGF.validate_exact_state(problem,state;options,production_options,execution,domain_adaptation,kernel_options)
-    hook=publication_hook
+    _p04_commit_validated!(r,state,execution,status,closed,publication_hook;inputs)
+end
+
+# The public intermediate port validates above; final capture has already validated.
+# This shared publication body never calls Core validation or a numerical getter.
+function _p04_commit_validated!(r,state,execution,status,closed,hook;final=nothing,inputs=nothing)
     # Seal mandatory history without an intermediate live pointer. Commit pins this exact frontier.
     _p04_flush_history!(r;hook,publish_live=false)
     r.failed=true;generation=Base.checked_add(r.publication,UInt64(1))
@@ -207,23 +222,148 @@ function commit_exact_checkpoint!(r::ScientificHistoryRecorder,problem::QCLNEGF.
         "identity"=>r.identity,"lineage"=>r.lineage,"invocation"=>r.invocation,"state_id"=>stateid,
         "state_sequence"=>string(generation),"core_layout_sha256"=>_P04_LAYOUT,"numerical_binding"=>binding,
         "history"=>deepcopy(r.pin),"state"=>wire,"payloads"=>payloads,"witness_targets"=>targets)
-    cpref=_p04_publish_json!(r,joinpath("checkpoint","declaration-"*prefix*".json"),declaration,_P04_SCHEMAS["checkpoint"])
+    cpref=final===nothing ? _p04_publish_json!(r,joinpath("checkpoint","declaration-"*prefix*".json"),declaration,_P04_SCHEMAS["checkpoint"]) :
+        _p05_publish_json!(r,joinpath("checkpoint","declaration-"*prefix*".json"),declaration,_P04_SCHEMAS["checkpoint"],final.limit)
     hook(:checkpoint_published)
     artifacts=[_p04_artifact(p,p==payload ? role : "science.history";profile=p==payload ? "full-state" : "science") for p in payloads]
     push!(artifacts,_p04_artifact(cpref,"recovery";profile="full-state",dependencies=[p["path"] for p in payloads]))
-    manifest=_p04_manifest(r,generation,r.pin,cpref,artifacts,binding,status,closed)
-    manifestref=_p04_publish_json!(r,joinpath("manifests","state-"*prefix*".json"),manifest,_P04_SCHEMAS["manifest"])
+    if inputs!==nothing
+        push!(artifacts,_p04_artifact(inputs.plan,"plan";profile="science",dependencies=String[]))
+        push!(artifacts,_p04_artifact(inputs.model,"model";profile="science",dependencies=String[]))
+    end
+    analysis=final===nothing ? nothing : _p05_publish_analyses!(r,final,declaration,cpref,prefix,artifacts,hook)
+    publication_status=final===nothing ? status : _p05_final_status(status,analysis.observations,final.budget)
+    manifest=_p04_manifest(r,generation,r.pin,cpref,artifacts,binding,publication_status,closed)
+    manifestref=final===nothing ? _p04_publish_json!(r,joinpath("manifests","state-"*prefix*".json"),manifest,_P04_SCHEMAS["manifest"]) :
+        _p05_publish_json!(r,joinpath("manifests","state-"*prefix*".json"),manifest,_P04_SCHEMAS["manifest"],final.limit)
     r.pending=(;pin=deepcopy(r.pin),page=r.page,publication=generation,manifest,manifest_ref=manifestref,checkpoint=cpref)
     hook(:manifest_published)
+    if final!==nothing
+        _p05_observation_check(analysis.observation_wire,analysis.diagnostic_wire,manifest,declaration,analysis.observations,
+            final.plan,final.model,final.snapshot.source_mode===:completed_restore ? r.parent : nothing)
+        # The callback may retain only this detached bounded display bundle. It is
+        # deliberately before either mutable pointer, and is never replayed.
+        bundle=_p05_presentation(final.snapshot,final.scba_status,final.scba_quality,final.messages,final.limit)
+        final.sink(bundle);hook(:presentation_transferred)
+    end
     _p04_pointer!(r,"recovery/current.json",manifest,manifestref);hook(:recovery_pointer_published)
     _p04_pointer!(r,"current.json",manifest,manifestref);hook(:current_pointer_published)
     reference=Dict("identity"=>deepcopy(r.identity),"state_id"=>stateid,"state_sequence"=>string(generation),"manifest"=>manifestref)
     # New payloads have already been streamed/hashed; cache their immutable inode signatures.
     _p04_remember!(r.verified,r.root,payload)
-    r.status=deepcopy(status)
+    r.status=deepcopy(publication_status)
     checkpoint=VerifiedExactCheckpoint(r.root,reference,manifest,declaration,_p04_proofs(r.verified,payloads,r.status),Val(:verified))
     _p04_ack_history!(r,r.pin,r.page,generation);r.closed=closed
-    checkpoint
+    final===nothing || hook(:acknowledged)
+    final===nothing ? checkpoint : (;checkpoint,diagnostics=analysis.diagnostics,observations=analysis.observations)
+end
+
+# Explicit input selection is separate from the closed outward checkpoint context.
+# No filename/role scan can select a plan or establish its scientific provenance.
+function _p05_checkpoint_inputs(root,identity,plan_ref,model_ref,maximum_metadata_bytes;request=nothing)
+    budget=Ref(_p05_cap(maximum_metadata_bytes))
+    _p05_charge!(budget,_p05_metadata_cost((plan_ref,model_ref),budget[];portable=true))
+    _p04_file_fields(plan_ref);_p04_file_fields(model_ref)
+    _p04_require((plan_ref["schema"],plan_ref["media_type"]) in values(_P05_PLAN_FORMATS),"unsupported checkpoint plan format")
+    _p04_require((model_ref["schema"],model_ref["media_type"])==("qcl-negf-resolved-configuration-v3","application/json"),"unsupported checkpoint model format")
+    _p04_require(plan_ref["sha256"]==identity["plan_sha256"],"checkpoint original plan differs")
+    plan_ref["schema"]=="qcl-negf-scientific-plan-v2" && _p05_charge!(budget,_P05_SCHEMA_WORKSPACE)
+    plan=_p05_input_ref(root,plan_ref,budget);model=_p05_input_ref(root,model_ref,budget)
+    _p05_portable(plan)
+    if request===nothing
+        _p04_keys(model,("schema","contract_set","configuration","configuration_hash","hash_encoding"))
+        _p04_keys(model["configuration"],("scope","inputs","derived"))
+        _p04_require(model["configuration"]["inputs"] isa AbstractDict && haskey(model["configuration"]["inputs"],"scattering"),"checkpoint model input sections absent")
+    end
+    flags=request===nothing ? model["configuration"]["inputs"]["scattering"] : _p05_flags(request.scattering_requested)
+    _p05_model(model,identity,flags)
+    if request===nothing
+        plan_ref["schema"]=="qcl-negf.nested-sweep-plan.v1" ? _p05_nested_plan(plan) : _p05_scientific_profile(plan)
+    else
+        _p04_require((plan_ref["schema"],plan_ref["media_type"])==_P05_PLAN_FORMATS[request.kind],"checkpoint request kind differs")
+        _p05_plan(plan,identity,request)
+    end
+    (;plan=deepcopy(plan_ref),model=deepcopy(model_ref))
+end
+
+"""Verify explicitly selected original checkpoint inputs, independently of A4 context.
+
+Returns only the selected full FileRefs. This verifies immutable bytes and source
+identity; it establishes neither resolver provenance nor a scientific verdict.
+A4 checkpoint SourceContext.model and .plan remain null.
+"""
+function verify_checkpoint_inputs(handle::VerifiedExactCheckpoint;plan_ref::AbstractDict,
+    model_ref::AbstractDict,maximum_metadata_bytes::Int)::NamedTuple
+    limit=_p05_cap(maximum_metadata_bytes)
+    budget=Ref(limit)
+    _p05_charge!(budget,_p05_mul(8,ncodeunits(handle.manifest_json)))
+    manifest=_p05_parse(handle.manifest_json,budget)
+    _p04_check_ref(handle.root,_p04_parse(handle.reference_json)["manifest"])
+    for (ref,role) in ((plan_ref,"plan"),(model_ref,"model"))
+        _p04_file_fields(ref)
+        rows=filter(a->a["path"]==ref["path"],manifest["artifacts"])
+        _p04_require(length(rows)==1,"selected checkpoint input absent/ambiguous")
+        row=only(rows);_p04_artifact_fields(handle.root,row)
+        _p04_require(all(get(row,k,nothing)==v for (k,v) in ref) && row["role"]==role &&
+            row["profile"]=="science" && isempty(row["dependencies"]),"selected checkpoint input FileRef/role differs")
+    end
+    _p05_checkpoint_inputs(handle.root,manifest["identity"],plan_ref,model_ref,budget[])
+end
+
+function _p05_immutable_input!(r,reference,bytes,hook)
+    destination=_p04_path(r.root,reference["path"])
+    if ispath(destination)
+        _p05_immutable_bytes(r.root,reference)
+        return deepcopy(reference)
+    end
+    mkpath(dirname(destination));temporary,io=mktemp(dirname(destination);cleanup=false)
+    try;write(io,bytes);finally;close(io);end
+    chmod(temporary,0o640);_sync_artifact_file(temporary);hook(:input_payload_closed)
+    # link(2) fails atomically with EEXIST: no check-then-rename clobber window.
+    hardlink(temporary,destination);_sync_artifact_directory(dirname(destination))
+    rm(temporary);_sync_artifact_directory(dirname(destination));hook(:input_published)
+    _p05_immutable_bytes(r.root,reference);deepcopy(reference)
+end
+
+"""Publish original validated plan bytes and the actual caller-supplied P03 model preimage.
+
+No resolver, axes mutation, solve or pointer publication occurs here. The caller owns
+the provenance that this preimage came from its actual resolved point configuration.
+"""
+function publish_final_point_request!(r::ScientificHistoryRecorder;
+    plan_bytes::Vector{UInt8},model_preimage::AbstractDict,temperature_K::Float64,
+    voltage_per_period_V::Float64,scattering_requested::QCLNEGF.ScatteringOptions,kind::Symbol,
+    maximum_metadata_bytes::Int,publication_hook::Function=stage->nothing)::FinalPointRequest
+    limit=_p05_cap(maximum_metadata_bytes)
+    _p04_require(!r.failed && !r.closed,"recorder closed or needs reconciliation")
+    _p04_require(haskey(_P05_PLAN_FORMATS,kind),"unknown frozen plan kind")
+    cost=_p05_metadata_cost(model_preimage,limit;portable=true)
+    budget=Ref(limit);_p05_charge!(budget,cost);_p05_charge!(budget,_p05_mul(8,length(plan_bytes)))
+    kind===:scientific_plan_v2 && _p05_charge!(budget,_P05_SCHEMA_WORKSPACE)
+    _p05_portable(model_preimage)
+    # Detach the bounded inputs once; validation and publication see one owned
+    # original byte vector and one portable model tree, never caller mutations.
+    plan_bytes=copy(plan_bytes);model_preimage=deepcopy(model_preimage)
+    plan_sha=bytes2hex(sha256(plan_bytes))
+    _p04_require(plan_sha==r.identity["plan_sha256"],"original frozen plan bytes differ")
+    model=Dict{String,Any}("schema"=>"qcl-negf-resolved-configuration-v3","contract_set"=>_P04_CONTRACT,
+        "configuration"=>model_preimage,"configuration_hash"=>r.identity["model_sha256"],"hash_encoding"=>"qcl-negf-canonical-bytes-v1")
+    _p05_model(model,r.identity,_p05_flags(scattering_requested))
+    encoded=_p05_json(model,budget[])
+    schema,media=_P05_PLAN_FORMATS[kind]
+    reference(relative,bytes,schema,media)=Dict{String,Any}("path"=>_p04_relative(r.root,joinpath(r.directory,"inputs",relative)),
+        "bytes"=>string(length(bytes)),"sha256"=>bytes2hex(sha256(bytes)),"schema"=>schema,"media_type"=>media)
+    planref=reference("plan-"*plan_sha*(kind===:nested_sweep ? ".yaml" : ".json"),plan_bytes,schema,media)
+    modelbytes=Vector{UInt8}(codeunits(encoded))
+    modelref=reference("model-"*r.identity["model_sha256"]*".json",modelbytes,"qcl-negf-resolved-configuration-v3","application/json")
+    request=FinalPointRequest(;plan_ref=planref,model_ref=modelref,temperature_K,voltage_per_period_V,scattering_requested,kind)
+    text=String(copy(plan_bytes));_p04_require(isvalid(text),"invalid UTF-8 frozen plan")
+    plan=kind===:nested_sweep ? _p05_yaml(plan_bytes,budget[]) : _p05_parse(text,budget)
+    kind===:nested_sweep && _p05_charge!(budget,_p05_metadata_cost(plan,budget[];portable=true))
+    _p05_portable(plan);_p05_plan(plan,r.identity,request)
+    _p05_immutable_input!(r,planref,plan_bytes,publication_hook)
+    _p05_immutable_input!(r,modelref,modelbytes,publication_hook)
+    request
 end
 
 function _physics_axes(path, rank)
@@ -472,7 +612,7 @@ function save_analysis_physics(
     problem=solution.problem
     grids=problem.grids
     scales=problem.scales
-    Eref=_electronvolts(problem.physical.E_ref)
+    Eref=_runner_electronvolts(problem.physical.E_ref)
     z=grids.x .* scales.L₀_m
     h=project_hamiltonians(problem, solution.Uᴴ)
     decomposition=eigen(Hermitian(Matrix(view(h, 1, :, :))))
@@ -487,8 +627,7 @@ function save_analysis_physics(
             effective_transform[:, state].*=phase
         end
     end
-    density_matrix=_sheet_density_matrix_bar(problem, solution.scba.green.Gˡ) ./
-                   scales.L₀_m^2
+    density_matrix=_physical_sheet_density_matrix(problem, solution.scba.green.Gˡ)
     energy_density=spatial_energy_density(problem, solution.scba.green.Gˡ)
     h5open(path, "w") do file
         metadata=create_group(file, "metadata")
@@ -523,8 +662,8 @@ function save_analysis_physics(
                 _solver_restart_contract(solution.options, AlgorithmOptions()),
             ),
         )
-        metadata["temperature_K"]=_kelvin(problem.physical.Tᴸ)
-        metadata["voltage_per_period_V"]=_volts_per_metre(problem.physical.F_bias)*_metres(
+        metadata["temperature_K"]=_runner_kelvin(problem.physical.Tᴸ)
+        metadata["voltage_per_period_V"]=_runner_volts_per_metre(problem.physical.F_bias)*_runner_metres(
             period_length(problem.physical),
         )
         scale=create_group(file, "scales")
@@ -574,8 +713,8 @@ function save_analysis_physics(
         end
         observable=create_group(file, "observables")
         structure=problem.profiles.Eᶜ .* scales.E₀_eV .+ Eref
-        external=-_volts_per_metre(problem.physical.F_bias) .*
-                 (z .- _metres(problem.physical.z₀))
+        external=-_runner_volts_per_metre(problem.physical.F_bias) .*
+                 (z .- _runner_metres(problem.physical.z₀))
         hartree=solution.Uᴴ .* scales.E₀_eV
         for (name, value, units) in (
             ("potential_structure_eV", structure, "eV"),
@@ -1121,16 +1260,16 @@ function commit_point_artifacts(
             resolved["numerical"]["energy_max"]=string(solution.problem.numerical.E_max)
             resolved["numerical"]["energy_nodes"]=solution.problem.numerical.N_E
             resolved["physical"]["voltage_per_period"]=string(
-                _volts_per_metre(solution.problem.physical.F_bias)*_metres(
+                _runner_volts_per_metre(solution.problem.physical.F_bias)*_runner_metres(
                     period_length(solution.problem.physical),
                 ),
             )*" V"
             resolved["physical"]["field_bias"]=nothing
             resolved["physical"]["lattice_temperature"]=string(
-                _kelvin(solution.problem.physical.Tᴸ),
+                _runner_kelvin(solution.problem.physical.Tᴸ),
             )*" K"
             resolved["physical"]["lo_temperature"]=string(
-                _kelvin(solution.problem.physical.Tᴸᴼ),
+                _runner_kelvin(solution.problem.physical.Tᴸᴼ),
             )*" K"
             path=joinpath(stage, "resolved_configuration.json")
             _observability_atomic_text(path; resource_policy, storage_context) do io
@@ -1561,7 +1700,7 @@ function _write_optical_group!(file, response)
     attributes(optical)["gauge"]=String(response.gauge)
     attributes(optical)["vertex_corrections"]=response.vertex_corrections
     for (name, values, units) in (
-        ("photon_energy_eV", _electronvolts.(response.photon_energy), "eV"),
+        ("photon_energy_eV", _runner_electronvolts.(response.photon_energy), "eV"),
         ("frequency_Hz", Float64.(ustrip.(u"Hz", response.frequency)), "Hz"),
         ("gain_per_m", Float64.(ustrip.(u"m^-1", response.gain)), "m^-1"),
         ("trusted", Int8.(response.trusted), "boolean"),
@@ -1856,4 +1995,145 @@ function runner_self_check(;directory::AbstractString=tempdir())
         error isa InterruptException && rethrow()
         throw(ArgumentError("node self-check failed: "*sprint(showerror,error)))
     end
+end
+
+function _p05_publish_json!(r,relative,value,schema,limit)
+    text=_p05_json(value,limit)
+    destination=_p04_path(r.root,_p04_relative(r.root,joinpath(r.directory,relative)))
+    mkpath(dirname(destination));temporary,io=mktemp(dirname(destination);cleanup=false)
+    try;write(io,text);finally;close(io);end
+    _p04_publish_file!(r,temporary,destination)
+    _p04_ref(r.root,destination,schema)
+end
+function _p05_write_analysis!(r,prefix,representation,declaration,arrays,limit,hook;budget=Ref(limit))
+    _p04_require(ENDIAN_BOM==0x04030201,"analysis writer requires qualified little-endian host")
+    text=_p05_json(declaration,limit)
+    path=_p04_new_hdf!(r,joinpath("analysis",representation*"-"*prefix*".h5"),_P05_ANALYSIS_SCHEMA,"physics.analysis",representation;hook) do file
+        group=create_group(file,representation)
+        try
+            group["declaration_json"]=text;storage=create_group(group,"arrays")
+            try;for (dataset,array) in arrays;_p04_write_array(storage,last(split(dataset,'/')),array);end
+            finally;close(storage);end
+        finally;close(group);end
+    end
+    reference=_p04_ref(r.root,path,_P05_ANALYSIS_SCHEMA;media="application/x-hdf5")
+    verified=_p05_read_analysis(r.root,reference,r.identity,r.invocation,representation,budget)
+    _p04_require(verified==declaration,"closed native analysis declaration readback differs")
+    hook(Symbol(representation*"_published"));reference
+end
+function _p05_publish_analyses!(r,final,declaration,cpref,prefix,artifacts,hook)
+    arrays=Pair{String,Any}[];diagnostic_wire=_p05_diagnostics(final.snapshot,declaration,cpref,arrays)
+    _p05_diagnostic_check(diagnostic_wire,declaration)
+    diagnostics=_p05_write_analysis!(r,prefix,"final_diagnostics",diagnostic_wire,arrays,final.limit,hook;budget=final.budget)
+    empty!(arrays)
+    observation_wire=_p05_observations(final.snapshot,declaration,cpref,diagnostics,final.request,r.parent,arrays)
+    observations=_p05_write_analysis!(r,prefix,"final_observations",observation_wire,arrays,final.limit,hook;budget=final.budget)
+    # CP owns the original numerical frontier. Local inputs and analyses are DAG additions.
+    push!(artifacts,_p04_artifact(diagnostics,"physics.analysis";dependencies=[cpref["path"]]))
+    push!(artifacts,_p04_artifact(final.request.plan_ref,"plan"))
+    push!(artifacts,_p04_artifact(final.request.model_ref,"model"))
+    push!(artifacts,_p04_artifact(observations,"physics.analysis";dependencies=[cpref["path"],diagnostics["path"],final.request.plan_ref["path"],final.request.model_ref["path"]]))
+    empty!(arrays)
+    (;diagnostics,observations,diagnostic_wire,observation_wire)
+end
+
+function _p05_final_status(status,observations,budget)
+    # Charge both detached evidence refs and the fixed added record structure
+    # before constructing the full status. No numerical assessment is repeated.
+    cost=_p05_metadata_cost((status,observations,observations,"convergence","physics",
+        ("state","reason","evidence","recorded",nothing),
+        ("state","reason","evidence","recorded",nothing)),budget[];portable=true)
+    _p05_charge!(budget,cost)
+    result=Dict{String,Any}(name=>deepcopy(status[name]) for name in ("process","discretization","experimental"))
+    for name in ("convergence","physics")
+        result[name]=Dict{String,Any}("state"=>"recorded","reason"=>nothing,"evidence"=>deepcopy(observations))
+    end
+    result
+end
+
+"""Commit one actual returned global-final solution, with mandatory stored observations.
+
+Core captures/validates once. The mandatory non-wire sink receives detached display
+metadata before mutable pointers. It must only retain local data; the caller publishes
+its terminal point/light result after this method returns the exact triple.
+The final-only `status` input contains exactly process, discretization and
+experimental. Captured convergence/physics are recorded against the newly hashed
+observations FileRef; recorded evidence is not a passing scientific verdict.
+"""
+function commit_final!(r::ScientificHistoryRecorder,solution::QCLNEGF.NEGFSolution,terminal::QCLNEGF.ExactSolverState;
+    options::QCLNEGF.SolverOptions,production_options::QCLNEGF.ProductionOptions,execution::QCLNEGF.ExactExecutionIdentity,
+    domain_adaptation::QCLNEGF.DomainAdaptationPolicy,kernel_options::Union{Nothing,QCLNEGF.ProductionKernelOptions},
+    status::AbstractDict,request::FinalPointRequest,source_mode::Symbol,maximum_observation_bytes::Int,
+    maximum_metadata_bytes::Int,presentation_sink::Function,publication_hook::Function=stage->nothing)::NamedTuple
+    limit=_p05_cap(maximum_metadata_bytes);_p05_cap(maximum_observation_bytes)
+    _p04_require(!r.failed && !r.closed,"recorder closed or needs reconciliation")
+    _p05_metadata_cost((status,request.plan_ref,request.model_ref),limit;portable=true)
+    _p04_verify_status(r.root,status,r.verified;final_input=true)
+    status=deepcopy(status)
+    _p04_require(terminal.boundary===:final && terminal.final_evidence!==nothing &&
+        status["process"]["state"] in ("succeeded","failed","cancelled","interrupted"),"final commit requires explicit global terminal status")
+    _p04_require(source_mode in (:produced,:completed_restore) && (source_mode!==:completed_restore || r.parent!==nothing),"completed final requires explicit parent")
+    # Both records are verified from original immutable bytes; no resolver certificate is invented.
+    _p04_require(_p05_add(limit,_p05_mul(8,_SERIALIZATION_SLAB_BYTES))<=production_options.memory_budget_bytes,"metadata/buffers exceed actual grant")
+    budget=Ref(limit)
+    request.kind===:scientific_plan_v2 && _p05_charge!(budget,_P05_SCHEMA_WORKSPACE)
+    plan=_p05_input_ref(r.root,request.plan_ref,budget);model=_p05_input_ref(r.root,request.model_ref,budget)
+    _p04_require(request.plan_ref["sha256"]==r.identity["plan_sha256"],"frozen plan identity differs")
+    _p05_model(model,r.identity,_p05_flags(request.scattering_requested));_p05_plan(plan,r.identity,request)
+    estimate=QCLNEGF.final_observation_memory_estimate(solution,terminal;maximum_metadata_bytes=limit)
+    # The supplied production allowance is the actual numerical grant, including
+    # caller residents. Composition must debit unrelated retained residents first.
+    slab_allowance=_p05_mul(8,_SERIALIZATION_SLAB_BYTES)
+    caller_resident_bytes=Base.summarysize((solution,terminal,r,plan,model,request,status))
+    required=_p05_add(_p05_add(caller_resident_bytes,estimate.peak_additional_bytes),_p05_add(limit,slab_allowance))
+    _p04_require(estimate.peak_additional_bytes<=maximum_observation_bytes && required<=production_options.memory_budget_bytes,"final capture exceeds actual admitted allowance")
+    # Exactly three additional metadata sources; no status inference from summary.
+    scba_status=terminal.scba.status;scba_quality=terminal.scba.quality;messages=solution.report.messages
+    _p05_metadata_cost((terminal,execution,status,request,r.buffer,messages),limit)
+    snapshot=QCLNEGF.final_observation_snapshot(solution,terminal;options,production_options,execution,domain_adaptation,kernel_options,
+        source_mode,maximum_bytes=maximum_observation_bytes,maximum_metadata_bytes=limit)
+    _p05_charge!(budget,_p05_metadata_cost((terminal,execution,status,request,snapshot,messages,r.buffer),budget[]))
+    final=(;snapshot,request,limit,budget,plan,model,scba_status,scba_quality,messages,sink=presentation_sink)
+    _p04_commit_validated!(r,terminal,execution,status,true,publication_hook;final)
+end
+
+"""Verify explicitly selected final artifacts without loading state, getters or a map."""
+function verify_final_artifacts(handle::VerifiedExactCheckpoint;diagnostics_ref::AbstractDict,observations_ref::AbstractDict,
+    maximum_metadata_bytes::Int,parent::Union{Nothing,VerifiedExactCheckpoint}=nothing)::NamedTuple
+    budget=Ref(_p05_cap(maximum_metadata_bytes))
+    _p05_charge!(budget,_p05_metadata_cost((diagnostics_ref,observations_ref),budget[];portable=true))
+    _p05_charge!(budget,_p05_mul(8,_p05_add(ncodeunits(handle.manifest_json),ncodeunits(handle.declaration_json))))
+    manifest=_p05_parse(handle.manifest_json,budget);declaration=_p05_parse(handle.declaration_json,budget)
+    _p04_check_ref(handle.root,_p04_parse(handle.reference_json)["manifest"]);_p04_check_ref(handle.root,manifest["checkpoint"])
+    for known in values(handle.verified)
+        path=_p04_path(handle.root,known.reference["path"])
+        _p04_require(isfile(path) && known.signature==_p04_stat(stat(path)),"verified checkpoint payload changed; reopen explicitly")
+    end
+    if parent!==nothing
+        _p04_require(parent.root==handle.root,"parent artifact root differs")
+        _p05_charge!(budget,_p05_mul(8,_p05_add(ncodeunits(parent.manifest_json),ncodeunits(parent.declaration_json))))
+        _p04_check_ref(parent.root,_p04_parse(parent.reference_json)["manifest"])
+        pm=_p05_parse(parent.manifest_json,budget);_p04_check_ref(parent.root,pm["checkpoint"])
+        inventory=Dict(a["path"]=>a for a in pm["artifacts"]);pd=_p05_parse(parent.declaration_json,budget)
+        for known in values(parent.verified)
+            path=_p04_path(parent.root,known.reference["path"])
+            _p04_require(isfile(path) && known.signature==_p04_stat(stat(path)),"verified parent payload changed; reopen explicitly")
+        end
+        anchor=inventory[pm["checkpoint"]["path"]]
+        _p04_require(Set(anchor["dependencies"])==Set(p["path"] for p in pd["payloads"]),"parent payload frontier differs")
+        for ref in pd["payloads"]
+            row=get(inventory,ref["path"],nothing)
+            _p04_require(row!==nothing && all(get(row,k,nothing)==v for (k,v) in ref),"parent payload FileRef differs")
+        end
+        _p05_dag(inventory,pm["checkpoint"]["path"])
+    end
+    diagnostics=_p05_read_analysis(handle.root,diagnostics_ref,declaration["identity"],declaration["invocation"],"final_diagnostics",budget)
+    observations=_p05_read_analysis(handle.root,observations_ref,declaration["identity"],declaration["invocation"],"final_observations",budget)
+    _p04_require(observations["diagnostics"]==diagnostics_ref,"selected diagnostics FileRef differs")
+    request=observations["request"]
+    request["kind"]=="scientific_plan_v2" && _p05_charge!(budget,_P05_SCHEMA_WORKSPACE)
+    plan=_p05_input_ref(handle.root,request["plan"],budget);model=_p05_input_ref(handle.root,request["model"],budget)
+    _p05_diagnostic_check(diagnostics,declaration)
+    _p05_observation_check(observations,diagnostics,manifest,declaration,observations_ref,plan,model,parent)
+    (;checkpoint=handle,diagnostics=deepcopy(diagnostics_ref),observations=deepcopy(observations_ref))
 end

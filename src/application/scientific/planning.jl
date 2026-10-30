@@ -51,17 +51,19 @@ function _effective_scientific_inputs(configuration)
 end
 
 """Resolve physical axes into a point passport; execution templates may span a branch."""
-function _point_axis_inputs(point::ScientificPoint)
+function _point_axis_inputs(temperature_K::Real, voltage_per_period_V::Real)
+    all(isfinite,(temperature_K,voltage_per_period_V)) && temperature_K>0 && voltage_per_period_V>=0 ||
+        throw(ArgumentError("operating coordinates must be finite, T>0 and V>=0"))
+    T=Float64(temperature_K); V=Float64(voltage_per_period_V)
     return Dict{String,Any}(
         "physical"=>Dict{String,Any}(
-            "voltage_per_period"=>"$(point.voltage_per_period_V) V",
-            "field_bias"=>nothing,
-            "lattice_temperature"=>"$(point.temperature_K) K",
-            "lo_temperature"=>"$(point.temperature_K) K"),
+            "voltage_per_period"=>"$(V) V", "field_bias"=>nothing,
+            "lattice_temperature"=>"$(T) K", "lo_temperature"=>"$(T) K"),
         "study"=>Dict{String,Any}(
-            "voltages_per_period"=>["$(point.voltage_per_period_V) V"],
-            "temperatures"=>["$(point.temperature_K) K"]))
+            "voltages_per_period"=>["$(V) V"], "temperatures"=>["$(T) K"]))
 end
+_point_axis_inputs(point::ScientificPoint) =
+    _point_axis_inputs(point.temperature_K,point.voltage_per_period_V)
 function _point_resolved_raw(configuration,point::ScientificPoint)
     raw=deepcopy(configuration.raw)
     _deep_merge!(raw,_point_axis_inputs(point),Dict{String,Vector{String}}(),

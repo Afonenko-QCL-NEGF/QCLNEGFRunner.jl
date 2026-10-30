@@ -1,7 +1,8 @@
 const _CAPTURE_RESERVE_BYTES = 104 * 1024^2 # 32 performance +64 scalar +8 auxiliary.
 
 function _capture_context(plan, output, execution_id, attempt;
-    spec_path=get(ENV,"QCL_NEGF_CAPTURE_SPEC",""),scratch_root=nothing)
+    spec_path=get(ENV,"QCL_NEGF_CAPTURE_SPEC",""),scratch_root=nothing,
+    frozen_plan_bytes=nothing,source_plan_path=nothing)
     isempty(spec_path) && return nothing
     try
         path=abspath(spec_path); job=dirname(path)
@@ -20,7 +21,13 @@ function _capture_context(plan, output, execution_id, attempt;
         spec["allocated_logical_cpus"]===nothing && spec["scratch_root"]==scratch_root &&
             spec["allocation_id"]=="calcjob-process:$(selection["calcjob_uuid"]):$(attempt)" || return nothing
         pin=spec["plan"]; pin["path"]=="plan.json" || return nothing
-        plan_raw=open(io->read(io,1024^2+1),joinpath(job,"plan.json"))
+        expected_plan=joinpath(job,"plan.json")
+        plan_raw=if frozen_plan_bytes !== nothing && source_plan_path !== nothing &&
+                    isfile(expected_plan) && realpath(source_plan_path)==realpath(expected_plan)
+            frozen_plan_bytes
+        else
+            open(io->read(io,1024^2+1),expected_plan)
+        end
         length(plan_raw)<=1024^2 && length(plan_raw)==pin["bytes"] && bytes2hex(sha256(plan_raw))==pin["sha256"] || return nothing
         credits=spec["credits"]
         Set(keys(credits))==Set(["performance_bytes","scalar_bytes","io_bytes","reserve_bytes"]) &&
@@ -98,10 +105,15 @@ This guard is not an OS quota and does not reserve space against other writers.
 function stage_result_tree(source::AbstractString, destination::AbstractString;
     byte_budget::Int=8*1024^3, reserve_bytes::Int=64*1024^2,
     capture_reserve_bytes::Int=0,
-    resource_policy::Symbol = :standalone, storage_context=nothing)
+    resource_policy::Symbol = :standalone, storage_context=nothing,
+    maximum_metadata_bytes::Union{Nothing,Int}=nothing,
+    native_result::Union{Nothing,AbstractDict}=nothing)
     temporary = nothing
     try
         _resident_writer_preflight(resource_policy, :stage, storage_context, destination; payload=source)
+        native_result===nothing || maximum_metadata_bytes!==nothing || throw(ArgumentError("native staging requires explicit metadata cap"))
+        maximum_metadata_bytes===nothing || _p05_cap(maximum_metadata_bytes)
+        native_result===nothing || _p05_native_result_profile(native_result,maximum_metadata_bytes)
         source = abspath(source)
         destination = abspath(destination)
         isdir(source) || throw(ArgumentError("result source is not a directory"))
@@ -169,6 +181,9 @@ function stage_result_tree(source::AbstractString, destination::AbstractString;
             end
             _sync_artifact_file(joinpath(staged, path))
         end
+        # Selection is the exact execute return, never inferred from a filename,
+        # role inventory, mutable pointer or directory scan.
+        native_result===nothing || _p05_verify_native_result(staged,native_result,maximum_metadata_bytes)
         for (directory, _, _) in walkdir(staged; topdown=false)
             _sync_artifact_directory(directory)
         end
@@ -215,9 +230,19 @@ function execute_scientific_plan_staged(
     archive_byte_budget::Int=64*1024^3,
     capture_reserve_bytes::Int=0,
     capture_context=nothing,
+    frozen_plan_bytes::Union{Nothing,Vector{UInt8}}=nothing,
+    frozen_plan_capture::Union{Nothing,_P05PlanCapture}=nothing,
+    run_id::Union{Nothing,AbstractString}=nothing,
+    source_graph::Union{Nothing,AbstractDict}=nothing,
+    parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
+    phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
     resource_policy::Symbol = :standalone,
     envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
 )
+    frozen_plan_bytes===nothing || frozen_plan_capture===nothing || throw(ArgumentError("choose one frozen plan source"))
+    source_graph=_require_source_graph(source_graph)
+    recovery_bundle === nothing || throw(ArgumentError("unsupported_format: legacy recovery bundle"))
+    parent_checkpoint === nothing || _p05_parent_root_check(parent_checkpoint,output)
     # Dominates scratch mkdir, workspace create, delivery and success deletion.
     # Strict must never create scratch and then fall back to standalone inside.
     _scientific_resource_preflight(resource_policy, envelope)
@@ -241,9 +266,10 @@ function execute_scientific_plan_staged(
     if scratch_root===nothing || any(e.outputs.recovery.enabled for e in plan.executions if execution_id===nothing || e.id==execution_id)
         scratch_root===nothing || @warn "portable recovery publishes directly to output storage; scratch staging is disabled for this execution"
         _capture_locator(capture_context,:direct,output,0)
-        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes)
+        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy)
     end
     selected=[e for e in plan.executions if execution_id===nothing || e.id==execution_id]
+    parent_checkpoint === nothing || throw(ArgumentError("native5_recovery_import_unavailable: scratch closure import requires P07"))
     isempty(selected) && throw(ArgumentError("unknown selected execution"))
     # Scratch and publication use the existing operational policy, even when
     # recovery checkpoints themselves are disabled. Shared staging obeys the
@@ -260,8 +286,14 @@ function execute_scientific_plan_staged(
     local_result = joinpath(workspace, "result")
     try
         _capture_locator(capture_context,:scratch,local_result,0)
-        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes)
-        stage_result_tree(local_result, destination; byte_budget,reserve_bytes,resource_policy,capture_reserve_bytes)
+        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,phase_observation_policy)
+        declared=minimum(e.configuration.production.memory_budget_bytes for e in selected)
+        metadata_roots=(;entry=(plan,selected,source_graph,result),resources=(envelope,),construction=(),continuation=(),history=(),
+            observers=(telemetry_sink,),inputs_publication=(workspace,local_result,destination,byte_budget,reserve_bytes,
+                capture_reserve_bytes,capture_context,frozen_plan_bytes,frozen_plan_capture,run_id))
+        maximum_metadata_bytes=_p05_closed_metadata_limit(declared,metadata_roots;envelope)
+        stage_result_tree(local_result,destination;byte_budget,reserve_bytes,resource_policy,capture_reserve_bytes,
+            maximum_metadata_bytes,native_result=result)
         _capture_locator(capture_context,:staged,destination,1)
         _resident_writer_preflight(resource_policy, :scratch_success_cleanup)
         rm(workspace; recursive=true)

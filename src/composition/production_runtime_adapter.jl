@@ -12,7 +12,15 @@ HDF5, and the production solver. The adapter deliberately reuses
 """
 struct QCLProductionPointRunner <: AbstractPointRunner
     configuration::ResolvedRunConfiguration
-    function QCLProductionPointRunner(configuration::ResolvedRunConfiguration)
+    phase_telemetry::QCLScientificWorkflow.TelemetryOutputPolicy
+    phase_observation_policy::Union{Nothing,PhaseObservationPolicy}
+    source_graph::Union{Nothing,Dict{String,Any}}
+    plan_capture::_P05PlanCapture
+    function QCLProductionPointRunner(configuration::ResolvedRunConfiguration;
+        phase_telemetry::QCLScientificWorkflow.TelemetryOutputPolicy=ScientificOutputs().telemetry,
+        phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
+        source_graph::Union{Nothing,AbstractDict}=nothing,
+        frozen_plan_capture::Union{Nothing,_P05PlanCapture}=nothing)
         configuration.execution.solver_backend === :production || throw(
             ArgumentError("QCLProductionPointRunner requires the production backend"),
         )
@@ -27,8 +35,32 @@ struct QCLProductionPointRunner <: AbstractPointRunner
         isempty(configuration.study.voltages_per_period) &&
             throw(ArgumentError("configured nested sweep has no voltages per period"))
         _assert_runtime_configuration_consistency(configuration)
-        new(configuration)
+        phase_telemetry.buffer_events>0 || throw(ArgumentError("phase telemetry buffer_events must be positive"))
+        phase_observation_policy===nothing || phase_observation_policy.batch_events<=phase_telemetry.buffer_events ||
+            throw(ArgumentError("phase observation batch exceeds event capacity"))
+        graph=source_graph===nothing ? nothing : _require_source_graph(source_graph)
+        capture=frozen_plan_capture===nothing ? _p05_capture_plan(Vector{UInt8}(codeunits(YAML.write(
+            QCLApplicationRuntime._sweep_plan_dict(configured_nested_sweep_plan(configuration))))),:nested_sweep;
+            maximum_metadata_bytes=configuration.production.memory_budget_bytes) : frozen_plan_capture
+        capture.kind===:nested_sweep || throw(ArgumentError("configured original plan kind differs"))
+        new(configuration,phase_telemetry,phase_observation_policy,graph,capture)
     end
+end
+
+QCLApplicationRuntime._native_point_source(::QCLProductionPointRunner)=_p05_native_source(".";reason="no_selected_native_state")
+function QCLApplicationRuntime._verify_completed_point(runner::QCLProductionPointRunner,repository,definition,point,result)
+    result["schema"]=="qcl-negf-configured-point-result-v2" || throw(ArgumentError("native configured result schema differs"))
+    source=result["result"]["native_source"]
+    source["kind"]=="final" || throw(ArgumentError("completed configured result lacks native final"))
+    identity=source["selected_state"]["identity"]
+    identity["run_id"]==definition.identity.run_id && identity["point_id"]==point.point_id || throw(ArgumentError("native configured row identity differs"))
+    source["relation"]=="current_point_attempt" && identity["attempt"]==string(result["attempt"]) || throw(ArgumentError("native configured attempt differs"))
+    roots=(;entry=(runner,definition,point,result),resources=(),construction=(),continuation=(),history=(),observers=(),inputs_publication=(source,))
+    limit=_p05_closed_metadata_limit(runner.configuration.production.memory_budget_bytes,roots)
+    root=run_workspace_directory(repository,definition.identity.run_id)
+    _p05_verify_native_source(root,source,limit)
+    result["result"]["optical_attachment"]===nothing || throw(ArgumentError("native5_optical_codec_verification_pending"))
+    nothing
 end
 
 _production_runtime_adapter_source() =
@@ -36,7 +68,7 @@ _production_runtime_adapter_source() =
 
 """Build the configured temperature -> voltage application sweep tree."""
 function configured_nested_sweep_plan(configuration::ResolvedRunConfiguration)
-    temperatures = Any[_kelvin(value) for value in configuration.study.temperatures]
+    temperatures = Any[_runner_kelvin(value) for value in configuration.study.temperatures]
     voltages = Any[
         Float64(ustrip(u"V", uconvert(u"V", value))) for
         value in configuration.study.voltages_per_period
@@ -223,7 +255,7 @@ function _runtime_software_identity()
     sort!(sources; by = record -> record["path"])
     return Dict{String,Any}(
         "package" => "QCLNEGFRunner",
-        "package_version" => _software_version(),
+        "package_version" => _runner_package_version(),
         "julia_version" => string(VERSION),
         "blas_vendor" => _runtime_blas_vendor(),
         "source_files" => sources,
@@ -434,8 +466,17 @@ end
 function _runtime_point_artifacts(
     result,
     record::ProductionSweepRecord,
-    run_root::AbstractString,
+    run_root::AbstractString;
+    phase_directory::Union{Nothing,AbstractString}=nothing,
 )
+    output_root = abspath(result.output_directory)
+    phase_root = phase_directory===nothing ? nothing : abspath(phase_directory)
+    function inside(path,root)
+        relative=relpath(abspath(path),root)
+        return relative=="." || (relative!=".." && !startswith(relative,"../") && !startswith(relative,"..\\"))
+    end
+    phase_root===nothing || (phase_root!=output_root && inside(phase_root,output_root)) ||
+        throw(ArgumentError("phase directory must belong to point output"))
     candidates = (
         "resolved_configuration" => (
             joinpath(result.output_directory, "resolved_configuration.yaml"),
@@ -471,6 +512,7 @@ function _runtime_point_artifacts(
     )
     artifacts = Dict{String,Any}()
     for (name, (path, media_type)) in candidates
+        isempty(path) || phase_root===nothing || !inside(path,phase_root) || continue
         artifact = _runtime_artifact(run_root, path; media_type)
         artifact === nothing || (artifacts[name] = artifact)
     end
@@ -478,12 +520,12 @@ function _runtime_point_artifacts(
     # optional plot/report outputs. Catalogue every generated regular file so
     # completed-point resume verifies their digests instead of checking only a
     # fixed historical shortlist.
-    output_root = abspath(result.output_directory)
     if isdir(output_root)
         seen = Set(String(artifact["path"]) for artifact in values(artifacts))
         for (directory, directories, files) in walkdir(output_root; follow_symlinks = false)
             any(name -> islink(joinpath(directory, name)), directories) &&
                 throw(ArgumentError("point output must not contain symlinked directories"))
+            phase_root===nothing || filter!(name->abspath(joinpath(directory,name))!=phase_root,directories)
             for filename in sort(files)
                 path = joinpath(directory, filename)
                 islink(path) && throw(
@@ -892,13 +934,16 @@ function _runtime_publish_checkpoint!(
     return reference
 end
 
-function _runtime_progress_metrics(values::Vector{SolverMetric})
+function _runtime_progress_metrics(values::Union{Tuple,AbstractVector{SolverMetric}})
     metrics = Dict{String,Any}()
     for metric in values
         name = String(metric.name)
         value = metric.value
+        key = metric.name === :J ? "current_A_per_cm2" : name
+        metrics[key*"_measurement_status"] = String(metric.measurement_status)
+        metrics[key*"_reason"] = metric.reason === nothing ? nothing : String(metric.reason)
         if metric.name === :J
-            value isa Real && !(value isa Bool) ||
+            (value === nothing || value isa Real && !(value isa Bool)) ||
                 throw(ArgumentError("current progress metric must be numeric"))
             metric.unit == "A/cm^2" || throw(
                 ArgumentError(
@@ -907,7 +952,7 @@ function _runtime_progress_metrics(values::Vector{SolverMetric})
             )
             haskey(metrics, "current_A_per_cm2") &&
                 throw(ArgumentError("duplicate runtime progress metric J"))
-            metrics["current_A_per_cm2"] = Float64(value)
+            metrics["current_A_per_cm2"] = value === nothing ? nothing : Float64(value)
             metrics["current_A_per_cm2_unit"] = "A/cm^2"
             continue
         end
@@ -995,64 +1040,184 @@ function _observe_runtime_solver_event!(
     return event
 end
 
+function _configured_plan_capture(runner::QCLProductionPointRunner,context::PointExecutionContext,
+    run_root::AbstractString;source_capture::Union{Nothing,_P05PlanCapture},
+    parent::Union{Nothing,VerifiedExactCheckpoint},maximum_metadata_bytes::Int)::_P05PlanCapture
+    maximum_metadata_bytes>0 || throw(ArgumentError("invalid plan metadata allowance"))
+    parent!==nothing && source_capture===nothing && throw(ArgumentError("native5_parent_plan_bytes_required"))
+    capture=if source_capture===nothing
+        path=joinpath(run_root,"execution_plan.yaml")
+        isfile(path) && !islink(path) || throw(ArgumentError("configured frozen execution plan unavailable"))
+        bytes=open(path,"r") do io
+            stamp(s)=(s.device,s.inode,s.size,s.mtime,s.ctime)
+            before=stamp(stat(io))
+            before==stamp(stat(path)) || throw(ArgumentError("configured plan path rebound"))
+            data=read(io,Base.checked_add(maximum_metadata_bytes÷8,1))
+            !islink(path) && before==stamp(stat(io))==stamp(stat(path)) ||
+                throw(ArgumentError("configured plan changed during capture"))
+            data
+        end
+        _p05_capture_plan(bytes,:nested_sweep;maximum_metadata_bytes)
+    else
+        source_capture.kind===:nested_sweep || throw(ArgumentError("configured plan kind differs"))
+        bytes2hex(sha256(source_capture.bytes))==source_capture.plan_sha256 || throw(ArgumentError("captured plan bytes changed"))
+        parsed=_p05_yaml(source_capture.bytes,maximum_metadata_bytes)
+        _p05_nested_plan(parsed)
+        canonical_bytes(parsed)==canonical_bytes(source_capture.document) || throw(ArgumentError("captured plan document changed"))
+        source_capture
+    end
+    function tree(node)
+        node["kind"]=="leaf" && return SweepLeaf(node["name"])
+        axes=[SweepAxis(a["name"],a["values"]) for a in node["axes"]]
+        SweepLevel(node["name"],axes,tree(node["child"]))
+    end
+    source_plan=NestedSweepPlan(capture.document["name"],tree(capture.document["root"]))
+    canonical_bytes(QCLApplicationRuntime._sweep_plan_identity_dict(source_plan))==
+        canonical_bytes(QCLApplicationRuntime._sweep_plan_identity_dict(context.definition.plan)) ||
+        throw(ArgumentError("configured source plan identity differs"))
+    if parent!==nothing
+        _p05_parent_root_check(parent,run_root)
+        checkpoint_reference(parent)["identity"]["plan_sha256"]==capture.plan_sha256 ||
+            throw(ArgumentError("native5 parent original plan bytes differ"))
+    end
+    return capture
+end
+
+function _configured_point_identity(runner::QCLProductionPointRunner,context::PointExecutionContext,
+    capture::_P05PlanCapture,model_preimage::AbstractDict)::Dict{String,Any}
+    capture.kind===:nested_sweep || throw(ArgumentError("configured point requires nested sweep plan"))
+    bytes2hex(sha256(capture.bytes))==capture.plan_sha256 || throw(ArgumentError("captured plan bytes changed"))
+    run_id=context.definition.identity.run_id
+    execution_id=content_id("execution",Dict("run_id"=>run_id,"point_id"=>context.point.point_id))
+    branch_id=content_id("branch",Dict("execution_id"=>execution_id,"leaf"=>context.point.leaf))
+    context.attempt>0 || throw(ArgumentError("configured attempt must be positive"))
+    return Dict{String,Any}("run_id"=>run_id,"execution_id"=>execution_id,
+        "point_id"=>context.point.point_id,"attempt"=>string(context.attempt),"branch_id"=>branch_id,
+        "model_sha256"=>bytes2hex(sha256(canonical_bytes(model_preimage))),"plan_sha256"=>capture.plan_sha256)
+end
+
+function _configured_point_identity(runner::QCLProductionPointRunner,context::PointExecutionContext,run_root::AbstractString)
+    run_id=context.definition.identity.run_id
+    execution_id=content_id("execution",Dict("run_id"=>run_id,"point_id"=>context.point.point_id))
+    branch_id=content_id("branch",Dict("execution_id"=>execution_id,"leaf"=>context.point.leaf))
+    plan_path=joinpath(run_root,"execution_plan.yaml")
+    isfile(plan_path) && !islink(plan_path) || throw(ArgumentError("configured frozen execution plan unavailable"))
+    before=stat(plan_path)
+    plan_sha256=open(io->bytes2hex(sha256(io)),plan_path)
+    after=stat(plan_path)
+    (before.device,before.inode,before.size,before.mtime,before.ctime)==
+        (after.device,after.inode,after.size,after.mtime,after.ctime) ||
+        throw(ArgumentError("configured execution plan changed during capture"))
+    configuration=runner.configuration
+    T=_runtime_coordinate(context.point,"temperature.temperature_K")
+    V=_runtime_coordinate(context.point,"voltage.voltage_per_period_V")
+    raw=deepcopy(configuration.raw)
+    sources=deepcopy(configuration.provenance.sources)
+    QCLScientificWorkflow._deep_merge!(raw,QCLScientificWorkflow._point_axis_inputs(T,V),sources,
+        "point:"*context.point.point_id*"#generated:point-axes")
+    resolved=QCLScientificWorkflow._resolve_configuration(raw,ConfigurationProvenance(
+        copy(configuration.provenance.manifests),copy(configuration.provenance.files),sources))
+    model_sha256=bytes2hex(sha256(canonical_bytes(QCLScientificWorkflow._snapshot_model(resolved))))
+    context.attempt>0 || throw(ArgumentError("configured attempt must be positive"))
+    return Dict{String,Any}("run_id"=>run_id,"execution_id"=>execution_id,
+        "point_id"=>context.point.point_id,"attempt"=>string(context.attempt),"branch_id"=>branch_id,
+        "model_sha256"=>model_sha256,"plan_sha256"=>plan_sha256)
+end
+
 function execute_point!(runner::QCLProductionPointRunner, context::PointExecutionContext)
+    initial=runner.phase_telemetry.enabled ?
+        (status=:unavailable,session_id=nothing,current_path=nothing,reason="phase_source_not_initialized") :
+        (status=:disabled,session_id=nothing,current_path=nothing,reason="telemetry_disabled")
+    QCLApplicationRuntime._set_context_phase_source!(context,QCLScientificWorkflow._phase_source_projection(initial))
+    _require_source_graph(runner.source_graph)
     repository = context.repository
     run_id = context.definition.identity.run_id
     run_root = run_workspace_directory(repository, run_id)
     point_root = point_workspace_directory(repository, run_id, context.point.point_id)
     output_directory = joinpath(point_root, "artifacts")
-    configuration = _configured_point_configuration(runner, context.point, output_directory)
-    prepared_checkpoint =
-        _runtime_prepare_checkpoint!(context, configuration, output_directory)
-    bridge = _RuntimeSolverEventBridge(context)
-    checkpoint_publisher = _RuntimeCheckpointPublisher(
-        context;
-        checkpoint_path = prepared_checkpoint.path,
-        checkpoint_signature = prepared_checkpoint.signature,
-    )
-    function solver_event_observer(event)
-        _observe_runtime_solver_event!(bridge, event)
-        _runtime_publish_checkpoint!(checkpoint_publisher, event)
-        return event
+    phase_observer=nothing
+    observer_admission=nothing
+    try
+    configuration=_configured_point_configuration(runner,context.point,output_directory)
+    prepared_execution=_p05_prepared_execution(configuration,nothing)
+    configuration,execution_plan=prepared_execution
+    context.resume_checkpoint===nothing || throw(ArgumentError("native5_explicit_parent_selection_pending_Q1: legacy adapter checkpoint is not a VerifiedExactCheckpoint"))
+    # This original was captured before repository initialization rewrote operational YAML.
+    capture=_configured_plan_capture(runner,context,run_root;source_capture=runner.plan_capture,
+        parent=nothing,maximum_metadata_bytes=configuration.production.memory_budget_bytes)
+    model_preimage=QCLScientificWorkflow._snapshot_model(configuration)
+    identity=_configured_point_identity(runner,context,capture,model_preimage)
+    native_context=(;artifact_root=run_root,identity,plan_capture=capture,parent_checkpoint=nothing)
+    native_refs=Ref{Union{Nothing,Dict{String,Any}}}(nothing)
+    display=Ref{Union{Nothing,NamedTuple}}(nothing)
+    function retain_display(bundle,it,iv)
+        it==iv==1 && display[]===nothing || throw(ArgumentError("duplicate/mismatched configured presentation"))
+        keys(bundle)==(:stationary_assessment,:validation,:positivity) || throw(ArgumentError("final presentation fields differ"))
+        display[]=bundle
+        nothing
     end
-    result = try
-        with_span(
-            context.tracer,
-            :physical,
-            "Poisson_SCBA";
-            core = "poisson_scba",
-            attributes = Dict{String,Any}(
-                "point_id" => context.point.point_id,
-                "attempt" => context.attempt,
-                "checkpoint_schema" => _CHECKPOINT_SCHEMA_VERSION,
-                "checkpoint_resume" => prepared_checkpoint.resume,
-            ),
-        ) do _
-            run_from_configuration(
-                configuration;
-                solver_event_observer,
-                resume_from_checkpoint = prepared_checkpoint.resume,
-            )
-        end
-    catch error
+    function retain_native(triple,it,iv)
+        it==iv==1 && native_refs[]===nothing || throw(ArgumentError("duplicate/mismatched configured native final"))
+        keys(triple)==(:checkpoint,:diagnostics,:observations) || throw(ArgumentError("exact native final triple required"))
+        triple.checkpoint.root==abspath(run_root) || throw(ArgumentError("configured artifact root differs"))
+        checkpoint_reference(triple.checkpoint)["identity"]==identity || throw(ArgumentError("configured native identity differs"))
+        native_refs[]=_p05_native_source(".";triple...)
+        nothing
+    end
+    session="phase-"*string(time_ns())
+    policy=runner.phase_observation_policy===nothing ?
+        _normal_phase_policy(runner.phase_telemetry.buffer_events) : runner.phase_observation_policy
+    attempt_directory=joinpath(output_directory,"points","T1-V1","attempt-$(context.attempt)")
+    phase_request=runner.phase_telemetry.enabled ?
+        (;directory=joinpath(attempt_directory,"progress","phases",session),artifact_root=run_root,
+            identity,source_session=session,policy,capacity_events=runner.phase_telemetry.buffer_events) : nothing
+    observer_admission=_p05_begin_observers!(;phase_request,scalar_request=nothing)
+    roots=(;entry=(runner,context,configuration,native_context),resources=(execution_plan,configuration.production,observer_admission),
+        construction=(),continuation=(context.resume_checkpoint,),history=(),observers=(retain_native,retain_display),
+        inputs_publication=(identity,context.phase_source,capture,model_preimage,native_refs,display))
+    grant=min(execution_plan.memory_budget_bytes,configuration.production.memory_budget_bytes)
+    available=_p05_input_metadata_limit(grant,roots;observer_admission)
+    execution_plan.estimated_peak_bytes<=available || throw(ArgumentError("observer payload exceeds configured grant"))
+    if runner.phase_telemetry.enabled
         try
-            _runtime_publish_checkpoint!(checkpoint_publisher; terminal = true)
-        catch checkpoint_error
-            emit_runtime_event!(
-                context.tracer,
-                :checkpoint_publish_failed;
-                name = _RUNTIME_PRODUCTION_CHECKPOINT_KIND,
-                status = :failed,
-                attributes = Dict{String,Any}(
-                    "point_id" => context.point.point_id,
-                    "exception_type" => string(typeof(checkpoint_error)),
-                    "message" => sprint(showerror, checkpoint_error),
-                ),
-            )
+            observer_admission.start_phase || throw(_PhaseObserverUnavailable(:previous_phase_writer_pending))
+            phase_observer=_start_phase_observer(joinpath(attempt_directory,"progress","phases",session);
+                artifact_root=run_root,identity,source_session=session,policy,
+                capacity_events=runner.phase_telemetry.buffer_events,admission=observer_admission)
+            QCLApplicationRuntime._set_context_phase_source!(context,
+                QCLScientificWorkflow._phase_source_projection(_phase_source_descriptor(phase_observer)))
+        catch phase_error
+            phase_error isa InterruptException && rethrow()
+            reason=phase_error isa _PhaseObserverUnavailable ? phase_error.reason : :phase_source_initialization_failed
+            QCLApplicationRuntime._set_context_phase_source!(context,QCLScientificWorkflow._phase_source_projection(
+                (status=:unavailable,session_id=nothing,current_path=nothing,reason=reason)))
         end
-        rethrow()
     end
-    _runtime_publish_checkpoint!(checkpoint_publisher; terminal = true)
+    try
+        QCLApplicationRuntime._publish_context_phase_source!(context)
+    catch phase_error
+        phase_error isa InterruptException && rethrow()
+        phase_observer===nothing || _close_phase_observer!(phase_observer)
+        phase_observer=nothing
+        QCLApplicationRuntime._set_context_phase_source!(context,QCLScientificWorkflow._phase_source_projection(
+            (status=:unavailable,session_id=nothing,current_path=nothing,reason=:phase_source_status_write_failed)))
+        @warn "phase source status publication failed" exception=(phase_error,catch_backtrace())
+    end
+    throw(ArgumentError("native5_configured_consumer_unavailable: typed Results/AiiDA/Q1 transport qualification pending"))
+    bridge = _RuntimeSolverEventBridge(context)
+    function solver_event_observer(event)
+        event.action in (:phase_begin,:phase_end) && return event
+        _observe_runtime_solver_event!(bridge,event)
+        event
+    end
+    result=with_span(context.tracer,:physical,"Poisson_SCBA";core="poisson_scba",
+        attributes=Dict{String,Any}("point_id"=>context.point.point_id,"attempt"=>context.attempt,"native_profile"=>"native5")) do _
+        run_from_configuration(configuration;solver_event_observer,resume_from_checkpoint=false,phase_observer,
+            observer_admission,prepared_execution,source_graph=runner.source_graph,
+            frozen_plan_bytes=capture.bytes,run_id,native_context,native_publication_sink=retain_native,final_presentation_sink=retain_display)
+    end
+    native_refs[]===nothing && throw(ArgumentError("configured final publication missing"))
+    display[]===nothing && throw(ArgumentError("configured final presentation missing"))
     length(result.sweep.records) == 1 || throw(
         ArgumentError(
             "one-point configured run returned $(length(result.sweep.records)) " *
@@ -1060,11 +1225,42 @@ function execute_point!(runner::QCLProductionPointRunner, context::PointExecutio
         ),
     )
     record = only(result.sweep.records)
+    metadata=_runtime_point_metadata(record)
+    # Preserve the existing public display encoding (nonfinite display values are
+    # null); raw IEEE values and scientific authority remain in O1/D1.
+    stored_display=_p04_parse(sprint(_light_json,display[]))
+    for name in ("stationary_assessment","validation","positivity")
+        metadata[name]=stored_display[name]
+    end
+    metadata["native_source"]=native_refs[]
+    metadata["optical_attachment"]=nothing
+    optical_failure=findfirst(w->get(w,"code",nothing)=="OPTIONAL_OPTICS_FAILED",record.warnings)
+    if configuration.study.calculate_optical_response
+        optical_failure===nothing && throw(ArgumentError("native5_optical_attachment_missing"))
+        metadata["postprocessing"]=Dict("optical"=>Dict("status"=>"failed","error"=>record.warnings[optical_failure]["message"]))
+    else
+        metadata["postprocessing"]=Dict("optical"=>Dict("status"=>"not_requested","error"=>nothing))
+    end
+    phase_directory=nothing
+    if context.phase_source!==nothing
+        metadata["phase_source"]=deepcopy(context.phase_source)
+        if context.phase_source["status"]=="available"
+            phase_directory=dirname(joinpath(run_root,context.phase_source["current_path"]))
+        end
+    end
     return PointExecutionResult(
         (record.converged || record.status === :approximate) ? :completed : :incomplete;
-        metadata = _runtime_point_metadata(record),
-        artifacts = _runtime_point_artifacts(result, record, run_root),
+        metadata,
+        artifacts = Dict{String,Any}(),
     )
+    finally
+        phase_observer===nothing || _close_phase_observer!(phase_observer)
+        # Returned records have only detached metadata. Dead callback/P/root aliases may
+        # no longer retain this producer when caller ownership is released.
+        phase_observer=nothing;roots=nothing;solver_event_observer=nothing
+        native_context=nothing;capture=nothing;model_preimage=nothing;native_refs=nothing;retain_native=nothing;display=nothing;retain_display=nothing;stored_display=nothing
+        observer_admission===nothing || _p05_end_observers!(observer_admission)
+    end
 end
 
 function _runtime_default_iterations_per_point(configuration::ResolvedRunConfiguration)
@@ -1112,7 +1308,7 @@ function _runtime_default_provenance(configuration::ResolvedRunConfiguration)
             ),
         ),
         "package" =>
-            Dict{String,Any}("name" => "QCLNEGFRunner", "version" => _software_version()),
+            Dict{String,Any}("name" => "QCLNEGFRunner", "version" => _runner_package_version()),
     )
 end
 
@@ -1147,8 +1343,12 @@ function run_configured_nested_sweep(
     session_provenance = nothing,
     disk_model::Union{Nothing,DiskBudgetModel} = nothing,
     iterations_per_point::Union{Nothing,Integer} = nothing,
+    phase_telemetry::QCLScientificWorkflow.TelemetryOutputPolicy=ScientificOutputs().telemetry,
+    phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
+    source_graph::Union{Nothing,AbstractDict}=nothing,
 )
-    runner = QCLProductionPointRunner(configuration)
+    source_graph=_require_source_graph(source_graph)
+    runner = QCLProductionPointRunner(configuration;phase_telemetry,phase_observation_policy,source_graph)
     definition = configured_nested_run_definition(configuration)
     selected_repository =
         repository === nothing ?

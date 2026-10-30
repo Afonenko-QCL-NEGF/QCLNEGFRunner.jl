@@ -169,7 +169,7 @@ function _light_positivity_data(solution::NEGFSolution; witnesses = nothing)
                 "energy_index"=>witness.energy_index,
                 "momentum_index"=>witness.momentum_index,
                 "energy_eV"=>problem.grids.ε[witness.energy_index]*problem.scales.E₀_eV +
-                             _electronvolts(problem.physical.E_ref),
+                             _runner_electronvolts(problem.physical.E_ref),
                 "momentum_per_nm"=>problem.grids.κ[witness.momentum_index]/problem.scales.L₀_m*1e-9,
                 "minimum_eigenvalue_scaled"=>finite_or_null(witness.minimum_eigenvalue),
                 "block_norm_scaled"=>finite_or_null(witness.block_norm),
@@ -214,14 +214,10 @@ end
 """All final gates are retained, including failures omitted by summary metrics."""
 function _light_validation_data(solution::NEGFSolution)
     metrics = solution.report.metrics
-    strict_limits = _solution_validation_limits(solution.options.tolerances, metrics)
-    enabled = solution.options.convergence.diagnostic_quality.enabled
-    approximate_limits =
-        enabled ?
-        _solution_validation_limits(
-            _approximate_options(solution.options).tolerances,
-            metrics,
-        ) : nothing
+    diagnostics = QCLNEGF.solution_metric_diagnostics(solution)
+    strict_limits = diagnostics.strict_limits
+    approximate_limits = diagnostics.approximate_limits
+    enabled = approximate_limits !== nothing
     rows = [
         Dict{String,Any}(
             "metric"=>String(name),
@@ -249,4 +245,49 @@ function _light_validation_data(solution::NEGFSolution)
         "messages"=>copy(solution.report.messages),
         "metrics"=>rows,
     )
+end
+
+# Final-native route consumes the owning capture; no getter/map/PSD replay for display.
+function _light_validation_data(snapshot::QCLNEGF.FinalObservationSnapshot;messages::Vector{String})
+    diagnostics=snapshot.metrics;summary=snapshot.summary
+    strict=diagnostics.strict_limits;approximate=diagnostics.approximate_limits;enabled=approximate!==nothing
+    rows=[Dict{String,Any}("metric"=>String(name),"value"=>isfinite(value) ? value : nothing,
+        "strict_threshold"=>get(strict,name,nothing),"approximate_threshold"=>enabled ? get(approximate,name,nothing) : nothing,
+        "strict_passed"=>haskey(strict,name) && isfinite(value) && value<=strict[name],
+        "approximate_passed"=>enabled ? haskey(approximate,name) && isfinite(value) && value<=approximate[name] : nothing)
+        for (name,value) in sort!(collect(diagnostics.summary_metrics);by=row->String(first(row)))]
+    Dict{String,Any}("schema"=>"qcl-negf-validation-diagnostics-v1","status"=>String(summary.status),"quality"=>String(summary.quality),
+        "evaluated"=>!isempty(diagnostics.summary_metrics),"strict_passed"=>summary.converged,"approximate_enabled"=>enabled,
+        "approximate_passed"=>summary.status===:approximate,"messages"=>copy(messages),"metrics"=>rows)
+end
+function _light_positivity_data(snapshot::QCLNEGF.FinalObservationSnapshot;status::Symbol,quality::Symbol)
+    positivity=snapshot.positivity
+    if positivity===nothing
+        issue=only(filter(row->row.target===:positivity,snapshot.issues))
+        return Dict("status"=>String(issue.status),"reason"=>String(issue.reason)*": "*issue.detail,"matrices"=>nothing)
+    end
+    # Error sentinel coordinates are not a measured energy/momentum sample.
+    if any(w->w.status!==:measured || w.energy_index==0 || w.momentum_index==0,positivity.witnesses)
+        return Dict("status"=>"error","reason"=>"recorded positivity witness is unavailable; raw diagnostics retained","matrices"=>nothing)
+    end
+    context=snapshot.context
+    finite_or_null(x)=isfinite(x) ? x : nothing
+    rows=[begin
+        broadening=w.matrix_kind===:broadening
+        factor=broadening ? context.scales.E0_eV : inv(context.scales.E0_eV)
+        Dict{String,Any}("matrix_kind"=>String(w.matrix_kind),"energy_index"=>w.energy_index,"momentum_index"=>w.momentum_index,
+            "energy_eV"=>context.energy_eV[w.energy_index],"momentum_per_nm"=>context.k_per_nm[w.momentum_index],
+            "minimum_eigenvalue_scaled"=>finite_or_null(w.minimum_eigenvalue),"block_norm_scaled"=>finite_or_null(w.block_norm),
+            "floor_scaled"=>w.floor,"minimum_eigenvalue"=>finite_or_null(w.minimum_eigenvalue*factor),"block_norm"=>finite_or_null(w.block_norm*factor),
+            "unit"=>broadening ? "eV" : "1/eV","absolute_defect"=>finite_or_null(w.absolute_defect*factor),
+            "relative_defect"=>finite_or_null(w.relative_defect),"backward_error"=>finite_or_null(w.backward_error*factor),
+            "hermiticity_defect"=>finite_or_null(w.hermiticity_defect),"construction_scale"=>finite_or_null(w.construction_scale*factor),
+            "strict_absolute_threshold"=>finite_or_null(positivity.strict_absolute_limits_scaled[i]*factor),"ratio"=>finite_or_null(w.ratio),
+            "strict_threshold"=>positivity.strict_ratio_limit,"strict_passed"=>positivity.strict_threshold_satisfied[i])
+        end for (i,w) in enumerate(positivity.witnesses)]
+    Dict{String,Any}("schema"=>"qcl-negf-positivity-diagnostics-v3","status"=>String(status),"quality"=>String(quality),
+        "sampling"=>"full energy-momentum grid; worst normalized defect per matrix kind",
+        "definition"=>"max(0,-lambda_min(H)-backward_error)/norm; near-zero blocks use absolute backward-error acceptance; H=(X+X')/2",
+        "matrix_definitions"=>Dict("spectral"=>"A","occupied"=>"-i G<","unoccupied"=>"i G>","broadening"=>"i (Sigma> - Sigma<)",
+            "raw_occupied"=>"GR (-i Sigma<) GA before the particle-number constraint","raw_unoccupied"=>"GR (i Sigma>) GA before the particle-number constraint"),"matrices"=>rows)
 end
