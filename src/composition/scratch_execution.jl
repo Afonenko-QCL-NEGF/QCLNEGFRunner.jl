@@ -110,7 +110,7 @@ function stage_result_tree(source::AbstractString, destination::AbstractString;
     native_result::Union{Nothing,AbstractDict}=nothing)
     temporary = nothing
     try
-        _resident_writer_preflight(resource_policy, :stage, storage_context, destination; payload=source)
+        _resource_policy(resource_policy; storage_context)
         native_result===nothing || maximum_metadata_bytes!==nothing || throw(ArgumentError("native staging requires explicit metadata cap"))
         maximum_metadata_bytes===nothing || _p05_cap(maximum_metadata_bytes)
         native_result===nothing || _p05_native_result_profile(native_result,maximum_metadata_bytes)
@@ -136,7 +136,6 @@ function stage_result_tree(source::AbstractString, destination::AbstractString;
         before = _tree_digests(source)
         mkpath(dirname(destination))
         temporary = mktempdir(dirname(destination); prefix=".qcl-negf-stage-", cleanup=false)
-        resident_created!(storage_context, temporary)
         staged = joinpath(temporary, "result")
         mkpath(staged)
         copied_bytes=0
@@ -189,24 +188,11 @@ function stage_result_tree(source::AbstractString, destination::AbstractString;
         end
         # Staged and final directories are on the same filesystem; never merge trees.
         ispath(destination) && throw(ArgumentError("staged output was created concurrently"))
-        if _resident_preserve(resource_policy, storage_context)
-            lock(storage_context.permit.ledger.guard) do
-                _resident_live_ancestry!(storage_context.permit)
-                Base.Filesystem.rename(staged, destination)
-                resident_renamed!(storage_context, staged, destination)
-            end
-        else
-            Base.Filesystem.rename(staged, destination)
-        end
+        Base.Filesystem.rename(staged, destination)
         _sync_artifact_directory(dirname(destination))
-        resident_acknowledged!(storage_context, destination)
         return destination
-    catch failure
-        canonical = _resident_failure!(storage_context, failure)
-        canonical === nothing || canonical === failure || throw(canonical)
-        rethrow()
     finally
-        resource_policy === :standalone && temporary !== nothing && isdir(temporary) && rm(temporary; recursive=true, force=true)
+        temporary !== nothing && isdir(temporary) && rm(temporary; recursive=true, force=true)
     end
 end
 
@@ -239,15 +225,13 @@ function execute_scientific_plan_staged(
     resource_policy::Symbol = :standalone,
     envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
 )
+    _scientific_resource_preflight(resource_policy, envelope)
     frozen_plan_bytes===nothing || frozen_plan_capture===nothing || throw(ArgumentError("choose one frozen plan source"))
     source_graph=_require_source_graph(source_graph)
     recovery_bundle === nothing || throw(ArgumentError("unsupported_format: legacy recovery bundle"))
     parent_checkpoint === nothing || _p05_parent_root_check(parent_checkpoint,output)
-    # Dominates scratch mkdir, workspace create, delivery and success deletion.
-    # Strict must never create scratch and then fall back to standalone inside.
-    _scientific_resource_preflight(resource_policy, envelope)
     selected=[e for e in plan.executions if execution_id===nothing || e.id==execution_id]
-    if capture_context!==nothing && resource_policy===:standalone && !isempty(selected)
+    if capture_context!==nothing && !isempty(selected)
         try
             parent=abspath(output)
             while !isdir(parent); parent=dirname(parent); end
@@ -295,7 +279,6 @@ function execute_scientific_plan_staged(
         stage_result_tree(local_result,destination;byte_budget,reserve_bytes,resource_policy,capture_reserve_bytes,
             maximum_metadata_bytes,native_result=result)
         _capture_locator(capture_context,:staged,destination,1)
-        _resident_writer_preflight(resource_policy, :scratch_success_cleanup)
         rm(workspace; recursive=true)
         return result
     catch

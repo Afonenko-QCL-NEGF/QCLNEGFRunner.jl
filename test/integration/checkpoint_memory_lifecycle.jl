@@ -23,25 +23,23 @@ function write_accounting(
     end
 end
 
-@testset "Memory admission checks every cgroup ancestor without cache credit" begin
+@testset "Ordinary phases retain external controls without a software fit claim" begin
     mktempdir() do root
-        group = mkpath(joinpath(root, "group"))
-        write(joinpath(group, "memory.max"), "1000")
-        write(joinpath(group, "memory.current"), "700")
-        request = (name = :test, iteration = 1, memory_burst_bytes = 200, task_width = 1)
-        @test isnothing(QCLNEGFRunner._native_phase_memory_permit!(root, [group], request))
-        write(joinpath(group, "memory.current"), "900")
-        @test_throws QCLNEGFRunner._NativePhasePressure QCLNEGFRunner._native_phase_memory_permit!(root, [group], request)
-        pressure = YAML.load_file(joinpath(root, "resource-pressure.json"))
-        @test pressure["required_memory_bytes"] == 1100
-        write(joinpath(root, "memory.max"), "800")
-        write(joinpath(root, "memory.current"), "700")
-        write(joinpath(group, "memory.current"), "100")
-        @test_throws QCLNEGFRunner._NativePhasePressure QCLNEGFRunner._native_phase_memory_permit!(root, [group, root], request)
+        group=mkpath(joinpath(root,"group"))
+        write(joinpath(group,"memory.max"),"1000")
+        request=(name=:test,iteration=1,memory_burst_bytes=200,task_width=1)
+        for current in (700,900)
+            write(joinpath(group,"memory.current"),string(current))
+            @test isnothing(QCLNEGFRunner._native_phase_memory_permit!(root,[group],request))
+            admission=QCLNEGFRunner._NATIVE_PHASE_ADMISSIONS[root]
+            @test admission==Dict("memory_admission_mode"=>"external_controls_not_predicted_fit")
+            @test !isfile(joinpath(root,"resource-pressure.json"))
+        end
+        pop!(QCLNEGFRunner._NATIVE_PHASE_ADMISSIONS,root,nothing)
     end
 end
 
-@testset "Real checkpoint, subsequent SCBA, resource pause, exact restart, next checkpoint" begin
+@testset "Real checkpoint, test-owned interruption, exact restart, next checkpoint" begin
     fixture=native_physics_fixture(; energy_nodes = 33)
     options=SolverOptions(
         max_scba = 5,
@@ -88,14 +86,20 @@ end
         )
         proc = mkpath(joinpath(root, "proc", "self"))
         write(joinpath(proc, "cgroup"), "0::/group")
-        let
+        identity=Dict("run_id"=>"run","execution_id"=>"execution","point_id"=>"point",
+            "attempt"=>"1","branch_id"=>"branch","model_sha256"=>"a"^64,"plan_sha256"=>"b"^64)
+        observer=QCLNEGFRunner._start_phase_observer(joinpath(machine,"phases");artifact_root=root,
+            identity,source_session="interruption",policy=QCLNEGFRunner._normal_phase_policy(256),capacity_events=256)
+        primary=nothing
+        try
             production=QCLNEGFRunner.with_production_options(
                 base;
                 phase_request = QCLNEGFRunner._native_phase_request(machine; proc_root = dirname(proc), cgroup_root = root),
                 phase_timing = true,
-                event_sink = event->QCLNEGFRunner._record_native_phase!(machine, event),
+                event_sink = event->QCLNEGFRunner._record_native_phase!(observer, event),
             )
-            function checkpoint_then_pressure(state)
+            interruption=ErrorException("test-owned interruption after iteration 3")
+            function checkpoint_then_interrupt(state)
                 iteration=last(state.history).ν
                 push!(visited, iteration)
                 if iteration==2
@@ -104,23 +108,23 @@ end
                         snapshot(state),
                     )
                 elseif iteration==3
-                    # Non-reclaimable pressure must still stop before allocation.
-                    write_accounting(
-                        group;
-                        current = 99999999,
-                        file = 20000000,
-                        inactive_file = 20000000,
-                        file_dirty = 20000000,
-                    )
+                    # An explicit fixture interruption, not resource admission.
+                    throw(interruption)
                 end
             end
-            @test_throws QCLNEGFRunner._NativePhasePressure solve_scba_production(
-                fixture.problem,
-                fixture.Uᴴ;
-                options,
-                production_options = production,
-                iteration_callback = checkpoint_then_pressure,
-            )
+            caught=try
+                solve_scba_production(
+                    fixture.problem,
+                    fixture.Uᴴ;
+                    options,
+                    production_options = production,
+                    iteration_callback = checkpoint_then_interrupt,
+                )
+                nothing
+            catch error
+                error
+            end
+            @test caught===interruption
             @test 3 in visited
             first_commit=QCLNEGFRunner.verify_point_artifacts(saved[])
             @test first_commit["restart_coordinates"]["last_inner"]==2
@@ -154,8 +158,30 @@ end
             @test resumed.green.Gˡ==uninterrupted.green.Gˡ
             @test [row.ν for row in resumed.history]==collect(1:5)
             @test QCLNEGFRunner.verify_point_artifacts(final_commit[])["restart_coordinates"]["last_inner"]==4
-            rows=YAML.load.(readlines(joinpath(machine, "phases.jsonl")))
-            @test all(row->get(row, "memory_clean_cache_credit_bytes", nothing) in (nothing, 0), rows)
+            @test QCLNEGFRunner._NATIVE_PHASE_ADMISSIONS[machine]==
+                Dict("memory_admission_mode"=>"external_controls_not_predicted_fit")
+            @test !isfile(joinpath(machine,"resource-pressure.json"))
+        catch error
+            primary=error
+            rethrow()
+        finally
+            try
+                QCLNEGFRunner._close_phase_observer!(observer)
+                done=timedwait(()->istaskdone(observer.task),10;pollint=.01)==:ok
+                @test done
+                if done
+                    fetch(observer.task) # task failure is distinct from task completion
+                    @test !observer.failed[] # the worker reports caught IO failure here
+                    lock(QCLNEGFRunner._PHASE_RESIDENCY_LOCK) do
+                        QCLNEGFRunner._phase_reap_locked!()
+                    end
+                end
+            catch secondary
+                primary===nothing && rethrow()
+                @error "Observer teardown failed after primary fixture failure" exception=(secondary,catch_backtrace())
+            finally
+                pop!(QCLNEGFRunner._NATIVE_PHASE_ADMISSIONS,machine,nothing)
+            end
         end
     end
 end

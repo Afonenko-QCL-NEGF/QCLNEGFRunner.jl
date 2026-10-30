@@ -1,6 +1,8 @@
 # Only test adapters live here. Owning production files are included WHOLE below.
-# No package import, VERSION patch, AST rewriting or copied production method body.
-module ResidentDirectEntrySandbox
+# Core is imported only for native5 type signatures; no numerical method is called.
+# No VERSION patch, AST rewriting or copied production method body.
+module StandaloneWriterSandbox
+import QCLNEGF
 using SHA
 const SOURCE_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const EVENTS = Any[]
@@ -80,6 +82,10 @@ struct OuterIteration end
 struct NEGFProblem end
 struct ScientificPlan end
 struct ExecutionEnvelope end
+struct VerifiedExactCheckpoint end
+struct FinalPointRequest end
+struct PhaseObservationPolicy end
+struct _P05PlanCapture end
 const _CHECKPOINT_SCHEMA_VERSION = 4
 const _RESULT_CONTRACT_SET = "handwritten-fixture-only"
 const _SERIALIZATION_SLAB_BYTES = 1048576
@@ -94,8 +100,8 @@ end
 unit_literal_guard_control() = u"A/m^2"
 
 # TEST ONLY lower-time bindings for the whole point_artifacts.jl include.
-# H5L_info_t below is NOT an ABI representation. No HDF5 library is imported
-# or loaded. Any visit that could reach its ccall must first take liblock,
+# H5L_info_t below is NOT an ABI representation. This sandbox never calls
+# native HDF5. Any visit that could reach its ccall must first take liblock,
 # whose method throws. The impossible library path is a second fail-closed
 # barrier even if a compiler tried to resolve that dead native branch early.
 module HDF5
@@ -125,21 +131,20 @@ module QCLExecutionPolicy
 _grant_integer(x, label; minimum=0) =
     x isa Integer && !(x isa Bool) && x >= minimum ? Int(x) : throw(ArgumentError(label))
 end
-include(joinpath(SOURCE_ROOT, "src/infrastructure/resources/resident_storage.jl"))
 include(joinpath(SOURCE_ROOT, "src/infrastructure/persistence/atomic_files.jl"))
 include(joinpath(SOURCE_ROOT, "src/infrastructure/telemetry/progress.jl"))
 include(joinpath(SOURCE_ROOT, "src/infrastructure/persistence/light_results.jl"))
 include(joinpath(SOURCE_ROOT, "src/application/contracts.jl"))
-include(joinpath(SOURCE_ROOT, "src/infrastructure/persistence/point_artifacts.jl"))
 include(joinpath(SOURCE_ROOT, "src/infrastructure/persistence/scientific_history.jl"))
+include(joinpath(SOURCE_ROOT, "src/infrastructure/persistence/point_artifacts.jl"))
 include(joinpath(SOURCE_ROOT, "src/composition/scratch_execution.jl"))
 
 # TEST ONLY availability INPUT for paths in the bound tiny fixture tree.
 # This finite literal exceeds the real R1 forecast floor; it is NOT measured
 # filesystem capacity or native admission. The production forecast/predicates
-# remain unchanged, and Root's actual tmpfs hard cap remains 16MiB.
+# remain unchanged. This fixture makes no native capacity or RSS claim.
 function _storage_available(path::String)
-    scope = get(ENV, "SCI08_CASE_ROOT", "")
+    scope = get(ENV, "QCL_WRITER_FAULT_ROOT", "")
     isempty(scope) && error("TEST-ONLY availability requires bound fixture root")
     isabspath(scope) || error("TEST-ONLY availability requires absolute fixture root")
     root = normpath(scope)
@@ -169,56 +174,90 @@ function h5open(f::Function, path, mode)
     end
 end
 
-mutable struct Authority <: AbstractResidentAuthority
-    events::Vector{Any}
-    snapshot::StorageSnapshot
-    writer_hook::Function
-    identity_hook::Function
-    settle_hook::Function
-end
-resident_snapshot(a::Authority, binding) = a.snapshot
-resident_monotonic_ns(::Authority) = UInt64(15)
-validate_resident_binding!(::Authority, snapshot, descriptor) = true
-function reserve_growth!(a::Authority, revision, descriptor)
-    push!(a.events, (:reserve, revision, descriptor.digest))
-    ResidentLeaseProof("literal-lease", revision, descriptor.digest)
-end
-function validate_resident_writer!(a::Authority, descriptor, writer, path, payload)
-    push!(a.events, (:validate, writer, path))
-    a.writer_hook(writer, path, payload)
-end
-resident_created_identity(a::Authority, domain, path) = a.identity_hook(path)
-function materialize_growth!(a::Authority, lease, seq, delta)
-    push!(a.events, (:materialize, seq, delta))
-end
-function commit_growth!(a::Authority, lease, evidence)
-    push!(a.events, (:commit, evidence)); a.settle_hook(:commit)
-end
-function release_unmaterialized!(a::Authority, lease, evidence)
-    push!(a.events, (:release, evidence)); a.settle_hook(:release)
-end
 
-function fixture(parent, writer; slots=(), logical=8192)
-    id = ResidentIdentity("campaign", "plan", "run", "attempt", "point", "source", "admission", "operation", 1)
-    domain = StorageDomain("fixture-fs", "fixture-ns", "fixture-boot", "fixture-owner", abspath(parent), "binding")
-    children = Tuple(StorageOperationInventory(id, domain, name, "slot-$(i)", "payload", "stop", 1024,1024,1,()) for (i,name) in enumerate(slots))
-    descriptor = StorageOperationInventory(id, domain, writer, "literal-root", "payload", "stop", logical,logical,16,children)
-    snapshot = StorageSnapshot(id, domain, "revision",10,20,
-        (64,64,0),(0,0,0),(0,0,0),(0,0,0),(65536,65536,100),(32768,32768,100),"inventory","epoch")
-    a = Authority(Any[], snapshot, (writer,path,payload)->true, path->"fixture-object:"*path, kind->nothing)
-    return a, reserve_storage_operation(a, descriptor)
-end
 solution() = NEGFSolution(Dict{Symbol,Any}(:restart_contract=>:fixture), (restart_contract=:fixture,), :completed,
     (numerical=(N_E=1,N_k=1,N_b=1), kernels=(K=Dict{Symbol,Any}(),Fᴸᴼ=UInt8[])))
-function recorder(parent)
-    ScientificHistoryRecorder(parent, Dict{String,Any}(), Ref(1), Ref(0),
-        [(1,1,SCBAIteration())], Tuple{Int,OuterIteration}[], 0, "fixture-problem",
-        Dict{String,Any}[], 0,0,UInt64(1),UInt64(0),()->UInt64(15),nothing)
-end
+recorder(parent) = _LegacyScientificHistoryRecorder(parent,Dict{String,Any}(),Ref(1),Ref(0),
+    [(1,1,SCBAIteration())],Tuple{Int,OuterIteration}[],0,"fixture-problem",Dict{String,Any}[],
+    0,0,UInt64(1),UInt64(0),()->UInt64(15),nothing)
 function reset_hooks!()
-    FS_HOOK[] = (kind,args...)->nothing
-    PAYLOAD_HOOK[] = (path,stream)->nothing
-    JSON_FAULT_HOOK[] = ()->nothing
-    empty!(EVENTS); empty!(STREAM_PATHS)
+    FS_HOOK[]=(kind,args...)->nothing
+    PAYLOAD_HOOK[]=(path,stream)->nothing
+    JSON_FAULT_HOOK[]=()->nothing
+    empty!(EVENTS);empty!(STREAM_PATHS)
 end
-end # module
+end
+
+module StandaloneWriterFailureTests
+using Test,SHA
+using ..StandaloneWriterSandbox
+const R=StandaloneWriterSandbox
+failure(f)=try f();nothing catch error;error end
+function protected(root)
+    Dict(name=>bytes2hex(sha256(read(joinpath(root,name)))) for name in ("current","previous","final"))
+end
+
+# Extracted ordinary counterparts of the retired strict harness. Faults replace
+# only the serializer/FS leaf; every catch/finally/publication body is the whole
+# owning production file. Literal tiny payloads never execute scientific code.
+@testset "Fault harness fails closed before numerical or native HDF5 branches" begin
+    @test_throws ErrorException R.unit_literal_guard_control()
+    @test_throws ErrorException R.hdf5_guard_control()
+end
+@testset "Ordinary partial writers preserve primary and prior publications" begin
+    for entry in (:point,:operator,:stage,:history,:text)
+        mktempdir() do root
+            withenv("QCL_WRITER_FAULT_ROOT"=>root) do
+                R.reset_hooks!()
+                for name in ("current","previous","final");write(joinpath(root,name),"protected "*name);end
+                prior=protected(root);primary=ErrorException("literal partial $(entry)")
+                target=joinpath(root,"output");partial=Ref{Union{Nothing,String}}(nothing)
+                literal="literal incomplete $(entry) bytes"
+                function witness(path,stream)
+                    Base.seekstart(stream);Base.truncate(stream,0);Base.write(stream,literal);Base.flush(stream)
+                    partial[]=path
+                    @test read(path,String)==literal
+                    throw(primary)
+                end
+                if entry in (:point,:history)
+                    R.PAYLOAD_HOOK[]=witness
+                elseif entry===:operator
+                    R.JSON_FAULT_HOOK[]=()->begin
+                        stream,path=only([(io,p) for (io,p) in R.STREAM_PATHS if isopen(io)])
+                        witness(path,stream)
+                    end
+                elseif entry===:stage
+                    R.FS_HOOK[]=(kind,args...)->begin
+                        if kind===:write_after
+                            stream=only([io for (io,p) in R.STREAM_PATHS if p==args[1] && isopen(io)])
+                            witness(args[1],stream)
+                        end
+                    end
+                end
+                source=mkpath(joinpath(root,"source"));write(joinpath(source,"raw"),"retained literal source")
+                error=failure() do
+                    if entry===:point
+                        R.commit_point_artifacts(target,R.solution();storage_class=:archive,analysis=false,reserve_bytes=0)
+                    elseif entry===:operator
+                        R.commit_operator_artifacts(target,R.FaultJSON(primary);identity=Dict(),operation="fixture",accepted=false)
+                    elseif entry===:stage
+                        R.stage_result_tree(source,target;byte_budget=8192,reserve_bytes=0)
+                    elseif entry===:history
+                        mkdir(target);R.flush_scientific_history!(R.recorder(target))
+                    else
+                        R._observability_atomic_text(joinpath(target,"status.json"),io->witness(R.STREAM_PATHS[io],io))
+                    end
+                end
+                R.reset_hooks!()
+                @test error===primary
+                @test protected(root)==prior
+                @test partial[]!==nothing
+                @test partial[]===nothing || !ispath(partial[])
+                @test read(joinpath(source,"raw"),String)=="retained literal source"
+                @test !isfile(joinpath(target,"current.json"))
+                @test !isdir(joinpath(target,"artifacts","generation-000001"))
+            end
+        end
+    end
+end
+end

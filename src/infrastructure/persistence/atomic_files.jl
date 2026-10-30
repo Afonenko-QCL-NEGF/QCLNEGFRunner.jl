@@ -1,3 +1,15 @@
+# Argument compatibility only: removed policies/contexts never enter an IO path.
+# This file is included independently by Runner and QCLApplicationRuntime.
+function _resource_policy(policy::Symbol; storage_context=nothing)
+    policy === :standalone || throw(ArgumentError(
+        policy === :campaign_strict ?
+        "unsupported_resource_policy: campaign_strict has been removed" :
+        "unsupported_resource_policy: $(repr(policy))"))
+    storage_context === nothing || throw(ArgumentError(
+        "unsupported_storage_context: resident authority has been removed"))
+    return policy
+end
+
 """
     _atomic_replace_file(source, destination)
 
@@ -7,48 +19,10 @@ valid commit primitive for status, result, progress, or checkpoint files.
 """
 function _atomic_replace_file(source::AbstractString, destination::AbstractString;
     resource_policy::Symbol = :standalone, storage_context=nothing)
-    if resource_policy === :campaign_strict && storage_context isa StorageWriteContext
-        permit = storage_context.permit
-        return lock(permit.ledger.guard) do
-            owned_inflight = false
-            try
-                _resident_live_ancestry!(permit)
-                if permit.ledger.inflight != 0
-                    permit.ledger.interference = Base.checked_add(permit.ledger.interference, 1)
-                    throw(ResidentGrowthRefusal(:atomic_replace, :needs_guard, :unknown))
-                end
-                storage_context.mutation_started || require_growth!(storage_context,
-                    permit.descriptor.writer, destination; payload=source)
-                _resident_live_ancestry!(permit)
-                interference = permit.ledger.interference
-                permit.ledger.inflight += 1
-                owned_inflight = true
-                validate_resident_writer!(permit.authority, permit.descriptor,
-                    :atomic_replace, abspath(destination), source) === true ||
-                    throw(ResidentGrowthRefusal(:atomic_replace, :needs_guard, :unknown))
-                # Callback success cannot override parent invalidation or a
-                # caught reentrant close attempt. Keep the same lock/inflight
-                # interval through the actual chmod and native rename.
-                _resident_live_ancestry!(permit)
-                permit.ledger.interference == interference ||
-                    throw(ResidentGrowthRefusal(:atomic_replace, :needs_guard, :unknown))
-                return _atomic_replace_file_native(source, destination)
-            catch primary
-                canonical = _resident_failure!(storage_context, primary)
-                canonical === nothing || canonical === primary || throw(canonical)
-                rethrow()
-            finally
-                owned_inflight && (permit.ledger.inflight -= 1)
-            end
-        end
-    else
-        _resident_writer_preflight(resource_policy, :atomic_replace)
-    end
+    _resource_policy(resource_policy; storage_context)
     return _atomic_replace_file_native(source, destination)
 end
 
-# Existing same-directory chmod/native-rename sequence, entered by strict only
-# while its live ancestry and inflight scope are held by the wrapper above.
 function _atomic_replace_file_native(source::AbstractString, destination::AbstractString)
     source_absolute = abspath(source)
     destination_absolute = abspath(destination)
