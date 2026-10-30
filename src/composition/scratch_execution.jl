@@ -13,9 +13,11 @@ function _native_origin_inputs(plan_path,graph_path,native_path,output,calcjob_u
     _p04_require(isdir(job) && !islink(job) && realpath(job)==job,"native original workdir is not canonical")
     _p04_require(isabspath(output) && abspath(output)==output && output!=job &&
         !startswith(output,job*"/") && !startswith(job,output*"/"),"native output aliases original workdir")
-    cap=65536 # Same original-file ceiling as the owning AiiDA actor; three files.
-    _p04_require(length(frozen_plan_bytes)<=cap,"native original plan exceeds byte limit")
-    function original(path,name)
+    # The original plan follows the existing capture plan allowance. The two
+    # other original roles retain their smaller metadata ceiling.
+    plan_cap=1024^2
+    _p04_require(length(frozen_plan_bytes)<=plan_cap,"native original plan exceeds byte limit")
+    function original(path,name,cap)
         actual=abspath(path)
         _p04_require(actual==joinpath(job,name) && isfile(actual) && !islink(actual),"native original input path differs")
         file=Base.Filesystem.open(actual,Base.JL_O_RDONLY|Base.JL_O_NOFOLLOW|Base.JL_O_NONBLOCK)
@@ -31,9 +33,9 @@ function _native_origin_inputs(plan_path,graph_path,native_path,output,calcjob_u
             close(file)
         end
     end
-    plan_raw=original(plan_path,"plan.json")
+    plan_raw=original(plan_path,"plan.json",plan_cap)
     _p04_require(plan_raw==frozen_plan_bytes,"native original frozen plan bytes differ")
-    graph_raw=original(graph_path,"source-graph.json");native_raw=original(native_path,"native-execution.json")
+    graph_raw=original(graph_path,"source-graph.json",65536);native_raw=original(native_path,"native-execution.json",65536)
     plan=_p04_parse(String(copy(plan_raw)));graph=_p04_parse(String(copy(graph_raw)));native=_p04_parse(String(native_raw))
     _p04_require(plan isa AbstractDict && get(plan,"executions",nothing) isa AbstractVector &&
         count(e->e isa AbstractDict && get(e,"id",nothing)==execution_id,plan["executions"])==1,
