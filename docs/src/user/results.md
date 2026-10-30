@@ -32,6 +32,28 @@ symlinks and changed files. A directory name or unauthenticated HDF attribute do
 identity. Identity includes run, execution, point, attempt, branch, the actual model SHA-256 and
 frozen-plan-file SHA-256. Source epoch distinguishes invocations inside that scope.
 
+For a new AiiDA native invocation, `run-plan` accepts the paired options
+`--native-execution native-execution.json --native-calcjob-uuid UUID`, together with exactly
+`--execution-id ID --source-graph source-graph.json`. This path checks bounded original plan,
+graph and native input bytes, whole input references, execution and output suffix independently
+of optional capture. Native scratch, explicit scientific attempt and recovery options are not
+enabled by these options. Each original input is limited to 64 KiB. The private description
+carries only the CalcJob UUID and original native-execution input UUID to a newly created recorder.
+
+Its existing `invocation.source_epoch` is
+`c1-<CalcJob lower hex32>-<native input lower hex32>-<UInt64 time_ns decimal>`: at most 89 bytes,
+or 116 with the existing `-state-<UInt64 generation>` suffix, within the unchanged Id128 schema.
+The nonce is independent of scientific and transport attempts. Ordinary standalone invocations
+keep their `epoch-<time_ns>` convention. Inherited StateRefs, parent epochs, raw files and hashes
+are never relabelled or rewritten; an old epoch does not acquire an AiiDA creator by inference.
+
+These CLI values and input declarations are assertions. Actual original INPUT/CALL/CREATE and
+submit-script joins, the protected literal launch/job chain, qualified immutable producer and
+native writer/no-reuse/retention/RO lifetime remain AiiDA, Platform and Root obligations.
+The epoch alone is not creator or scientific acceptance evidence. Selected-source and technical
+capture consumers require their separate owning integration; these options do not activate
+the existing stationary/configured execution fences or enable recovery.
+
 | Locator                         | Meaning                                                               | Capability                                                                                |
 | ------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `ATTEMPT/current.json`          | The selected live manifest and its current history frontier.          | History access; exact recovery only when this manifest has a matching nonnull checkpoint. |

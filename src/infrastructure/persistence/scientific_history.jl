@@ -17,6 +17,28 @@ mutable struct _LegacyScientificHistoryRecorder
     problem::Union{Nothing,NEGFProblem}
 end
 
+# These UUIDs are original-input assertions until the owning AiiDA/Platform
+# launch and writer domain are qualified. No constructor grants provenance.
+_native_origin_uuid(value)=value isa String &&
+    occursin(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z",value) &&
+    value!="00000000-0000-0000-0000-000000000000"
+function _native_origin_ids(origin)
+    origin===nothing && return nothing
+    _p04_require(origin isa NamedTuple && keys(origin)==(:calcjob_uuid,:native_execution_uuid) &&
+        _native_origin_uuid(origin.calcjob_uuid) && _native_origin_uuid(origin.native_execution_uuid),
+        "native origin requires exactly two canonical original UUIDs")
+    (calcjob_uuid=origin.calcjob_uuid,native_execution_uuid=origin.native_execution_uuid)
+end
+function _native_source_epoch(origin=nothing;nonce::UInt64=time_ns())
+    ids=_native_origin_ids(origin)
+    ids===nothing && return "epoch-"*string(nonce)
+    # At most 89 bytes; adding '-state-' and a UInt64 generation is at most
+    # 116 bytes, within the existing Id128 contract. Nonce is not an attempt.
+    epoch="c1-"*replace(ids.calcjob_uuid,"-"=>"")*"-"*
+        replace(ids.native_execution_uuid,"-"=>"")*"-"*string(nonce)
+    _p04_id(epoch);epoch
+end
+
 """One native5 invocation. Scientific ordinals are independent of Core delivery sequence."""
 mutable struct ScientificHistoryRecorder
     directory::String
