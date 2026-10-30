@@ -98,5 +98,18 @@
   "history_record": "qcl-negf.scientific-record.v1",
   "checkpoint": "qcl-negf.checkpoint-declaration.v1",
   "cursor": "qcl-negf.result-cursor.v1",
-  "core_layout_resource": "core_layout.json"
+  "core_layout_resource": "core_layout.json",
+  "telemetry_envelope_read_versions": [
+    1,
+    2
+  ],
+  "telemetry_catalog_read_versions": [
+    2,
+    3
+  ],
+  "performance_index_read_versions": [
+    2,
+    3
+  ],
+  "telemetry_retained_write_version": 2
 }
