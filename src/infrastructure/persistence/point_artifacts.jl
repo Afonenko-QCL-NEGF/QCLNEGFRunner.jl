@@ -325,6 +325,176 @@ function _p05_immutable_input!(r,reference,bytes,hook)
     _p05_immutable_bytes(r.root,reference);deepcopy(reference)
 end
 
+# Q1 is an operational publication, not a producer/close/scientific certificate.
+# Reserve every nested public reader's complete allowance from the same ledger.
+function _p07_port_allowance!(budget, ports)
+    allowance=budget[]÷ports[]
+    _p05_cap(allowance);_p05_charge!(budget,allowance);ports[]-=1
+    allowance
+end
+
+function _p07_root(root::AbstractString)
+    _p04_require(isabspath(root) && root==abspath(root) && isdir(root) &&
+        !islink(root) && realpath(root)==root,"native selection root must be canonical and non-symlink")
+    String(root)
+end
+
+function _p07_control_bytes(root,path,expected,budget)
+    _p07_root(root);actual=_p04_path(root,path)
+    _p04_require(isfile(actual) && !islink(actual),"selected control is not a regular file")
+    _p05_charge!(budget,_p05_mul(4,length(expected)))
+    _p04_read_observer[](:hash,actual,length(expected))
+    file=Base.Filesystem.open(actual,Base.JL_O_RDONLY|Base.JL_O_NOFOLLOW|Base.JL_O_NONBLOCK)
+    primary=nothing
+    try
+        before=stat(file)
+        _p04_require(isfile(before) && before.nlink==1 && before.size==length(expected),"selected control identity differs")
+        raw=read(file,length(expected)+1)
+        _p04_require(raw==expected && _p04_stat(before)==_p04_stat(stat(file)) &&
+            !islink(actual) && _p04_stat(before)==_p04_stat(stat(actual)),"selected control bytes changed")
+    catch error
+        primary=error
+        rethrow()
+    finally
+        try
+            close(file)
+        catch secondary
+            primary===nothing ? throw(secondary) : throw(CompositeException([primary,secondary]))
+        end
+    end
+    _p07_root(root)
+    nothing
+end
+
+function _p07_publish_control!(root,name,bytes,budget)
+    destination=_p04_path(root,name)
+    if !ispath(destination) && !islink(destination)
+        temporary,io=mktemp(root;cleanup=false)
+        # A failed write/sync/link/readback deliberately retains its partial bytes.
+        primary=nothing
+        try
+            write(io,bytes)==length(bytes) || error("short native control write")
+        catch error
+            primary=error
+            rethrow()
+        finally
+            try
+                close(io)
+            catch secondary
+                primary===nothing ? throw(secondary) : throw(CompositeException([primary,secondary]))
+            end
+        end
+        chmod(temporary,0o640);_sync_artifact_file(temporary)
+        try
+            hardlink(temporary,destination) # exclusive link, never replace a competing name
+        catch error
+            error isa Base.IOError && error.code==Base.UV_EEXIST || rethrow()
+            ispath(destination) && !islink(destination) || rethrow()
+            _p07_control_bytes(root,name,bytes,budget) # identical concurrent/retried publication only
+        end
+        rm(temporary);_sync_artifact_directory(root)
+    end
+    _p07_control_bytes(root,name,bytes,budget)
+    _sync_artifact_file(destination);_sync_artifact_directory(root)
+    _p07_control_bytes(root,name,bytes,budget)
+    Dict{String,Any}("path"=>name,"bytes"=>length(bytes),"sha256"=>bytes2hex(sha256(bytes)))
+end
+
+"""Publish exact original v4 result bytes and a bounded explicit input selection.
+
+`selected_inputs` contains only artifact_root/full selected_state/plan/model refs.
+Every nonabsent full source in points then attempt_history must occur exactly once;
+input order never selects a newer state. Public native verifiers check actual bytes.
+Returns only operational `(result,selection)` path/Int-bytecount/SHA claims after
+sync and readback. Errors retain partial publications; no pair atomicity, native
+writer closure, provenance actor or scientific acceptance is asserted.
+"""
+function publish_native_selection!(artifact_root::AbstractString,result::AbstractDict;
+    selected_inputs::AbstractVector,maximum_metadata_bytes::Int)::NamedTuple
+    budget=Ref(_p05_cap(maximum_metadata_bytes))
+    _p05_charge!(budget,_p05_metadata_cost((artifact_root,result,selected_inputs),budget[];portable=true))
+    root=_p07_root(artifact_root);root_stamp=(stat(root).device,stat(root).inode)
+    # Capture the original public encoding once. Verification and publication use
+    # this detached byte selection even if a caller mutates its old containers.
+    result_limit=min(32*1024^2,budget[]÷64);_p05_cap(result_limit)
+    _p05_charge!(budget,_p05_mul(16,result_limit))
+    output=_P05JSONBuffer(IOBuffer(),result_limit);write_scientific_result(output,result)
+    result_bytes=take!(output.buffer)
+    selected_inputs=deepcopy(selected_inputs)
+    original=_p05_parse(String(copy(result_bytes)),budget)
+    ports=Ref(Base.checked_add(3,Base.checked_mul(4,length(selected_inputs))))
+    checked=_p05_native_result_profile(original,_p07_port_allowance!(budget,ports))
+    _p04_require(checked.wire["status"] in ("completed","completed_with_warnings","failed","cancelled","paused"),"native selection requires a terminal result")
+    for row in selected_inputs
+        _p04_keys(row,("artifact_root","selected_state","plan","model"))
+        _p05_outward_path(row["artifact_root"];root=true)
+    end
+    ordered=Any[];sources=Any[]
+    _p05_charge!(budget,_p05_metadata_cost((checked.wire,selected_inputs),budget[];portable=true))
+    for point in Iterators.flatten((checked.wire["points"],get(checked.wire,"attempt_history",Any[])))
+        source=point["data"]["native_source"];source["kind"]=="absent" && continue
+        state=source["selected_state"];identity=state["identity"]
+        _p04_require(identity["point_id"]==point["id"] && identity["execution_id"]==point["execution_id"],"selected native row identity differs")
+        _p04_require(source["relation"]=="current_point_attempt" ? identity["attempt"]==string(point["attempt"]) :
+            parse(UInt64,identity["attempt"])<point["attempt"],"native source and outward point attempts differ")
+        same(x)=x["artifact_root"]==source["artifact_root"] && x["selected_state"]==state
+        matches=filter(same,selected_inputs)
+        _p04_require(length(matches)==1,"missing or duplicate explicit selected input pair")
+        index=findfirst(same,ordered)
+        if index===nothing
+            push!(ordered,deepcopy(only(matches)));push!(sources,source)
+        elseif source["kind"]=="final"
+            previous=sources[index]
+            _p04_require(previous["kind"]!="final" || (previous["diagnostics"]==source["diagnostics"] &&
+                previous["observations"]==source["observations"]),"same selected state has different final refs")
+            sources[index]=source
+        end
+    end
+    _p04_require(length(ordered)==length(selected_inputs),"extra selected input pair")
+    for (row,source) in zip(ordered,sources)
+        actual=row["artifact_root"]=="." ? root : _p04_path(root,row["artifact_root"])
+        _p07_root(actual)
+        handle=open_exact_checkpoint(actual,row["selected_state"];maximum_metadata_bytes=_p07_port_allowance!(budget,ports))
+        verify_checkpoint_inputs(handle;plan_ref=row["plan"],model_ref=row["model"],maximum_metadata_bytes=_p07_port_allowance!(budget,ports))
+        if source["kind"]=="final"
+            manifest=_p05_parse(handle.manifest_json,budget);parent_ref=manifest["lineage"]["parent_state"]
+            parent=parent_ref===nothing ? nothing : open_exact_checkpoint(actual,parent_ref;
+                maximum_metadata_bytes=_p07_port_allowance!(budget,ports))
+            verify_final_artifacts(handle;diagnostics_ref=source["diagnostics"],observations_ref=source["observations"],
+                maximum_metadata_bytes=_p07_port_allowance!(budget,ports),parent)
+            # Public final verification binds O.request to the selected original pair.
+            declaration=_p05_parse(handle.declaration_json,budget)
+            observation=_p05_read_analysis(actual,source["observations"],declaration["identity"],declaration["invocation"],"final_observations",budget)
+            _p04_require(observation["request"]["plan"]==row["plan"] && observation["request"]["model"]==row["model"],"final selected input pair differs from original request")
+        end
+    end
+    # Reserve raw buffers/readback/hash/serialization before allocation, not per file reset.
+    selection=Dict{String,Any}("version"=>1,"selected_inputs"=>ordered)
+    limit=min(256*1024,budget[]÷64);_p05_cap(limit);_p05_charge!(budget,_p05_mul(16,limit))
+    selection_bytes=Vector{UInt8}(codeunits(_p05_json(selection,limit)))
+    _p04_require((stat(root).device,stat(root).inode)==root_stamp,"native publication root changed")
+    result_claim=_p07_publish_control!(root,"series_result.json",result_bytes,budget)
+    selection_claim=_p07_publish_control!(root,"native-selection.json",selection_bytes,budget)
+    _p07_control_bytes(root,"series_result.json",result_bytes,budget)
+    _p04_require((stat(root).device,stat(root).inode)==root_stamp,"native publication root changed")
+    (result=result_claim,selection=selection_claim)
+end
+
+# Called while the actual request and verified handle are still owned by this point.
+# Keep only detached bounded refs across points, never a numerical state/problem.
+function _p07_retain_input_pair!(rows,artifact_root,handle::VerifiedExactCheckpoint,
+    request::FinalPointRequest,maximum_metadata_bytes::Int)
+    budget=Ref(_p05_cap(maximum_metadata_bytes))
+    _p05_charge!(budget,_p05_mul(8,ncodeunits(handle.reference_json)))
+    state=checkpoint_reference(handle)
+    _p05_charge!(budget,_p05_metadata_cost((rows,artifact_root,state,request.plan_ref,request.model_ref),budget[];portable=true))
+    pair=verify_checkpoint_inputs(handle;plan_ref=request.plan_ref,model_ref=request.model_ref,maximum_metadata_bytes=budget[])
+    row=Dict{String,Any}("artifact_root"=>artifact_root,"selected_state"=>state,"plan"=>pair.plan,"model"=>pair.model)
+    old=findfirst(x->x["artifact_root"]==artifact_root && x["selected_state"]==state,rows)
+    old===nothing ? push!(rows,row) : _p04_require(rows[old]==row,"selected state input pair changed")
+    nothing
+end
+
 """Publish original validated plan bytes and the actual caller-supplied P03 model preimage.
 
 No resolver, axes mutation, solve or pointer publication occurs here. The caller owns
