@@ -1,9 +1,84 @@
 const _CAPTURE_RESERVE_BYTES = 104 * 1024^2 # 32 performance +64 scalar +8 auxiliary.
 
+# Mandatory native scientific origin is independent of optional capture. These
+# bounded original bytes are assertions; trusted jobs_root/Code/caller and the
+# actual creator remain owning AiiDA/Platform/Root joins.
+function _native_origin_inputs(plan_path,graph_path,native_path,output,calcjob_uuid,execution_id;
+    frozen_plan_bytes::Vector{UInt8})
+    _p04_require(_native_origin_uuid(calcjob_uuid),"invalid native CalcJob UUID")
+    _p04_id(execution_id)
+    _p04_require(all(p->p isa AbstractString && !isempty(p) && normpath(p)==p && !occursin('\0',p),
+        (plan_path,graph_path,native_path,output)),"noncanonical native input/output path")
+    job=dirname(abspath(plan_path))
+    _p04_require(isdir(job) && !islink(job) && realpath(job)==job,"native original workdir is not canonical")
+    _p04_require(isabspath(output) && abspath(output)==output && output!=job &&
+        !startswith(output,job*"/") && !startswith(job,output*"/"),"native output aliases original workdir")
+    cap=65536 # Same original-file ceiling as the owning AiiDA actor; three files.
+    _p04_require(length(frozen_plan_bytes)<=cap,"native original plan exceeds byte limit")
+    function original(path,name)
+        actual=abspath(path)
+        _p04_require(actual==joinpath(job,name) && isfile(actual) && !islink(actual),"native original input path differs")
+        file=Base.Filesystem.open(actual,Base.JL_O_RDONLY|Base.JL_O_NOFOLLOW|Base.JL_O_NONBLOCK)
+        try
+            before=stat(file)
+            _p04_require(isfile(before) && before.nlink==1 && before.size<=cap,"native original input exceeds bound or is aliased")
+            raw=read(file,cap+1)
+            _p04_require(length(raw)<=cap && length(raw)==before.size &&
+                _p04_stat(before)==_p04_stat(stat(file)) && !islink(actual) &&
+                _p04_stat(before)==_p04_stat(stat(actual)) && realpath(job)==job,"native original input changed")
+            raw
+        finally
+            close(file)
+        end
+    end
+    plan_raw=original(plan_path,"plan.json")
+    _p04_require(plan_raw==frozen_plan_bytes,"native original frozen plan bytes differ")
+    graph_raw=original(graph_path,"source-graph.json");native_raw=original(native_path,"native-execution.json")
+    plan=_p04_parse(String(copy(plan_raw)));graph=_p04_parse(String(copy(graph_raw)));native=_p04_parse(String(native_raw))
+    _p04_require(plan isa AbstractDict && get(plan,"executions",nothing) isa AbstractVector &&
+        count(e->e isa AbstractDict && get(e,"id",nothing)==execution_id,plan["executions"])==1,
+        "native original selected execution differs")
+    _require_source_graph(graph)
+    paths=[row["path"] for row in graph["components"]]
+    _p04_require(length(paths)==length(unique(paths)),"duplicate native original source component")
+    _p04_require(native isa AbstractDict,"native execution must be an object")
+    _p04_keys(native,("schema","request_id","execution_id","storage","source_graph","code","input_plan","access_receipt_ref"))
+    opaque(v)=v isa String && 1<=length(v)<=256 && !startswith(v,"/") && all(c->c>=' ' && c!='\x7f',v)
+    _p04_require(native["schema"]=="qcl-negf.aiida-native-execution.v1" &&
+        _native_origin_uuid(native["request_id"]) && native["execution_id"]==execution_id &&
+        opaque(native["access_receipt_ref"]),"native original execution declaration differs")
+    for (key,raw) in (("input_plan",plan_raw),("source_graph",graph_raw))
+        claim=native[key];_p04_require(claim isa AbstractDict,"native original file claim must be an object")
+        _p04_keys(claim,("node_uuid","bytes","sha256"))
+        _p04_require(_native_origin_uuid(claim["node_uuid"]) && claim["bytes"]==string(length(raw)) &&
+            claim["sha256"]==bytes2hex(sha256(raw)),"native original whole file claim differs")
+    end
+    storage=native["storage"];code=native["code"]
+    _p04_require(storage isa AbstractDict && code isa AbstractDict,"native storage/code must be objects")
+    _p04_keys(storage,("namespace_id","storage_identity","relative_execution_root","computer_uuid",
+        "execution_binding_uuid","retention_policy_id","retention_owner_id","hold_ref","access_binding_ref"))
+    _p04_id(storage["namespace_id"])
+    _p04_require(_native_origin_uuid(storage["computer_uuid"]) && _native_origin_uuid(storage["execution_binding_uuid"]) &&
+        all(k->opaque(storage[k]),("storage_identity","retention_policy_id","retention_owner_id","hold_ref","access_binding_ref")),
+        "native original storage declaration differs")
+    relative=storage["relative_execution_root"]
+    _p04_require(relative isa String && !isempty(relative) && !isabspath(relative) &&
+        !occursin('\\',relative) && !occursin('\0',relative) &&
+        all(p->!(p in ("",".","..")),split(relative,'/')) && endswith(output,"/"*relative),
+        "native original output suffix differs")
+    _p04_keys(code,("code_uuid","computer_uuid","solver_executable","release_id","build_receipt_ref"))
+    _p04_id(code["release_id"])
+    _p04_require(_native_origin_uuid(code["code_uuid"]) && code["computer_uuid"]==storage["computer_uuid"] &&
+        opaque(code["build_receipt_ref"]) && code["solver_executable"] isa String &&
+        occursin(r"^/nix/store/[A-Za-z0-9][A-Za-z0-9+._?-]*/bin/qcl-negf\z",code["solver_executable"]),
+        "native original Code declaration differs")
+    _native_origin_ids((calcjob_uuid=String(calcjob_uuid),native_execution_uuid=String(storage["execution_binding_uuid"])))
+end
+
 function _capture_context(plan, output, execution_id, attempt;
     spec_path=get(ENV,"QCL_NEGF_CAPTURE_SPEC",""),scratch_root=nothing,
     frozen_plan_bytes=nothing,source_plan_path=nothing,
-    native_execution_path=nothing,source_graph_path=nothing)
+    native_execution_path=nothing,source_graph_path=nothing,native_origin=nothing)
     isempty(spec_path) && return nothing
     try
         path=abspath(spec_path); job=dirname(path)
@@ -12,6 +87,7 @@ function _capture_context(plan, output, execution_id, attempt;
         if native_mode
             # Transport admission does not set the solver's native point counter.
             attempt===nothing && scratch_root===nothing && isabspath(output) && abspath(output)==output || return nothing
+            native_origin===nothing || _native_origin_ids(native_origin)!==nothing || return nothing
         else
             abspath(output)==joinpath(job,"result") || return nothing
         end
@@ -22,6 +98,7 @@ function _capture_context(plan, output, execution_id, attempt;
         selection=spec["selection"]
         Set(keys(selection))==Set(["calcjob_uuid","execution_id","attempt","plan_fingerprint"]) || return nothing
         selection["calcjob_uuid"] isa String && occursin(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",selection["calcjob_uuid"]) || return nothing
+        native_origin===nothing || selection["calcjob_uuid"]==native_origin.calcjob_uuid || return nothing
         transport_attempt=selection["attempt"]
         if native_mode
             transport_attempt isa Int && !(transport_attempt isa Bool) && transport_attempt>=1 || return nothing
@@ -274,9 +351,12 @@ function execute_scientific_plan_staged(
     source_graph::Union{Nothing,AbstractDict}=nothing,
     parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
     phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
+    native_origin=nothing,
     resource_policy::Symbol = :standalone,
     envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
 )
+    native_origin=_native_origin_ids(native_origin)
+    native_origin===nothing || scratch_root===nothing || throw(ArgumentError("native_scratch_binding_unavailable"))
     _scientific_resource_preflight(resource_policy, envelope)
     frozen_plan_bytes===nothing || frozen_plan_capture===nothing || throw(ArgumentError("choose one frozen plan source"))
     source_graph=_require_source_graph(source_graph)
@@ -302,7 +382,7 @@ function execute_scientific_plan_staged(
     if scratch_root===nothing || any(e.outputs.recovery.enabled for e in plan.executions if execution_id===nothing || e.id==execution_id)
         scratch_root===nothing || @warn "portable recovery publishes directly to output storage; scratch staging is disabled for this execution"
         _capture_locator(capture_context,:direct,output,0)
-        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy)
+        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy,native_origin)
     end
     selected=[e for e in plan.executions if execution_id===nothing || e.id==execution_id]
     parent_checkpoint === nothing || throw(ArgumentError("native5_recovery_import_unavailable: scratch closure import requires P07"))
@@ -322,7 +402,7 @@ function execute_scientific_plan_staged(
     local_result = joinpath(workspace, "result")
     try
         _capture_locator(capture_context,:scratch,local_result,0)
-        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,phase_observation_policy)
+        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,phase_observation_policy,native_origin)
         declared=minimum(e.configuration.production.memory_budget_bytes for e in selected)
         metadata_roots=(;entry=(plan,selected,source_graph,result),resources=(envelope,),construction=(),continuation=(),history=(),
             observers=(telemetry_sink,),inputs_publication=(workspace,local_result,destination,byte_budget,reserve_bytes,

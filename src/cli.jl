@@ -156,24 +156,35 @@ function _cli_heavy(arguments)
         options = Dict{String,String}()
         for index in 4:2:length(arguments)
             flag = arguments[index]
-            flag in ("--execution-id", "--scratch-root", "--attempt", "--recovery-bundle", "--archive-bundle", "--archive-byte-budget", "--source-graph", "--parent-pointer", "--parent-identity", "--parent-metadata-bytes") || throw(ArgumentError("unknown run-plan option $flag"))
+            flag in ("--execution-id", "--scratch-root", "--attempt", "--recovery-bundle", "--archive-bundle", "--archive-byte-budget", "--source-graph", "--parent-pointer", "--parent-identity", "--parent-metadata-bytes", "--native-execution", "--native-calcjob-uuid") || throw(ArgumentError("unknown run-plan option $flag"))
             haskey(options, flag) && throw(ArgumentError("duplicate option $flag"))
             options[flag] = arguments[index+1]
         end
+        native_mode=haskey(options,"--native-execution")
+        native_mode==haskey(options,"--native-calcjob-uuid") || throw(ArgumentError("native execution and CalcJob options must be paired"))
+        native_options=Set(["--execution-id","--source-graph","--native-execution","--native-calcjob-uuid"])
+        !native_mode || Set(keys(options))==native_options || throw(ArgumentError("unsupported native run-plan options"))
         parent_checkpoint=_cli_parent_checkpoint(options,arguments[3])
         loaded=QCLScientificWorkflow._load_scientific_plan_bytes(arguments[2])
         plan=loaded.plan
+        native_origin=native_mode ? _native_origin_inputs(arguments[2],options["--source-graph"],
+            options["--native-execution"],arguments[3],options["--native-calcjob-uuid"],options["--execution-id"];
+            frozen_plan_bytes=loaded.bytes) : nothing
         native_capture_input=get(ENV,"QCL_NEGF_NATIVE_CAPTURE_INPUT","")
         # The fixed native protocol omits --attempt and does not enable scratch.
-        capture_options=isempty(native_capture_input) || Set(keys(options))==Set(["--execution-id","--source-graph"])
+        capture_options=isempty(native_capture_input) || Set(keys(options))==(native_mode ? native_options : Set(["--execution-id","--source-graph"]))
+        if native_mode && !isempty(native_capture_input)
+            capture_options &= abspath(native_capture_input)==abspath(options["--native-execution"])
+        end
         capture_context=capture_options ? _capture_context(plan,arguments[3],get(options,"--execution-id",nothing),
             haskey(options,"--attempt") ? parse(Int,options["--attempt"]) : nothing;
             scratch_root=get(options,"--scratch-root",nothing),
             frozen_plan_bytes=loaded.bytes,source_plan_path=arguments[2],
-            native_execution_path=isempty(native_capture_input) ? nothing : native_capture_input,
-            source_graph_path=get(options,"--source-graph",nothing)) : nothing
+            native_execution_path=native_mode ? options["--native-execution"] : isempty(native_capture_input) ? nothing : native_capture_input,
+            source_graph_path=get(options,"--source-graph",nothing),native_origin) : nothing
         result = execute_scientific_plan_staged(plan, arguments[3];
             capture_context,
+            native_origin,
             frozen_plan_capture=loaded.capture,
             source_graph=haskey(options,"--source-graph") ? _load_source_graph_file(options["--source-graph"]) : nothing,
             parent_checkpoint,

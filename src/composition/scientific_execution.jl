@@ -3,7 +3,8 @@ struct _ScientificPause <: Exception
     reason::Symbol
 end
 
-import ..QCLNEGFRunner: publish_native_selection!, _p07_retain_input_pair!, _p05_closed_metadata_limit
+import ..QCLNEGFRunner: publish_native_selection!, _p07_retain_input_pair!, _p05_closed_metadata_limit,
+    _native_origin_ids, _native_source_epoch
 
 function _p05_prepare_scientific_request!(recorder::ScientificHistoryRecorder,
     capture::_P05PlanCapture,configuration,point::ScientificPoint;
@@ -585,7 +586,9 @@ function execute_scientific_plan(
     source_graph::Union{Nothing,AbstractDict}=nothing,
     parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
     phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
+    native_origin=nothing,
 )
+    native_origin=_native_origin_ids(native_origin)
     _scientific_resource_preflight(resource_policy,envelope)
     frozen_plan_bytes===nothing || frozen_plan_capture===nothing || throw(ArgumentError("choose one frozen plan source"))
     source_graph=_require_source_graph(source_graph)
@@ -1094,7 +1097,7 @@ function execute_scientific_plan(
                 running_status=Dict{String,Any}("process"=>Dict{String,Any}("state"=>"running","exit_code"=>nothing,"reason"=>nothing),
                     (name=>unmeasured() for name in ("convergence","physics","discretization","experimental"))...)
                 history_recorder=ScientificHistoryRecorder(directory;artifact_root=root,identity,
-                    source_epoch="epoch-"*string(time_ns()),provenance=source_graph,status=running_status,
+                    source_epoch=_native_source_epoch(native_origin),provenance=source_graph,status=running_status,
                     maximum_scba_rows=config.solver.max_scba,parent_checkpoint,resource_policy)
                 recovery_policy=execution.outputs.recovery
                 recovery_directory=joinpath(root,"recovery",execution.id,point.id)
@@ -1113,7 +1116,7 @@ function execute_scientific_plan(
                 runtime_options =
                     with_production_options(runtime_options; checkpoint_request)
                 input_roots=(;
-                    entry=(plan,selected_executions,selected_points,points,execution,point,config,source_graph),
+                    entry=(plan,selected_executions,selected_points,points,execution,point,config,source_graph,native_origin),
                     resources=(resource_plan,reservation,envelope,margin_context,solver_sources,runtime_options,observer_admission),
                     construction=(configured,base_cache,problem,cache),
                     continuation=(previous,previous_id,parent_checkpoint,branch_cause,initialization),
