@@ -37,7 +37,10 @@ For a new AiiDA native invocation, `run-plan` accepts the paired options
 `--execution-id ID --source-graph source-graph.json`. This path checks bounded original plan,
 graph and native input bytes, whole input references, execution and output suffix independently
 of optional capture. Native scratch, explicit scientific attempt and recovery options are not
-enabled by these options. Each original input is limited to 64 KiB. The private description
+enabled by these options. The original plan is limited to 1 MiB, matching the existing capture
+plan allowance; the original source graph and native execution description each retain a
+64 KiB limit. The native origin reader counts all original whitespace and retains the same
+open-file, path, alias, byte-count, hash and frozen-plan checks. The private description
 carries only the CalcJob UUID and original native-execution input UUID to a newly created recorder.
 
 Its existing `invocation.source_epoch` is

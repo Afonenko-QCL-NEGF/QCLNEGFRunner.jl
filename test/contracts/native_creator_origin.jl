@@ -35,10 +35,10 @@ execute_scientific_plan(plan,output;kwargs...)=(push!(calls,(output,(;kwargs...)
 include(joinpath(@__DIR__,"..","..","src","composition","scratch_execution.jl"))
 end
 
-function native_document()
+function native_document(;plan_raw=PLAN_RAW,graph_raw=GRAPH_RAW)
     file(uuid,raw)=Dict("node_uuid"=>uuid,"bytes"=>string(sizeof(raw)),"sha256"=>bytes2hex(sha256(raw)))
     Dict{String,Any}("schema"=>"qcl-negf.aiida-native-execution.v1","request_id"=>OTHER,"execution_id"=>"E",
-        "input_plan"=>file(OTHER,PLAN_RAW),"source_graph"=>file(OTHER,GRAPH_RAW),"access_receipt_ref"=>"access",
+        "input_plan"=>file(OTHER,plan_raw),"source_graph"=>file(OTHER,graph_raw),"access_receipt_ref"=>"access",
         "storage"=>Dict{String,Any}("namespace_id"=>"native","storage_identity"=>"storage",
             "relative_execution_root"=>"native/new-domain","computer_uuid"=>OTHER,"execution_binding_uuid"=>INPUT,
             "retention_policy_id"=>"policy","retention_owner_id"=>"owner","hold_ref"=>"hold","access_binding_ref"=>"access"),
@@ -57,6 +57,10 @@ function fixture(f)
 end
 read_origin(x;kwargs...)=R._native_origin_inputs(x.plan,x.graph,x.native,x.output,CALC,"E";
     frozen_plan_bytes=Vector{UInt8}(codeunits(PLAN_RAW)),kwargs...)
+
+# Trailing JSON whitespace changes the whole raw claim, without changing the
+# parsed document or shortening provenance in a real scientific plan.
+pad_json(raw,bytes)=raw*repeat(" ",bytes-sizeof(raw))
 
 @testset "Native creator origin" begin
 @testset "Native origin CLI is mandatory with capture off, and both flags are paired" begin
@@ -190,6 +194,90 @@ end
                 frozen_plan_bytes=before[1])
             @test read_origin(x)==(calcjob_uuid=CALC,native_execution_uuid=INPUT)
         end
+    end
+end
+
+@testset "Original plan accepts one MiB; other native inputs retain 64 KiB" begin
+    expected=(calcjob_uuid=CALC,native_execution_uuid=INPUT)
+    # Independent literal boundaries: changing the plan's allowance back to
+    # 64 KiB must reject both admitted cases; raising a metadata role must fail
+    # its +1 case. All claims describe the complete whitespace-padded file.
+    for bytes in (1048575,1048576,1048577)
+        fixture() do x
+            raw=pad_json(PLAN_RAW,bytes)
+            document=native_document(;plan_raw=raw)
+            write(x.plan,raw);write(x.native,R._p04_json(document))
+            @test sizeof(raw)==bytes && R._p04_parse(raw)==R._p04_parse(PLAN_RAW)
+            admit()=R._native_origin_inputs(x.plan,x.graph,x.native,x.output,CALC,"E";
+                frozen_plan_bytes=Vector{UInt8}(codeunits(raw)))
+            if bytes<=1048576
+                @test admit()==expected
+            else
+                @test_throws ArgumentError admit()
+            end
+            @test read(x.plan,String)==raw && !ispath(x.output)
+        end
+    end
+    for role in (:graph,:native), bytes in (65535,65536,65537)
+        fixture() do x
+            graph_raw=role==:graph ? pad_json(GRAPH_RAW,bytes) : GRAPH_RAW
+            document=native_document(;graph_raw)
+            native_raw=R._p04_json(document)
+            role==:native && (native_raw=pad_json(native_raw,bytes))
+            write(x.graph,graph_raw);write(x.native,native_raw)
+            @test sizeof(role==:graph ? graph_raw : native_raw)==bytes
+            if bytes<=65536
+                @test read_origin(x)==expected
+            else
+                @test_throws ArgumentError read_origin(x)
+            end
+            @test !ispath(x.output)
+        end
+    end
+end
+
+@testset "Admitted large plan retains original raw, alias, UUID and FD guards" begin
+    fixture() do x
+        raw=pad_json(PLAN_RAW,1048576)
+        document=native_document(;plan_raw=raw)
+        write(x.plan,raw);write(x.native,R._p04_json(document))
+        frozen=Vector{UInt8}(codeunits(raw))
+        admit()=R._native_origin_inputs(x.plan,x.graph,x.native,x.output,CALC,"E";frozen_plan_bytes=frozen)
+        @test admit()==(calcjob_uuid=CALC,native_execution_uuid=INPUT)
+        for mutate in (d->(d["input_plan"]["bytes"]="1048575"),
+                d->(d["input_plan"]["sha256"]=repeat("f",64)),
+                d->(d["input_plan"]["node_uuid"]="invalid"),
+                d->(d["storage"]["execution_binding_uuid"]=INPUT*"\n"))
+            bad=deepcopy(document);mutate(bad);write(x.native,R._p04_json(bad))
+            @test_throws ArgumentError admit()
+        end
+        write(x.native,R._p04_json(document))
+        # A matching original declaration cannot make a different frozen byte
+        # sequence valid; truncated or same-size changed originals also reject.
+        write(x.plan,raw[1:end-1]);@test_throws ArgumentError admit()
+        write(x.plan,replace(raw,' '=>'\t'));@test_throws ArgumentError admit()
+        write(x.plan,raw)
+        saved=joinpath(x.job,"saved-plan.json")
+        mv(x.plan,saved);symlink(saved,x.plan)
+        @test_throws ArgumentError admit()
+        rm(x.plan);mv(saved,x.plan)
+        alias=joinpath(x.job,"alias-plan.json")
+        @test ccall(:link,Cint,(Cstring,Cstring),x.plan,alias)==0
+        @test_throws ArgumentError admit()
+        rm(alias)
+        if Sys.islinux()
+            # Count the actual process descriptors after both success and
+            # exceptional exits, including failures after all files are read.
+            fd_before=length(readdir("/proc/self/fd"))
+            for _ in 1:4
+                @test admit()==(calcjob_uuid=CALC,native_execution_uuid=INPUT)
+                bad=deepcopy(document);bad["input_plan"]["sha256"]=repeat("f",64)
+                write(x.native,R._p04_json(bad));@test_throws ArgumentError admit()
+                write(x.native,R._p04_json(document))
+            end
+            @test length(readdir("/proc/self/fd"))==fd_before
+        end
+        @test read(x.plan)==frozen && !ispath(x.output)
     end
 end
 
