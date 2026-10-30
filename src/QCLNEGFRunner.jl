@@ -34,6 +34,7 @@ export ScientificHistoryRecorder, record_scientific_history!, flush_scientific_h
     VerifiedExactCheckpoint, commit_exact_checkpoint!, open_exact_checkpoint,
     checkpoint_reference, load_exact_solver_state
 export FinalPointRequest, publish_final_point_request!, commit_final!, verify_final_artifacts, verify_checkpoint_inputs
+export publish_native_selection!
 
 module QCLConfiguration
 using Unitful

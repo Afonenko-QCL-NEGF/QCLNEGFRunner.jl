@@ -3,6 +3,8 @@ struct _ScientificPause <: Exception
     reason::Symbol
 end
 
+import ..QCLNEGFRunner: publish_native_selection!, _p07_retain_input_pair!, _p05_closed_metadata_limit
+
 function _p05_prepare_scientific_request!(recorder::ScientificHistoryRecorder,
     capture::_P05PlanCapture,configuration,point::ScientificPoint;
     grant_bytes::Int,live_roots::NamedTuple,observer_admission::_P05ObserverAdmission)
@@ -663,6 +665,7 @@ function execute_scientific_plan(
         end
     end
     inherited_history=Dict{String,String}() # removed when final native5 persistence is joined
+    native_selected_inputs=Dict{String,Any}[]
     point_order=[p.id for p in selected_points]
     for point in selected_points
         haskey(existing,point.id) && _upsert_scientific_point!(results,existing[point.id],point_order)
@@ -840,7 +843,7 @@ function execute_scientific_plan(
             build_roots=(;entry=(plan,selected_executions,selected_points,points,execution,config,source_graph),
                 resources=(resource_plan,reservation,envelope,margin_context,solver_sources,config.production),
                 construction=(),continuation=(parent_checkpoint,),
-                history=(results,history,existing,point_order,inherited_history),
+                history=(results,history,existing,point_order,inherited_history,native_selected_inputs),
                 observers=(telemetry_sink,),inputs_publication=(plan_binding,))
             _p05_scientific_build_admission!(config,resource_plan,reservation,build_roots;
                 observer_admission=build_admission)
@@ -980,7 +983,7 @@ function execute_scientific_plan(
             observer_admission=nothing
             phase_source=(status=:disabled,session_id=nothing,current_path=nothing,reason="telemetry_disabled")
             history_recorder=nothing
-            callbacks=nothing;committed=nothing;recorded=nothing;final_phase=false
+            callbacks=nothing;committed=nothing;recorded=nothing;terminal=nothing;prepared_final_request=nothing;final_phase=false
             latest_commit=Ref{Union{Nothing,String}}(
                 restoring &&
                 old !== nothing &&
@@ -1007,7 +1010,7 @@ function execute_scientific_plan(
                 pre_roots=(;entry=(plan,selected_executions,selected_points,points,execution,point,config,source_graph),
                     resources=(resource_plan,reservation,envelope,margin_context,solver_sources,config.production,observer_admission),
                     construction=(configured,base_cache),continuation=(previous,previous_id,parent_checkpoint,branch_cause,initialization),
-                    history=(results,history,existing,old,latest_commit,point_order,inherited_history),
+                    history=(results,history,existing,old,latest_commit,point_order,inherited_history,native_selected_inputs),
                     observers=(telemetry_sink,),inputs_publication=(plan_binding,phase_source,phase_identity))
                 admitted_grant=min(reservation["memory_budget_bytes"],config.production.memory_budget_bytes)
                 available=_p05_input_metadata_limit(admitted_grant,pre_roots;observer_admission)
@@ -1114,7 +1117,7 @@ function execute_scientific_plan(
                     resources=(resource_plan,reservation,envelope,margin_context,solver_sources,runtime_options,observer_admission),
                     construction=(configured,base_cache,problem,cache),
                     continuation=(previous,previous_id,parent_checkpoint,branch_cause,initialization),
-                    history=(results,history,existing,old,history_recorder,latest_commit,point_order,inherited_history),
+                    history=(results,history,existing,old,history_recorder,latest_commit,point_order,inherited_history,native_selected_inputs),
                     observers=(phase_observer,telemetry_sender,reporter,event_sink,observe_solver_event,
                         publish,result_document,publish_unrun_descendants,remember_failure),
                     inputs_publication=(plan_binding,running_status,coverage,checkpoint_clock,phase_source,identity))
@@ -1170,6 +1173,8 @@ function execute_scientific_plan(
                     domain_adaptation=config.domain_adaptation,kernel_options=kernel_binding,status=final_status,
                     request=prepared_final_request.request,
                     source_mode=parent_state!==nothing && parent_state.boundary===:final ? :completed_restore : :produced,limits...)
+                _p07_retain_input_pair!(native_selected_inputs,".",committed.checkpoint,
+                    prepared_final_request.request,limits.maximum_metadata_bytes)
                 recorded=_p05_recorded_final(committed,limits.maximum_metadata_bytes)
                 observables=Dict{String,Any}("current_density_A_per_m2"=>recorded.current,
                     "sheet_density_per_m2"=>recorded.sheet_density,"wall_seconds"=>(time_ns()-started)*1e-9,
@@ -1237,6 +1242,14 @@ function execute_scientific_plan(
                     _p05_native_source(".";checkpoint=callbacks.latest[],reason="last_accepted_boundary_before_failure") :
                     parent_checkpoint!==nothing ? _p05_native_source(".";checkpoint=parent_checkpoint,relation="retained_source",reason="selected_parent_before_failure") :
                     _p05_native_source(".";reason="no_selected_native_state")
+                if callbacks!==nothing && callbacks.latest[]!==nothing
+                    try
+                        _p07_retain_input_pair!(native_selected_inputs,".",callbacks.latest[],
+                            prepared_final_request.request,intermediate_cap)
+                    catch publication_error
+                        throw(CompositeException([error,publication_error]))
+                    end
+                end
                 if error isa _ScientificPause
                     terminal_status=error.reason
                     data=Dict{String,Any}("native_source"=>error_source,"phase_source"=>_phase_source_projection(phase_source),"optical_attachment"=>nothing)
@@ -1256,7 +1269,18 @@ function execute_scientific_plan(
                     _continuation_record_history!(history,record)
                     publish_unrun_descendants(record,"interrupted",error.reason)
                     _scientific_progress(root, point, attempt, error.reason, directory;phase_source)
-                    return result_document(error.reason)
+                    document=result_document(error.reason)
+                    publication_roots=merge(input_roots,(;
+                        construction=(configured,base_cache,problem,cache,solution,terminal),
+                        history=(input_roots.history...,callbacks),
+                        inputs_publication=(input_roots.inputs_publication...,prepared_final_request,document)))
+                    publication_cap=_p05_input_metadata_limit(admitted_grant,publication_roots;observer_admission)
+                    try
+                        publish_native_selection!(root,document;selected_inputs=native_selected_inputs,maximum_metadata_bytes=publication_cap)
+                    catch publication_error
+                        throw(CompositeException([error,publication_error]))
+                    end
+                    return document
                 end
                 if error isa InterruptException
                     terminal_status=:cancelled
@@ -1396,6 +1420,12 @@ function execute_scientific_plan(
     ) : :failed
     publish(final_status)
     document=result_document(final_status)
+    publication_roots=(;entry=(plan,selected_executions,selected_points,points,source_graph,document,native_selected_inputs),
+        resources=(envelope,),construction=(),continuation=(),history=(results,history,existing,point_order),
+        observers=(),inputs_publication=(plan_binding,))
+    declared=minimum(e.configuration.production.memory_budget_bytes for e in selected_executions)
+    publication_cap=_p05_closed_metadata_limit(declared,publication_roots;envelope)
+    publish_native_selection!(root,document;selected_inputs=native_selected_inputs,maximum_metadata_bytes=publication_cap)
     # Native v4 has no legacy result_commit receipt. Q1 typed transport-close
     # remains an explicit release dependency; do not manufacture its success.
     return document

@@ -326,3 +326,36 @@ already validated selected object. Identity-only `native_context` does not chang
 The plan is retained in existing resource roots and checked before observer traversal.
 Because its type is loaded later in the module, the keyword declaration is untyped;
 runtime accepts only `nothing` or `ExecutionPlan`. No plan or P is reconstructed.
+
+
+### Explicit native input selection
+
+`publish_native_selection!(artifact_root, result; selected_inputs,
+maximum_metadata_bytes)` publishes the original terminal series-v4 bytes and
+`native-selection.json`. The control is exactly `{version: 1, selected_inputs: [...]}`;
+each row has `artifact_root`, the full `selected_state` StateRef, and the original
+`plan` and `model` FileRefs. Supply exactly one row for each distinct nonabsent
+(root, full StateRef), including attempt history. Publication orders rows by first
+occurrence in points and then attempt history; sequence numbers alone never select
+a state. Final input refs must match the original observations request.
+
+The execution owner retains bounded input refs from its actual request and verified
+checkpoint/final handle before releasing point state. The public publisher reopens
+exact selected checkpoints, verifies original inputs and final artifacts through
+the public native verifiers, and uses one aggregate metadata allowance. It retains
+no numerical state and selects no input by role, filename or directory scan.
+Missing retained-source input pairs are an error; no current creator is inferred.
+
+The return has exactly `result` and `selection` operational claims, each containing
+`path`, an integer `bytes` count and `sha256`. Successful return follows file sync,
+exclusive publication and exact same-open readback. An identical retry reconciles;
+a conflicting existing file is preserved and refused. Errors may leave partial
+files or a completed first control without the second; this is not an atomic pair
+transaction. Preserve the original failure and reconcile actual bytes before using
+a subsequent acknowledgement.
+
+These controls establish selected bytes only. They do not authorize native close,
+a producer, retrieval or scientific acceptance. The stationary/configured entry
+qualification fences remain. This increment adds neither scratch/recovery import
+nor capture ingress. The later transport packet remains five files total: result,
+selection, owner-close projection and the two stock scheduler logs.
