@@ -288,7 +288,7 @@ artifact root must already exist. Recorder metadata is frozen at construction; e
 a fresh namespace. `maximum_scba_rows` bounds compact current-stage RowKey/locator entries; buffer
 limits bound current pending rows, not the complete exact-state payload. The current normal writer
 accepts standalone owning storage with no storage context. Unsupported contexts fail explicitly;
-removal of the obsolete strict resource mode belongs to its owning stage.
+the removed `:campaign_strict` policy and non-`nothing` storage contexts are rejected before IO.
 
 The pointer overload requires an explicit root-relative native5 pointer file and the expected full
 source-attempt Identity. It resolves every FileRef against the same artifact root and returns the

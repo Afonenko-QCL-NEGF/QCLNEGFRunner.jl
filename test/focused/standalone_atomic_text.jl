@@ -5,7 +5,6 @@ module StandaloneAtomicTextSandbox
 using SHA
 const SOURCE_ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 # Include WHOLE owning files; no extracted function, mock writer, or FS adapter.
-include(joinpath(SOURCE_ROOT, "src/infrastructure/resources/resident_storage.jl"))
 include(joinpath(SOURCE_ROOT, "src/infrastructure/persistence/atomic_files.jl"))
 include(joinpath(SOURCE_ROOT, "src/infrastructure/telemetry/progress.jl"))
 end

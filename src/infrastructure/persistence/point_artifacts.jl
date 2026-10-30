@@ -918,6 +918,7 @@ function _bundle_receipt_document(commit_path,commit;verified_unix=time())
 end
 function _write_bundle_receipt(commit_path;maximum_bytes::Union{Nothing,Int}=nothing,
     resource_policy::Symbol=:standalone, storage_context=nothing)
+    _resource_policy(resource_policy; storage_context)
     commit=verify_point_artifacts(commit_path)
     receipt=_bundle_receipt_document(commit_path,commit)
     encoded=sprint(_light_json,receipt)
@@ -1139,7 +1140,7 @@ function commit_point_artifacts(
 )
     stage = nothing
     try
-        _resident_writer_preflight(resource_policy, :point, storage_context, directory; payload=(solution, identity))
+        _resource_policy(resource_policy; storage_context)
         checkpoint_started=time_ns()
         actual_contract=get(solution.observables,:restart_contract,nothing)
         actual_contract===nothing && (actual_contract=solution.scba.restart_contract)
@@ -1179,8 +1180,7 @@ function commit_point_artifacts(
         name=storage_class===:archive ? "final" : "generation-"*lpad(string(generation), 6, '0')
         final=joinpath(root, name)
         ispath(final) && throw(ArgumentError("immutable final already exists"))
-        stage=mktempdir(root; prefix = "pending-", cleanup=resource_policy === :standalone)
-        resident_created!(storage_context, stage)
+        stage=mktempdir(root; prefix = "pending-", cleanup=true)
         artifacts=Dict{String,Any}[]
         for (filename, role, schema) in
             (("physics.h5", "physics.full", "qcl-negf-physics-v4"),)
@@ -1398,15 +1398,7 @@ function commit_point_artifacts(
             _check_storage_budget(accounted,byte_budget,reserve_bytes,Base.checked_add(metadata_tail,capture_reserve_bytes))
             _check_storage_free(root,Base.checked_add(Base.checked_add(metadata_tail,reserve_bytes),capture_reserve_bytes))
         end
-        if _resident_preserve(resource_policy, storage_context)
-            lock(storage_context.permit.ledger.guard) do
-                _resident_live_ancestry!(storage_context.permit)
-                mv(stage, final; force = false)
-                resident_renamed!(storage_context, stage, final)
-            end
-        else
-            mv(stage, final; force = false)
-        end
+        mv(stage, final; force = false)
         _sync_artifact_directory(root)
         commit_path=joinpath(final, "commit.json")
         publication_hook(:after_publish)
@@ -1438,16 +1430,11 @@ function commit_point_artifacts(
             end
             _sync_artifact_file(current)
             _sync_artifact_directory(root)
-            resource_policy === :standalone && _prune_recovery_generations!(root,retain_generations)
+            _prune_recovery_generations!(root,retain_generations)
         end
-        resident_acknowledged!(storage_context, commit_path)
         return commit_path
-    catch failure
-        canonical = _resident_failure!(storage_context, failure)
-        canonical === nothing || canonical === failure || throw(canonical)
-        rethrow()
     finally
-        resource_policy === :standalone && stage !== nothing && isdir(stage) && rm(stage; recursive = true, force = true)
+        stage !== nothing && isdir(stage) && rm(stage; recursive = true, force = true)
     end
 end
 
@@ -1613,13 +1600,12 @@ function commit_operator_artifacts(
 )
     stage = nothing
     try
-        _resident_writer_preflight(resource_policy, :operator, storage_context, directory; payload=(checks, identity, operation, accepted))
+        _resource_policy(resource_policy; storage_context)
         root=joinpath(directory, "artifacts")
         mkpath(root)
         final=joinpath(root, "generation-000001")
         ispath(final) && throw(ArgumentError("operator generation already exists"))
-        stage=mktempdir(root; prefix = "pending-", cleanup=resource_policy === :standalone)
-        resident_created!(storage_context, stage)
+        stage=mktempdir(root; prefix = "pending-", cleanup=true)
         path=joinpath(stage, "operator_checks.json")
         _observability_atomic_text(path; resource_policy, storage_context) do io
             _light_json(
@@ -1656,15 +1642,7 @@ function commit_operator_artifacts(
             _light_json(io, commit)
         end
         _prepare_generation!(stage)
-        if _resident_preserve(resource_policy, storage_context)
-            lock(storage_context.permit.ledger.guard) do
-                _resident_live_ancestry!(storage_context.permit)
-                mv(stage, final; force = false)
-                resident_renamed!(storage_context, stage, final)
-            end
-        else
-            mv(stage, final; force = false)
-        end
+        mv(stage, final; force = false)
         _sync_artifact_directory(root)
         path=joinpath(final, "commit.json")
         _observability_atomic_text(joinpath(root, "current.json"); resource_policy, storage_context) do io
@@ -1681,16 +1659,9 @@ function commit_operator_artifacts(
         end
         _sync_artifact_file(joinpath(root, "current.json"))
         _sync_artifact_directory(root)
-        # Operator publication has no independent durable replacement verifier.
-        # Keep it unacknowledged and retain the entire conservative tail.
-        storage_context === nothing || resident_settle!(storage_context)
         return path
-    catch failure
-        canonical = _resident_failure!(storage_context, failure)
-        canonical === nothing || canonical === failure || throw(canonical)
-        rethrow()
     finally
-        resource_policy === :standalone && stage !== nothing && isdir(stage) && rm(stage; recursive = true, force = true)
+        stage !== nothing && isdir(stage) && rm(stage; recursive = true, force = true)
     end
 end
 

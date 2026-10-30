@@ -1,4 +1,4 @@
-# Real native-HDF5 regression for first standalone history publication/return.
+# Real native-HDF5 regression for retained legacy standalone history publication.
 # Run only in the Root-admitted candidate project with existing Julia/depot.
 using QCLNEGFRunner, Test, SHA
 const R = QCLNEGFRunner
@@ -33,7 +33,7 @@ end
         identity = Dict{String,Any}("point_id" => "p", "execution_id" => "e", "attempt" => 1)
         tick = Ref(UInt64(0))
         scba_count, outer_count = Ref(0), Ref(0)
-        recorder = R.ScientificHistoryRecorder(attempt, identity, scba_count, outer_count;
+        recorder = R._LegacyScientificHistoryRecorder(attempt, identity, scba_count, outer_count;
             clock_ns = () -> tick[], resource_policy = :standalone)
         pointer = joinpath(attempt, "history", "index.json")
         first_path = joinpath(attempt, "history", "segment-000001.h5")
@@ -108,7 +108,7 @@ end
 @testset "first append crossing cadence completes after real HDF5 publication" begin
     history_case("first-cadence-append") do root
         tick = Ref(UInt64(0))
-        recorder = R.ScientificHistoryRecorder(root, Dict{String,Any}("attempt" => 1), Ref(0), Ref(0);
+        recorder = R._LegacyScientificHistoryRecorder(root, Dict{String,Any}("attempt" => 1), Ref(0), Ref(0);
             clock_ns = () -> tick[], resource_policy = :standalone)
         tick[] = UInt64(31_000_000_000)
         @test R.record_scientific_history!(recorder, :scba, 1, history_row(1), history_fixture.problem) === nothing
@@ -127,7 +127,7 @@ end
 
 @testset "collision preserves destination and index and removes standalone temporary" begin
     history_case("collision") do root
-        recorder = R.ScientificHistoryRecorder(root, Dict{String,Any}("attempt" => 1), Ref(0), Ref(0);
+        recorder = R._LegacyScientificHistoryRecorder(root, Dict{String,Any}("attempt" => 1), Ref(0), Ref(0);
             clock_ns = () -> UInt64(0), resource_policy = :standalone)
         target = joinpath(recorder.directory, "segment-000001.h5")
         pointer = joinpath(recorder.directory, "index.json")

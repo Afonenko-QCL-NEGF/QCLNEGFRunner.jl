@@ -586,33 +586,18 @@ end
 
 function _observability_atomic_text(path::AbstractString, writer::Function;
     resource_policy::Symbol = :standalone, storage_context=nothing)
-    context = storage_context
+    _resource_policy(resource_policy; storage_context)
     temporary = stream = nothing
-    local target
+    target = abspath(path)
     try
-        context = _resident_nested_context(resource_policy, storage_context, :atomic_text)
-        _resident_writer_preflight(resource_policy, :atomic_text, context, path; payload=writer)
-        target = abspath(path)
         mkpath(dirname(target))
-        temporary, stream = mktemp(dirname(target); cleanup=resource_policy === :standalone)
-        resident_created!(context, temporary)
+        temporary, stream = mktemp(dirname(target))
         writer(stream)
         close(stream)
-        _atomic_replace_file(temporary, target; resource_policy, storage_context=context)
-        context === nothing || resident_renamed!(context, temporary, target)
-    catch failure
-        if _resident_preserve(resource_policy, context)
-            canonical = _resident_failure!(context, failure)
-            try
-                stream === nothing || (isopen(stream) && close(stream))
-            catch secondary
-                _resident_failure!(context, secondary)
-            end
-            canonical === nothing || canonical === failure || throw(canonical)
-        else
-            stream === nothing || (isopen(stream) && close(stream))
-            temporary === nothing || (isfile(temporary) && rm(temporary; force = true))
-        end
+        _atomic_replace_file(temporary, target)
+    catch
+        stream === nothing || (isopen(stream) && close(stream))
+        temporary === nothing || (isfile(temporary) && rm(temporary; force = true))
         rethrow()
     end
     return target

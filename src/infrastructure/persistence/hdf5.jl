@@ -677,9 +677,7 @@ end
 """Publish a complete [checkpoint](@ref native-result-formats) atomically; failed writes never replace a previous state."""
 function save_checkpoint(path::AbstractString, solution::NEGFSolution;
     resource_policy::Symbol=:standalone, kwargs...)
-    # This public adapter has no independent serialization growth-bound binding.
-    # Its strict caller must refuse before creating an auto-cleaned temporary.
-    _resident_writer_preflight(resource_policy, :checkpoint)
+    _resource_policy(resource_policy)
     directory = dirname(abspath(path))
     mkpath(directory)
     temporary, stream = mktemp(directory)

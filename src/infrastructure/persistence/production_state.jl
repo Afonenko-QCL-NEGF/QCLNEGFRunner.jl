@@ -278,7 +278,7 @@ end
 
 function _atomic_checkpoint(path::AbstractString, solution::NEGFSolution;
     resource_policy::Symbol = :standalone)
-    _resident_writer_preflight(resource_policy, :atomic_checkpoint)
+    _resource_policy(resource_policy)
     directory = dirname(abspath(path))
     mkpath(directory)
     temporary, stream = mktemp(directory)

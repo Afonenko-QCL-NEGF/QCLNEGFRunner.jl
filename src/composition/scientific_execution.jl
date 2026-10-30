@@ -515,7 +515,7 @@ function _scientific_execution_progress(records,active,root,fingerprint)
 end
 function _import_completed_archives!(progress,archive_bundle,root,policy;
     archive_byte_budget::Int=64*1024^3, resource_policy::Symbol = :standalone,capture_reserve_bytes::Int=0)
-    _resident_writer_preflight(resource_policy, :import_archives)
+    _resource_policy(resource_policy)
     entries=get(progress,"completed_points",nothing)
     entries isa AbstractVector || throw(ArgumentError("execution progress has no completed-point index"))
     if isempty(entries)
@@ -584,6 +584,7 @@ function execute_scientific_plan(
     parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
     phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
 )
+    _scientific_resource_preflight(resource_policy,envelope)
     frozen_plan_bytes===nothing || frozen_plan_capture===nothing || throw(ArgumentError("choose one frozen plan source"))
     source_graph=_require_source_graph(source_graph)
     recovery_bundle === nothing || throw(ArgumentError("unsupported_format: legacy recovery bundle"))
@@ -591,7 +592,6 @@ function execute_scientific_plan(
         _p05_parent_root_check(parent_checkpoint,output_directory)
         attempt === nothing && throw(ArgumentError("native5 parent requires an explicit child attempt"))
     end
-    _scientific_resource_preflight(resource_policy,envelope)
     capture_reserve_bytes>=0 || throw(ArgumentError("capture reserve must be nonnegative"))
     archive_byte_budget>0 || throw(ArgumentError("archive byte budget must be positive"))
     # Re-decode the frozen raw contract, rejecting mutation and stale typed aliases.
@@ -1237,13 +1237,6 @@ function execute_scientific_plan(
                     _p05_native_source(".";checkpoint=callbacks.latest[],reason="last_accepted_boundary_before_failure") :
                     parent_checkpoint!==nothing ? _p05_native_source(".";checkpoint=parent_checkpoint,relation="retained_source",reason="selected_parent_before_failure") :
                     _p05_native_source(".";reason="no_selected_native_state")
-                resource_pressure = error isa _NativePhasePressure
-                pressure_message = resource_pressure ? sprint(showerror, error) : ""
-                if resource_pressure
-                    # Current G and mixed Σ may refer to different iterations.
-                    # Only a previously committed accepted boundary is resumable.
-                    error = _ScientificPause(latest_commit[], :paused)
-                end
                 if error isa _ScientificPause
                     terminal_status=error.reason
                     data=Dict{String,Any}("native_source"=>error_source,"phase_source"=>_phase_source_projection(phase_source),"optical_attachment"=>nothing)
@@ -1255,14 +1248,7 @@ function execute_scientific_plan(
                         :unconverged,
                         false;
                         data,
-                        warnings = resource_pressure ?
-                                   [
-                            Dict{String,Any}(
-                                "code"=>"RESOURCE_PRESSURE",
-                                "scope"=>"point",
-                                "message"=>pressure_message,
-                            ),
-                        ] : Dict{String,Any}[],
+                        warnings = Dict{String,Any}[],
                     )
                     remember_failure(record;interruption=error.reason)
                     record.data["phase_source"]=_phase_source_projection(phase_source)

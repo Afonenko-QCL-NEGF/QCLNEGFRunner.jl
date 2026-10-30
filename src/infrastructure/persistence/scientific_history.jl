@@ -17,9 +17,6 @@ mutable struct _LegacyScientificHistoryRecorder
     problem::Union{Nothing,NEGFProblem}
 end
 
-const _resident_history_contexts = IdDict{_LegacyScientificHistoryRecorder,Any}()
-const _resident_failed_history = IdDict{_LegacyScientificHistoryRecorder,Nothing}()
-
 """One native5 invocation. Scientific ordinals are independent of Core delivery sequence."""
 mutable struct ScientificHistoryRecorder
     directory::String
@@ -104,9 +101,7 @@ function ScientificHistoryRecorder(directory::AbstractString;artifact_root::Abst
     maximum_buffer_records::Integer=1000,maximum_buffer_bytes::Integer=1048576,
     flush_interval_seconds::Real=30,clock_ns::Function=time_ns,
     resource_policy::Symbol=:standalone,storage_context=nothing)
-    _resident_writer_preflight(resource_policy,:history_recorder,storage_context,directory;payload=identity)
-    _p04_require(resource_policy===:standalone && storage_context===nothing,
-        "native5 recorder requires standalone owning storage; strict writer integration belongs its policy owner")
+    _resource_policy(resource_policy; storage_context)
     _p04_identity(identity);_p04_validate_status(status);_p04_validate_provenance(provenance)
     _p04_require(isdir(artifact_root) && !islink(artifact_root),"artifact root must exist and be owned")
     root=realpath(artifact_root);directory=abspath(directory)
@@ -292,38 +287,30 @@ function _LegacyScientificHistoryRecorder(
     resource_policy::Symbol = :standalone,
     storage_context=nothing,
 )
-    try
-        _resident_writer_preflight(resource_policy, :history_recorder, storage_context,
-            directory; payload=identity)
-        isfinite(flush_interval_seconds) && flush_interval_seconds>0 || throw(
-            ArgumentError("scientific history flush interval must be finite and positive"),
-        )
-        root=joinpath(directory, "history")
-        mkpath(root)
-        recorder = _LegacyScientificHistoryRecorder(
-            root,
-            identity,
-            scba_count,
-            outer_count,
-            Tuple{Int,Int,SCBAIteration}[],
-            Tuple{Int,OuterIteration}[],
-            0,
-            "",
-            Dict{String,Any}[],
-            0,
-            0,
-            round(UInt64, flush_interval_seconds*1e9),
-            UInt64(clock_ns()),
-            clock_ns,
-            nothing,
-        )
-        resource_policy === :standalone || (_resident_history_contexts[recorder] = storage_context)
-        return recorder
-    catch failure
-        canonical = _resident_failure!(storage_context, failure)
-        canonical === nothing || canonical === failure || throw(canonical)
-        rethrow()
-    end
+    _resource_policy(resource_policy; storage_context)
+    isfinite(flush_interval_seconds) && flush_interval_seconds>0 || throw(
+        ArgumentError("scientific history flush interval must be finite and positive"),
+    )
+    root=joinpath(directory, "history")
+    mkpath(root)
+    recorder = _LegacyScientificHistoryRecorder(
+        root,
+        identity,
+        scba_count,
+        outer_count,
+        Tuple{Int,Int,SCBAIteration}[],
+        Tuple{Int,OuterIteration}[],
+        0,
+        "",
+        Dict{String,Any}[],
+        0,
+        0,
+        round(UInt64, flush_interval_seconds*1e9),
+        UInt64(clock_ns()),
+        clock_ns,
+        nothing,
+    )
+    return recorder
 end
 
 function record_scientific_history!(
@@ -367,35 +354,18 @@ function record_scientific_history!(
 end
 
 function flush_scientific_history!(recorder::_LegacyScientificHistoryRecorder;
-    resource_policy::Symbol = haskey(_resident_history_contexts, recorder) ? :campaign_strict : :standalone,
-    storage_context=get(_resident_history_contexts, recorder, nothing))
-    context = storage_context
+    resource_policy::Symbol = :standalone, storage_context=nothing)
+    _resource_policy(resource_policy; storage_context)
+    isempty(recorder.scba) && isempty(recorder.outer) && return nothing
     temporary = io = nothing
     local destination
     try
-        if context !== nothing
-            lock(context.permit.ledger.guard) do
-                _resident_live_ancestry!(context.permit)
-            end
-        end
-        haskey(_resident_history_contexts, recorder) && resource_policy !== :campaign_strict &&
-            throw(ResidentGrowthRefusal(:history, :identity_mismatch, :unknown))
-        haskey(_resident_failed_history, recorder) &&
-            throw(ResidentGrowthRefusal(:history, :needs_reconcile, :unknown))
-        isempty(recorder.scba) && isempty(recorder.outer) && return nothing
-        context = _resident_nested_context(resource_policy, storage_context, :history)
-        _resident_writer_preflight(resource_policy, :history, context, recorder.directory;
-            payload=(recorder.identity, recorder.segment, recorder.scba, recorder.outer))
-        # Set before increment/create/close so an exception even before the inner
-        # HDF5 try cannot permit a blind retry with the next segment sequence.
-        resource_policy === :standalone || (_resident_failed_history[recorder] = nothing)
         recorder.segment+=1
         destination=joinpath(
             recorder.directory,
             "segment-"*lpad(string(recorder.segment), 6, '0')*".h5",
         )
-        temporary, io=mktemp(recorder.directory; cleanup=resource_policy === :standalone)
-        resident_created!(context, temporary)
+        temporary, io=mktemp(recorder.directory; cleanup=true)
         close(io)
         h5open(temporary, "w") do file
             metadata=create_group(file, "metadata")
@@ -456,15 +426,7 @@ function flush_scientific_history!(recorder::_LegacyScientificHistoryRecorder;
         end
         chmod(temporary, 0o640)
         _sync_artifact_file(temporary)
-        if _resident_preserve(resource_policy, context)
-            lock(context.permit.ledger.guard) do
-                _resident_live_ancestry!(context.permit)
-                mv(temporary, destination; force = false)
-                resident_renamed!(context, temporary, destination)
-            end
-        else
-            mv(temporary, destination; force = false)
-        end
+        mv(temporary, destination; force = false)
         _sync_artifact_directory(recorder.directory)
         scba_rows=length(recorder.scba)
         outer_rows=length(recorder.outer)
@@ -491,55 +453,25 @@ function flush_scientific_history!(recorder::_LegacyScientificHistoryRecorder;
             "outer_rows"=>recorder.published_outer,
             "segments"=>recorder.segments,
         )
-        # Without a separately reserved atomic child slot, refuse this index
-        # transition rather than inherit standalone cleanup behavior.
-        _observability_atomic_text(pointer; resource_policy, storage_context=context) do io
+        _observability_atomic_text(pointer) do io
             _light_json(io, index)
             println(io)
         end
         _sync_artifact_file(pointer)
         _sync_artifact_directory(recorder.directory)
-        resident_acknowledged!(context, pointer)
         recorder.last_flush_ns=UInt64(recorder.clock_ns())
         empty!(recorder.scba)
         empty!(recorder.outer)
-        resource_policy === :standalone || delete!(_resident_failed_history, recorder)
-    catch failure
-        if resource_policy === :campaign_strict
-            _resident_failed_history[recorder] = nothing
-            canonical = _resident_failure!(context, failure)
-            try
-                io === nothing || (isopen(io) && close(io))
-            catch secondary
-                _resident_failure!(context, secondary)
-            end
-            canonical === nothing || canonical === failure || throw(canonical)
-        end
-        rethrow()
     finally
-        resource_policy === :standalone && temporary !== nothing && isfile(temporary) && rm(temporary; force = true)
+        temporary !== nothing && isfile(temporary) && rm(temporary; force = true)
     end
     return destination
 end
 
 function flush_scientific_history_finalizer!(recorder::_LegacyScientificHistoryRecorder;
     resource_policy::Symbol=:standalone, primary=nothing)
-    effective_policy = haskey(_resident_history_contexts, recorder) ? :campaign_strict : resource_policy
-    if effective_policy === :standalone
-        return flush_scientific_history!(recorder)
-    end
-    isempty(recorder.scba) && isempty(recorder.outer) && return nothing
-    refusal = ResidentGrowthRefusal(:history_finalizer, :needs_guard, :unknown)
-    context = get(_resident_history_contexts, recorder, nothing)
-    if context !== nothing
-        primary === nothing || _resident_failure!(context, primary)
-        _resident_failure!(context, refusal)
-    end
-    if primary === nothing
-        canonical = context === nothing ? refusal : _resident_failure!(context, refusal)
-        throw(canonical === nothing ? refusal : canonical)
-    end
-    return nothing
+    _resource_policy(resource_policy)
+    return flush_scientific_history!(recorder)
 end
 
 function scientific_history_sources(point_directory)
