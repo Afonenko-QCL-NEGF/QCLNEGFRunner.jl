@@ -37,6 +37,196 @@ function _prepare_generation!(root)
     return nothing
 end
 
+# The sideband is outside the scientific catalog. No constructor/metadata update
+# may flush history, fabricate a StateRef, or change scientific failure semantics.
+const _P30_ANCHOR_SCHEMA="qcl-negf.performance-anchor.v1"
+const _P30_ANCHOR_MAXIMUM_BYTES=1048576
+function _p30_anchor_path(root,path)
+    destination=abspath(path)
+    _p04_require(basename(destination)=="performance-anchor-current.json","performance anchor requires the fixed current filename")
+    _p04_path(root,_p04_relative(root,destination))
+end
+_p30_unavailable_phase()=Dict{String,Any}("status"=>"unavailable","session_id"=>nothing,
+    "current_path"=>nothing,"reason"=>"performance_anchor_publication_failed")
+function _p30_phase_projection(source)
+    source===nothing && return Dict{String,Any}("status"=>"unavailable","session_id"=>nothing,
+        "current_path"=>nothing,"reason"=>"phase_source_not_initialized")
+    status=String(source.status)
+    _p04_require(status in ("available","unavailable","disabled"),"invalid anchor phase status")
+    if status=="available"
+        _p04_require(source.session_id isa AbstractString && !isempty(source.session_id) &&
+            source.current_path isa String && source.reason===nothing,"invalid anchor phase source")
+        # A descriptor is relative to its captured root, never to host '/'.
+        path=source.current_path
+        _p04_require(!isabspath(path) && !occursin(r"[\\\x00]",path) &&
+            all(p->!(p in ("",".","..")),split(path,'/')),"unsafe anchor phase path")
+    else
+        _p04_require(source.session_id===nothing && source.current_path===nothing &&
+            source.reason isa Union{AbstractString,Symbol} && !isempty(String(source.reason)),"invalid unavailable anchor phase")
+    end
+    Dict{String,Any}("status"=>status,"session_id"=>source.session_id,"current_path"=>source.current_path,
+        "reason"=>source.reason===nothing ? nothing : String(source.reason))
+end
+function _p30_origin_projection(origin)
+    ids=_native_origin_ids(origin)
+    ids===nothing ? nothing : Dict{String,Any}("calcjob_uuid"=>ids.calcjob_uuid,"native_execution_uuid"=>ids.native_execution_uuid)
+end
+function _p30_origin_from_invocation(invocation)
+    epoch=invocation["source_epoch"]
+    startswith(epoch,"c1-") || return nothing
+    m=match(r"^c1-([0-9a-f]{32})-([0-9a-f]{32})-([0-9]+)\z",epoch)
+    _p04_require(m!==nothing,"invalid original source epoch")
+    _p04_u64(String(m[3]))
+    uuid(s)=join((s[1:8],s[9:12],s[13:16],s[17:20],s[21:32]),"-")
+    _p30_origin_projection((calcjob_uuid=uuid(m[1]),native_execution_uuid=uuid(m[2])))
+end
+function _p30_anchor_value(identity,source,origin)
+    _p04_identity(identity)
+    Dict{String,Any}("schema"=>_P30_ANCHOR_SCHEMA,"contract_set"=>_P04_CONTRACT,
+        "phase_identity"=>deepcopy(identity),"phase_source"=>_p30_phase_projection(source),
+        "origin"=>_p30_origin_projection(origin),"invocation"=>nothing,"scientific"=>nothing)
+end
+function _p30_write_anchor!(anchor;publication_hook=stage->nothing)
+    raw=_p04_json(anchor.value)
+    _p04_require(ncodeunits(raw)<=_P30_ANCHOR_MAXIMUM_BYTES,"performance anchor metadata limit exceeded")
+    current=_p30_anchor_path(anchor.root,anchor.path)
+    immutable=_p04_path(anchor.root,_p04_relative(anchor.root,
+        joinpath(dirname(current),"performance-anchors",bytes2hex(sha256(raw))*".json")))
+    mkpath(dirname(immutable));chmod(dirname(immutable),0o2750)
+    if ispath(immutable)
+        _p04_require(isfile(immutable) && filesize(immutable)==ncodeunits(raw) && read(immutable,String)==raw,
+            "immutable performance anchor differs")
+    else
+        temporary,io=mktemp(dirname(immutable);cleanup=false)
+        try
+            try;write(io,raw);finally;close(io);end
+            _p04_publish_file!(anchor,temporary,immutable)
+        finally
+            isfile(temporary) && rm(temporary)
+        end
+    end
+    _p04_require(read(immutable,String)==raw,"immutable performance anchor readback differs")
+    publication_hook(:immutable_published)
+    temporary,io=mktemp(dirname(current);cleanup=false)
+    try
+        try;write(io,raw);finally;close(io);end
+        chmod(temporary,0o640);_sync_artifact_file(temporary)
+        _atomic_replace_file(temporary,current);_sync_artifact_directory(dirname(current))
+        _p04_require(read(current,String)==raw,"performance anchor current outcome uncertain")
+    finally
+        isfile(temporary) && rm(temporary)
+    end
+    publication_hook(:current_published)
+    nothing
+end
+function _p30_anchor_failed!(anchor,error)
+    anchor.failed=true;anchor.value["scientific"]=nothing
+    anchor.value["phase_source"]=_p30_unavailable_phase()
+    # A healthy current directory can still expose the explicit failure when an
+    # original/immutable read failed. If storage itself failed, retain old bytes
+    # and report unavailability through the progress descriptor and warning.
+    try;_p30_write_anchor!(anchor);catch;end
+    @warn "performance anchor unavailable; scientific publication is unchanged" reason=:performance_anchor_publication_failed exception=error
+    false
+end
+function _p30_publish_performance_anchor!(anchor;publication_hook=stage->nothing)
+    anchor.failed && return false
+    try
+        _p30_write_anchor!(anchor;publication_hook)
+        true
+    catch error
+        _p30_anchor_failed!(anchor,error)
+    end
+end
+function _p30_begin_performance_anchor(root,path,identity,source,origin)
+    root=realpath(root)
+    anchor=_PerformanceAnchor(root,abspath(path),_p30_anchor_value(identity,source,origin),false)
+    _p30_publish_performance_anchor!(anchor);anchor
+end
+function _p30_recorder_anchor(root,path,identity,invocation)
+    path=_p30_anchor_path(root,path)
+    anchor=_PerformanceAnchor(root,path,_p30_anchor_value(identity,nothing,nothing),false)
+    try
+        if ispath(path)
+            _p04_require(isfile(path) && filesize(path)<=_P30_ANCHOR_MAXIMUM_BYTES,"invalid pending performance anchor")
+            value=_p04_parse(read(path,String))
+            _p04_keys(value,("schema","contract_set","phase_identity","phase_source","origin","invocation","scientific"))
+            _p04_require(value["schema"]==_P30_ANCHOR_SCHEMA && value["contract_set"]==_P04_CONTRACT &&
+                value["phase_identity"]==identity && value["invocation"]===nothing && value["scientific"]===nothing,
+                "pending performance anchor differs from current invocation")
+            _p04_keys(value["phase_source"],("status","session_id","current_path","reason"))
+            source=value["phase_source"]
+            _p30_phase_projection((status=source["status"],session_id=source["session_id"],current_path=source["current_path"],reason=source["reason"]))
+            origin=value["origin"]
+            if origin!==nothing
+                _p04_keys(origin,("calcjob_uuid","native_execution_uuid"))
+                _p30_origin_projection((calcjob_uuid=origin["calcjob_uuid"],native_execution_uuid=origin["native_execution_uuid"]))
+            end
+            anchor.value=value
+        end
+        anchor.value["invocation"]=deepcopy(invocation)
+        _p30_publish_performance_anchor!(anchor)
+    catch error
+        anchor.value["invocation"]=deepcopy(invocation)
+        _p30_anchor_failed!(anchor,error)
+    end
+    anchor
+end
+function _p30_anchor_phase_source(recorder,source)
+    anchor=recorder===nothing ? nothing : recorder.performance_anchor
+    anchor===nothing || !anchor.failed ? source :
+        (status=:unavailable,session_id=nothing,current_path=nothing,reason=:performance_anchor_publication_failed)
+end
+function _p30_selected_anchor!(r,reference,manifest,relation)
+    anchor=r.performance_anchor
+    anchor===nothing && return false
+    anchor.failed && return false
+    try
+        _p04_check_ref(r.root,reference["manifest"])
+        raw=read(_p04_path(r.root,reference["manifest"]["path"]),String)
+        original=_p04_parse(raw)
+        _p04_require(original==manifest && all(reference[k]==original[k] for k in ("identity","state_id","state_sequence")),
+            "performance anchor original manifest differs")
+        _p04_require(original["checkpoint"]!==nothing || parse(UInt64,original["history"]["records"])>0,
+            "empty scientific state is not a performance anchor")
+        invocation=deepcopy(original["invocation"])
+        source_origin=relation=="produced" ? deepcopy(anchor.value["origin"]) : _p30_origin_from_invocation(invocation)
+        _p04_require(relation!="produced" || original["identity"]==anchor.value["phase_identity"] &&
+            invocation==anchor.value["invocation"],"produced performance anchor differs from current invocation")
+        anchor.value["scientific"]=Dict{String,Any}("artifact_root"=>".","selected_state"=>deepcopy(reference),
+            "manifest_utf8"=>raw,"invocation"=>invocation,"source_origin"=>source_origin,"relation"=>relation)
+        _p30_publish_performance_anchor!(anchor)
+    catch error
+        _p30_anchor_failed!(anchor,error)
+    end
+end
+function _p30_acknowledge_scientific!(r,pending)
+    r.performance_anchor===nothing && return nothing
+    (pending===nothing || pending.manifest_ref===nothing) && return nothing
+    try
+        path=_p04_path(r.root,_p04_relative(r.root,joinpath(r.directory,"current.json")))
+        isfile(path) || return nothing # recovery-only reconciliation is not a current anchor
+        pointer=_p04_parse(read(path,String))
+        pointer["manifest"]==pending.manifest_ref && pointer["identity"]==r.identity &&
+            pointer["generation"]==pending.manifest["generation"] || return nothing
+        reference=Dict{String,Any}("identity"=>deepcopy(r.identity),"state_id"=>pending.manifest["state_id"],
+            "state_sequence"=>pending.manifest["state_sequence"],"manifest"=>deepcopy(pending.manifest_ref))
+        _p30_selected_anchor!(r,reference,pending.manifest,"produced")
+    catch error
+        _p30_anchor_failed!(r.performance_anchor,error)
+    end
+    nothing
+end
+function _p30_borrowed_anchor!(r,parent::VerifiedExactCheckpoint)
+    r.performance_anchor===nothing && return false
+    try
+        _p04_require(r.parent===parent && parent.root==r.root,"borrowed source is not the selected verified parent")
+        _p30_selected_anchor!(r,checkpoint_reference(parent),_p04_parse(parent.manifest_json),"borrowed")
+    catch error
+        _p30_anchor_failed!(r.performance_anchor,error)
+    end
+end
+
 # Native5 publication uses new immutable files only; it never traverses old payloads.
 function _p04_validate_status(status;final_input::Bool=false)
     records=final_input ? ("discretization","experimental") : ("convergence","physics","discretization","experimental")
@@ -133,8 +323,10 @@ function _p04_pointer!(r,relative,manifest,reference)
     nothing
 end
 function _p04_ack_history!(r,pin,page,generation)
+    pending=r.pending
     r.pin=deepcopy(pin);r.page=page;r.publication=generation;empty!(r.buffer);r.buffer_bytes=0
-    r.last_flush_ns=UInt64(r.clock_ns());r.pending=nothing;r.failed=false;_p04_trim_verified!(r);nothing
+    r.last_flush_ns=UInt64(r.clock_ns());r.pending=nothing;r.failed=false;_p04_trim_verified!(r)
+    _p30_acknowledge_scientific!(r,pending);nothing
 end
 function _p04_reconcile!(r)
     pending=r.pending

@@ -437,4 +437,38 @@ end
     end
 end
 
+@testset "Phase0 anchor retains sealed original phase bytes before any scientific state" begin
+    o=observer("phase0-anchor")
+    path=joinpath(o.root,"performance-anchor-current.json")
+    origin=(calcjob_uuid="11111111-1111-1111-1111-111111111111",native_execution_uuid="22222222-2222-2222-2222-222222222222")
+    R._p30_begin_performance_anchor(o.root,path,identity(),R._phase_source_descriptor(o),origin)
+    @test R._enqueue_phase!(o,event(:phase_end,10,20))
+    @test timedwait(()->o.publication!==nothing,5)==:ok
+    original=Dict(name=>read(joinpath(o.directory,name)) for name in readdir(o.directory) if startswith(name,"segment-"))
+    head=deepcopy(load(joinpath(o.directory,"phase-current.json"))["publication"])
+    a=load(path)
+    @test a["phase_identity"]==identity() && a["invocation"]===nothing && a["scientific"]===nothing
+    @test a["phase_source"]["session_id"]=="session" && a["origin"]["calcjob_uuid"]==origin.calcjob_uuid
+    @test !ispath(joinpath(o.root,"current.json"))
+    unmeasured()=Dict("state"=>"not_measured","reason"=>"not_executed","evidence"=>nothing)
+    status=Dict("process"=>Dict("state"=>"running","exit_code"=>nothing,"reason"=>nothing),
+        (name=>unmeasured() for name in ("convergence","physics","discretization","experimental"))...)
+    provenance=Dict("format"=>"qcl-negf.git-graph.v1","revision"=>"a"^40,"components"=>Any[])
+    r=R.ScientificHistoryRecorder(joinpath(o.root,"science");artifact_root=o.root,identity=identity(),
+        source_epoch="phase0-epoch",provenance,status,maximum_scba_rows=1,performance_anchor_path=path)
+    @test load(path)["invocation"]==Dict("source_epoch"=>"phase0-epoch") && load(path)["scientific"]===nothing
+    row=C.SCBAIteration(1,ntuple(_->0.0,16)...,nothing,nothing)
+    snapshot=C.ScientificHistorySnapshot(;stage=:scba,domain_revision=0,discretization_id="grid",basis_id="basis",
+        outer_iteration=1,inner_iteration=1,sequence=1,converged=false,status=:running,quality=:unresolved,
+        strict_streak=0,diagnostic_streak=0,row,action=:append)
+    R.record_scientific_history!(r,snapshot);R.flush_scientific_history!(r)
+    a=load(path)
+    @test a["scientific"]!==nothing && a["phase_identity"]==identity()
+    @test a["phase_source"]["session_id"]=="session"
+    @test load(joinpath(o.directory,"phase-current.json"))["publication"]==head
+    @test all(read(joinpath(o.directory,name))==raw for (name,raw) in original)
+    finish(o)
+    @test all(read(joinpath(o.directory,name))==raw for (name,raw) in original)
+end
+
 end
