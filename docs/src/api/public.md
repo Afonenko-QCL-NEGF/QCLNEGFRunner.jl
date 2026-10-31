@@ -40,6 +40,10 @@ ScientificHistoryRecorder
 open_exact_checkpoint
 load_exact_solver_state
 commit_exact_checkpoint!
+publish_final_point_request!
+commit_final!
+verify_final_artifacts
+publish_native_selection!
 MethodDescriptor
 MethodPoint
 MethodRun
@@ -56,7 +60,6 @@ production_options
 algorithm_options
 configuration_output_directory
 configure_execution!
-build_configured_problem
 run_from_configuration
 run_comparison_study
 run_convergence_study
@@ -90,6 +93,12 @@ generate_expert_report
 plot_method_comparison
 save_production_study_plots
 ```
+
+`build_configured_problem(configuration::ResolvedRunConfiguration)` performs a memory preflight,
+then builds the configured scattering problem and returns a `ConfiguredProblem` with kernel
+diagnostics and a memory estimate. The configured direct or tabulated kernel construction and
+the later solver backend are separate choices. See the Core [optimization decision tree](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md)
+and [microscopic kernels](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md).
 
 ## Extension contracts
 
