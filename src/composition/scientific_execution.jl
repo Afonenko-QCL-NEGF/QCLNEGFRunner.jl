@@ -588,6 +588,7 @@ function execute_scientific_plan(
     parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
     phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
     native_origin=nothing,
+    model_help_mirror=nothing,
 )
     native_origin=_native_origin_ids(native_origin)
     _scientific_resource_preflight(resource_policy,envelope)
@@ -607,6 +608,7 @@ function execute_scientific_plan(
     margin_context!==nothing && any(e->e.operation!==:stationary,selected_executions) &&
         _resource_unavailable("runtime_margin_operation_unsupported")
     isempty(selected_executions) && throw(ArgumentError("unknown selected execution"))
+    help_budget=_ModelHelpBudget(sum(length(e.point_ids) for e in selected_executions if e.operation===:stationary))
     selected_ids=Set(e.id for e in selected_executions)
     selected_points=[p for p in plan.points if p.execution_id in selected_ids]
     if parent_checkpoint !== nothing
@@ -1159,10 +1161,12 @@ function execute_scientific_plan(
                     QCLNEGF.restore_completed_solution(restored;revalidation=:selected_map,
                         independent_oracle=:if_supported)
                 elseif restored !== nothing
+                    _model_help_capture!(help_budget,directory,problem,runtime_options,plan_binding,point,identity;mirror=model_help_mirror)
                     solve_adaptive_production(problem;restart=restored,
                         observation_sink=event_sink,checkpoint_context_sink=callbacks.checkpoint_context_sink,
                         history_observer=callbacks.history_observer)
                 elseif config.execution.solver_backend===:production
+                    _model_help_capture!(help_budget,directory,problem,runtime_options,plan_binding,point,identity;mirror=model_help_mirror)
                     solve_adaptive_production(problem;domain_adaptation=config.domain_adaptation,
                         kernel_options=config.kernels,options=config.solver,
                         production_options=runtime_options,execution=exact_capture.execution,

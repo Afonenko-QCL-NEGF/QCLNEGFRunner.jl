@@ -384,3 +384,45 @@ a producer, retrieval or scientific acceptance. The stationary/configured entry
 qualification fences remain. This increment adds neither scratch/recovery import
 nor capture ingress. The later transport packet remains five files total: result,
 selection, owner-close projection and the two stock scheduler logs.
+
+## [Actual solver input help](@id solver-input-help)
+
+The optional `model-help-inputs.json` records eight scalar inputs immediately before an actual
+stationary solver call, after successful exact-state restoration when applicable. It records
+`runtime_options.energy_chunk` and the actual problem's lattice and LO temperatures, interface
+roughness height and correlation length, impurity and LO screening wavenumbers, and LO phonon
+energy. The canonical transport units are `1`, `K`, `nm`, `nm^-1` and `meV`. The adapter uses explicit
+Unitful conversion; it does not reconstruct values from a default, preview or frozen configuration.
+
+A completed final-state restore, skipped point, operator diagnostic or failed preparation/restore
+creates no new solver input capture. The local point attempt belongs to this solver entry; a native
+transport attempt and a source checkpoint attempt remain separate identities. The retained frozen
+plan bytes, its raw point passport configuration hash and the P05 model binding retain their
+existing meanings and encodings.
+
+The first capture leaves declared values, assigning sources and effective origins unknown, and
+retains no value-origin receipts. Equal numbers do not establish an origin. Missing reference
+values use the coordinated Contracts nullable reference branch; this does not mean a known null
+physical value. Unsupported nonfinite values or integers outside the safe transport subset remain
+unknown without changing the solver argument. Finite binary64 values retain signed zero.
+
+Each immutable Snapshot is limited to 64 KiB. Capture admits at most the selected frozen point
+count or 10000 entries, whichever is smaller, and at most 8 MiB of Snapshot bytes per invocation.
+Encoding, temporary publication and an optional native mirror receive separate finite byte credits
+before work; these are metadata accounting bounds, not a claim about measured process RSS.
+Publication syncs closed bytes and uses exclusive hard links; an existing Snapshot is never replaced.
+Expected optional help I/O failures leave science unchanged. Cancellation and primary failures
+remain visible. A failed help publication can leave a closed immutable file pending readback.
+
+Ordinary result-tree staging includes this metadata. Native CLI can mirror exactly the same closed
+bytes only into a newly born `result/executions/E/P/attempt-N/model-help-inputs.json` namespace of
+the already verified original job workdir. Existing namespaces of unknown ownership disable the
+mirror; no arrays are copied. Native retrieval, creator/source association, public mapping and
+installed path preservation require their separate owning gates. The stationary execution fence
+remains active until those integrations qualify. A valid help Snapshot is engineering input
+evidence; it does not establish convergence, physical accuracy or experimental agreement.
+
+`docs/help/fragments.json` is an authoring array of existing Fragment templates. It intentionally
+omits source revision and source hashes. Root enriches only the named reference slots using the
+retained source graph before public validation and publication. This authoring file is not itself
+a public Fragment or a runtime source of scientific values.

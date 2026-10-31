@@ -1,0 +1,770 @@
+[
+  {
+    "format": "qcl-negf.model-help-fragment.v1",
+    "id": "runner.actual-solver-inputs",
+    "title": "Actual stationary solver inputs",
+    "summary": "Eight actual passed scalar inputs with explicit units and honest unknown origins.",
+    "scope": "baseline",
+    "meaning_source": {
+      "component": "components/QCLNEGFRunner.jl",
+      "path": "docs/src/user/results.md",
+      "selector": {
+        "kind": "file",
+        "value": ""
+      }
+    },
+    "full": {
+      "section": "runner",
+      "path": "user/results.html",
+      "anchor": "solver-input-help"
+    },
+    "related": [],
+    "equations": [],
+    "inputs": [
+      {
+        "path": "production.energy_chunk",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/0"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: runtime_options.energy_chunk.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: 1.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      },
+      {
+        "path": "physical.lattice_temperature",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/1"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: problem.physical.Tᴸ.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: K.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      },
+      {
+        "path": "physical.lo_temperature",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/2"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: problem.physical.Tᴸᴼ.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: K.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      },
+      {
+        "path": "physical.interface_roughness_height",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/3"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: problem.physical.Δᴵᶠᴿ.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: nm.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      },
+      {
+        "path": "physical.interface_correlation_length",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/4"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: problem.physical.Λᴵᶠᴿ.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: nm.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      },
+      {
+        "path": "physical.impurity_screening_wavenumber",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/5"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: problem.physical.q_s.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: nm^-1.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      },
+      {
+        "path": "physical.lo_screening_wavenumber",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/6"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: problem.physical.qᴸᴼ_s.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: nm^-1.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      },
+      {
+        "path": "physical.lo_phonon_energy",
+        "schema_source": {
+          "component": "components/QCLNEGFRunner.jl",
+          "path": "docs/help/fragments.json",
+          "selector": {
+            "kind": "json_pointer",
+            "value": "/0/inputs/7"
+          }
+        },
+        "facts": [
+          {
+            "name": "signature",
+            "status": "known",
+            "text": "Actual passed input: problem.physical.ħωᴸᴼ.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "units",
+            "status": "known",
+            "text": "Canonical transport unit: meV.",
+            "sources": [
+              {
+                "component": "components/QCLNEGFRunner.jl",
+                "path": "src/infrastructure/scientific/model_help.jl",
+                "selector": {
+                  "kind": "symbol",
+                  "value": "_model_help_inputs"
+                }
+              }
+            ]
+          },
+          {
+            "name": "default",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "constraint",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effects",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "errors",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "formula_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "value_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "assigning_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          },
+          {
+            "name": "effective_origin",
+            "status": "unknown",
+            "text": null,
+            "sources": []
+          }
+        ],
+        "reference_value_origin": null
+      }
+    ],
+    "api": [],
+    "assumptions": [
+      "Capture occurs only at an actual solver entry after successful restoration when required."
+    ],
+    "limitations": [
+      "Declared inputs, assigning sources, effective origins and reference value origins are not retained by this capture.",
+      "A Snapshot does not establish scientific acceptance."
+    ]
+  }
+]
