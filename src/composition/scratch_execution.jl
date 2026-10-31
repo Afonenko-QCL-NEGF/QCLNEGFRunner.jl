@@ -21,6 +21,7 @@ function _native_origin_inputs(plan_path,graph_path,native_path,output,calcjob_u
         actual=abspath(path)
         _p04_require(actual==joinpath(job,name) && isfile(actual) && !islink(actual),"native original input path differs")
         file=Base.Filesystem.open(actual,Base.JL_O_RDONLY|Base.JL_O_NOFOLLOW|Base.JL_O_NONBLOCK)
+        primary=nothing
         try
             before=stat(file)
             _p04_require(isfile(before) && before.nlink==1 && before.size<=cap,"native original input exceeds bound or is aliased")
@@ -29,8 +30,15 @@ function _native_origin_inputs(plan_path,graph_path,native_path,output,calcjob_u
                 _p04_stat(before)==_p04_stat(stat(file)) && !islink(actual) &&
                 _p04_stat(before)==_p04_stat(stat(actual)) && realpath(job)==job,"native original input changed")
             raw
+        catch error
+            primary=error;rethrow()
         finally
-            close(file)
+            try
+                close(file)
+            catch secondary
+                primary===nothing && rethrow()
+                @warn "native original input close uncertain; original exception retained" exception=secondary
+            end
         end
     end
     plan_raw=original(plan_path,"plan.json",plan_cap)
@@ -95,15 +103,25 @@ function _capture_context(plan, output, execution_id, attempt;
         end
         raw=open(io->read(io,16385),path); length(raw)<=16384 || return nothing
         spec=native_mode ? _p04_parse(String(raw)) : YAML.load(String(raw);dicttype=Dict{String,Any})
-        Set(keys(spec))==Set(["schema","selection","plan","capture_token","allocation_id","allocated_logical_cpus","scratch_root","credits"]) &&
-            spec["schema"]=="qcl-negf.capture-spec.v1" || return nothing
+        spec isa AbstractDict || return nothing
+        fields=["schema","selection","plan","capture_token","allocation_id","allocated_logical_cpus","scratch_root","credits"]
+        if native_mode
+            push!(fields,"native_performance")
+            Set(keys(spec))==Set(fields) && spec["schema"]=="qcl-negf.capture-spec.v3" || return nothing
+            performance=spec["native_performance"]
+            performance isa AbstractDict && Set(keys(performance))==Set(["run_uuid"]) &&
+                _native_origin_uuid(performance["run_uuid"]) || return nothing
+            native_origin!==nothing || return nothing
+        else
+            Set(keys(spec))==Set(fields) && spec["schema"]=="qcl-negf.capture-spec.v1" || return nothing
+        end
         selection=spec["selection"]
         Set(keys(selection))==Set(["calcjob_uuid","execution_id","attempt","plan_fingerprint"]) || return nothing
         selection["calcjob_uuid"] isa String && occursin(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",selection["calcjob_uuid"]) || return nothing
         native_origin===nothing || selection["calcjob_uuid"]==native_origin.calcjob_uuid || return nothing
         transport_attempt=selection["attempt"]
         if native_mode
-            transport_attempt isa Int && !(transport_attempt isa Bool) && transport_attempt>=1 || return nothing
+            transport_attempt isa Int && !(transport_attempt isa Bool) && 1<=transport_attempt<=9007199254740991 || return nothing
         else
             transport_attempt===attempt || return nothing
         end
@@ -165,7 +183,19 @@ function _capture_context(plan, output, execution_id, attempt;
             all(v isa Int && !(v isa Bool) for v in values(credits)) &&
             16384<=credits["io_bytes"]<=128*1024^2 && credits["reserve_bytes"]>=0 || return nothing
         credits["performance_bytes"]==32*1024^2 && credits["scalar_bytes"]==64*1024^2 || return nothing
-        return (path=joinpath(job,"capture-source.json"),token=token,execution_id=execution_id,fingerprint=plan.fingerprint)
+        context=(path=joinpath(job,"capture-source.json"),token=token,execution_id=execution_id,fingerprint=plan.fingerprint)
+        if native_mode
+            # Repeat the mandatory bounded original-file validation for a caller
+            # entering this private context directly; optional failure stays off.
+            origin=_native_origin_inputs(expected_plan,source_graph_path,native_execution_path,output,
+                native_origin.calcjob_uuid,execution_id;frozen_plan_bytes=Vector{UInt8}(plan_raw))
+            origin==native_origin || return nothing
+            relative=native["storage"]["relative_execution_root"]
+            anchor=chop(String(output);tail=length(relative)+1)
+            return merge(context,(native3=true,output=String(output),jobs_anchor=anchor,relative=String(relative),
+                native_origin=origin,run_uuid=spec["native_performance"]["run_uuid"]))
+        end
+        return context
     catch error
         error isa InterruptException && rethrow()
         return nothing # Optional metadata failure never changes scientific status.
@@ -187,6 +217,7 @@ end
 
 function _capture_locator(context,mode,actual,epoch)
     context===nothing && return nothing
+    _native_capture3(context) && throw(ArgumentError("native3 locator requires held birth"))
     try
         document=Dict("schema"=>"qcl-negf.capture-source.v1","capture_token"=>context.token,
             "execution_id"=>context.execution_id,"plan_fingerprint"=>context.fingerprint,
@@ -198,6 +229,215 @@ function _capture_locator(context,mode,actual,epoch)
         error isa InterruptException && rethrow()
     end
     return nothing
+end
+
+# Native3 is deliberately separate from ordinary best-effort observation. A
+# local birth assertion is conditional on the owning native writer domain; it
+# does not authenticate AiiDA/Code or confer authority on an arbitrary pathname.
+_native_capture3(context)=context!==nothing && hasproperty(context,:native3) && context.native3===true
+_native_capture_stamp(s)=(s.device,s.inode,s.uid,s.gid,s.mode)
+_native_capture_stat(fd::Cint)=stat(RawFD(fd))
+
+mutable struct _NativeCaptureBirth
+    # Each selected name is anchored to the preceding held parent (AT_FDCWD
+    # only for /). Mutable directory timestamps/nlink are intentionally absent.
+    directories::Vector{Any}
+    identity::Dict{String,String}
+    locator_raw::Union{Nothing,Vector{UInt8}}
+    closed::Bool
+end
+
+function _native_capture_openat(parent::Cint,name)
+    ccall(:openat,Cint,(Cint,Cstring,Cint),parent,name,
+        Base.JL_O_RDONLY|Base.JL_O_DIRECTORY|Base.JL_O_NOFOLLOW|Base.JL_O_CLOEXEC)
+end
+function _native_capture_process()
+    Sys.islinux() || throw(ArgumentError("native3 birth requires Linux identity"))
+    boot=String(strip(open(io->read(io,129),"/proc/sys/kernel/random/boot_id") |> String))
+    _p04_require(_native_origin_uuid(boot),"native3 boot identity unavailable")
+    raw=open(io->read(io,4097),"/proc/self/stat")
+    _p04_require(length(raw)<=4096,"native3 process identity exceeds bound")
+    text=String(raw);last=findlast(')',text)
+    _p04_require(last!==nothing,"native3 process generation unavailable")
+    fields=split(text[nextind(text,last):end])
+    _p04_require(length(fields)>=20,"native3 process generation unavailable")
+    ticks=parse(UInt64,fields[20]);_p04_require(ticks>0,"native3 process generation unavailable")
+    ns=stat("/proc/self/ns/mnt")
+    Dict("boot_id"=>String(boot),"mount_namespace_device"=>string(ns.device),
+        "mount_namespace_inode"=>string(ns.inode),"producer_pid"=>string(getpid()),
+        "producer_start_ticks"=>string(ticks))
+end
+function _native_capture_close!(birth)
+    birth.closed && return nothing
+    birth.closed=true # Never retry a close with uncertain FD ownership.
+    failure=nothing
+    for entry in reverse(birth.directories)
+        rc=ccall(:close,Cint,(Cint,),entry.fd)
+        rc==0 || (failure===nothing && (failure=ArgumentError("native3 directory close uncertain")))
+    end
+    failure===nothing || throw(failure)
+    nothing
+end
+function _native_capture_named_stamp(parent,name)
+    named=_native_capture_openat(parent,name)
+    named>=0 || throw(ArgumentError("native3 selected directory disappeared"))
+    primary=nothing
+    try
+        _native_capture_stamp(_native_capture_stat(named))
+    catch error
+        primary=error;rethrow()
+    finally
+        if ccall(:close,Cint,(Cint,),named)!=0
+            primary===nothing && throw(ArgumentError("native3 validation close uncertain"))
+            @warn "native3 validation close uncertain; original exception retained"
+        end
+    end
+end
+function _native_capture_hold!(birth,parent::Cint,name;create=false,fresh=false)
+    fd=Cint(-1);created=false
+    if fresh
+        # EEXIST is a refusal, including our own empty directory from any prior
+        # invocation. Never chmod, adopt, remove or repair that object.
+        ccall(:mkdirat,Cint,(Cint,Cstring,Cuint),parent,name,0o700)==0 ||
+            throw(ArgumentError("native3 fresh root birth refused"))
+        created=true
+    end
+    fd=_native_capture_openat(parent,name)
+    if fd<0 && create && !fresh && Base.Libc.errno()==2 # ENOENT only, not ELOOP/EACCES.
+        ccall(:mkdirat,Cint,(Cint,Cstring,Cuint),parent,name,0o700)==0 ||
+            throw(ArgumentError("native3 parent birth uncertain"))
+        created=true;fd=_native_capture_openat(parent,name)
+    end
+    fd>=0 || throw(ArgumentError("native3 nofollow directory open refused"))
+    # Transfer ownership immediately so failures below unwind this FD too.
+    push!(birth.directories,(;fd,parent,name=String(name),stamp=nothing))
+    s=_native_capture_stat(fd)
+    birth.directories[end]=(;fd,parent,name=String(name),stamp=_native_capture_stamp(s))
+    uid=ccall(:geteuid,Cuint,());gid=ccall(:getegid,Cuint,())
+    _p04_require(isdir(s) && (s.uid==uid || s.uid==0) && s.mode & 0o022==0,
+        "native3 directory owner/mode refused")
+    if created
+        _p04_require(s.uid==uid && s.gid==gid && s.mode & 0o7777==0o700,"native3 born directory credentials differ")
+        ccall(:fsync,Cint,(Cint,),fd)==0 && ccall(:fsync,Cint,(Cint,),parent)==0 ||
+            throw(ArgumentError("native3 directory durability uncertain"))
+    end
+    _p04_require(_native_capture_named_stamp(parent,name)==_native_capture_stamp(s),
+        "native3 selected directory rebound")
+    fd
+end
+function _native_capture_chain!(birth,path)
+    _p04_require(isabspath(path) && normpath(path)==path && ncodeunits(path)<=4096,
+        "native3 anchor path is not canonical")
+    fd=_native_capture_hold!(birth,Cint(-100),"/") # AT_FDCWD, explicit absolute root.
+    for part in split(path,'/';keepempty=false)
+        fd=_native_capture_hold!(birth,fd,part)
+    end
+    fd
+end
+function _native_capture_validate(birth)
+    _p04_require(!birth.closed,"native3 birth handle is closed")
+    process=_native_capture_process()
+    _p04_require(all(process[k]==birth.identity[k] for k in keys(process)),"native3 producer namespace/generation changed")
+    for entry in birth.directories
+        _p04_require(_native_capture_stamp(_native_capture_stat(entry.fd))==entry.stamp,
+            "native3 held directory credentials changed")
+        _p04_require(_native_capture_named_stamp(entry.parent,entry.name)==entry.stamp,
+            "native3 selected directory rebound")
+    end
+    nothing
+end
+function _native_capture_birth(context,output)
+    _p04_require(_native_capture3(context) && output==context.output,"native3 literal output differs")
+    _p04_require(ccall(:geteuid,Cuint,())!=0,"native3 requires original nonroot worker")
+    birth=_NativeCaptureBirth(Any[],_native_capture_process(),nothing,false)
+    try
+        # The original workdir remains a separate held namespace for the fixed
+        # locator. It does not become the technical/scientific result root.
+        _native_capture_chain!(birth,dirname(context.path))
+        anchor=_native_capture_chain!(birth,context.jobs_anchor)
+        device=_native_capture_stat(anchor).device
+        parts=split(context.relative,'/')
+        parent=anchor
+        for (i,part) in enumerate(parts)
+            parent=_native_capture_hold!(birth,parent,part;create=true,fresh=i==length(parts))
+            _p04_require(_native_capture_stat(parent).device==device,"native3 result mount mapping differs")
+        end
+        root=_native_capture_stat(parent)
+        birth.identity["device"]=string(root.device);birth.identity["inode"]=string(root.inode)
+        _native_capture_validate(birth)
+        birth
+    catch
+        try _native_capture_close!(birth) catch secondary
+            @warn "native3 birth cleanup uncertain; original exception retained" exception=secondary
+        end
+        rethrow()
+    end
+end
+function _native_capture_locator!(birth,context)
+    _native_capture_validate(birth)
+    document=Dict("schema"=>"qcl-negf.capture-source.v3","capture_token"=>context.token,
+        "execution_id"=>context.execution_id,"plan_fingerprint"=>context.fingerprint,
+        "mode"=>"direct","actual_root"=>context.output,"epoch"=>0,"root_birth"=>birth.identity)
+    io=IOBuffer();_light_json(io,document);println(io);raw=take!(io)
+    _p04_require(length(raw)<=16384,"native3 locator exceeds byte limit")
+    first=birth.locator_raw===nothing
+    if first
+        _p04_require(!ispath(context.path) && !islink(context.path),"native3 existing locator is uncertain")
+        birth.locator_raw=copy(raw)
+    else
+        _p04_require(raw==birth.locator_raw,"native3 retry changed locator bytes")
+    end
+    # A retry can only publish/read back these exact bytes for this held birth;
+    # it cannot call mkdir again or reconstruct a handle from a pathname/token.
+    if !ispath(context.path) && !islink(context.path)
+        QCLScientificWorkflow._scientific_json(context.path,document)
+    end
+    _native_capture_validate(birth)
+    file=Base.Filesystem.open(context.path,Base.JL_O_RDONLY|Base.JL_O_NOFOLLOW|Base.JL_O_NONBLOCK)
+    primary=nothing
+    try
+        before=stat(file)
+        _p04_require(isfile(before) && before.nlink==1 && before.size==length(raw),"native3 locator shape differs")
+        observed=read(file,16385)
+        _p04_require(observed==raw && _p04_stat(before)==_p04_stat(stat(file)) &&
+            !islink(context.path) && _p04_stat(before)==_p04_stat(stat(context.path)),
+            "native3 locator readback uncertain")
+    catch error
+        primary=error;rethrow()
+    finally
+        try
+            close(file)
+        catch secondary
+            primary===nothing && rethrow()
+            @warn "native3 locator close uncertain; original exception retained" exception=secondary
+        end
+    end
+    _native_capture_validate(birth)
+    nothing
+end
+function _with_native_capture_birth(effect,context,output)
+    birth=_native_capture_birth(context,output)
+    primary=nothing
+    try
+        _native_capture_locator!(birth,context)
+        _native_capture_validate(birth)
+        result=effect()
+        _native_capture_validate(birth)
+        result
+    catch error
+        primary=error;rethrow()
+    finally
+        try
+            try
+                _native_capture_validate(birth)
+            finally
+                _native_capture_close!(birth)
+            end
+        catch secondary
+            primary===nothing && rethrow()
+            @warn "native3 final validation/close uncertain; original exception retained" exception=secondary
+        end
+    end
 end
 
 function _validate_staging_tree(root::AbstractString)
@@ -364,6 +604,13 @@ function execute_scientific_plan_staged(
     source_graph=_require_source_graph(source_graph)
     recovery_bundle === nothing || throw(ArgumentError("unsupported_format: legacy recovery bundle"))
     parent_checkpoint === nothing || _p05_parent_root_check(parent_checkpoint,output)
+    native3=_native_capture3(capture_context)
+    if native3
+        _p04_require(native_origin!==nothing && native_origin==capture_context.native_origin &&
+            output==capture_context.output && attempt===nothing && scratch_root===nothing &&
+            parent_checkpoint===nothing && recovery_bundle===nothing && archive_bundle===nothing,
+            "native3 requires original direct execution without imports")
+    end
     selected=[e for e in plan.executions if execution_id===nothing || e.id==execution_id]
     if capture_context!==nothing && !isempty(selected)
         try
@@ -383,6 +630,11 @@ function execute_scientific_plan_staged(
     capture_reserve_bytes==0 && (capture_context=nothing)
     if scratch_root===nothing || any(e.outputs.recovery.enabled for e in plan.executions if execution_id===nothing || e.id==execution_id)
         scratch_root===nothing || @warn "portable recovery publishes directly to output storage; scratch staging is disabled for this execution"
+        if _native_capture3(capture_context)
+            return _with_native_capture_birth(capture_context,output) do
+                execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy,native_origin)
+            end
+        end
         _capture_locator(capture_context,:direct,output,0)
         return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy,native_origin)
     end

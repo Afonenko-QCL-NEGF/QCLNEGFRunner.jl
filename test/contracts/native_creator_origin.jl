@@ -1,9 +1,12 @@
 module NativeCreatorOriginTests
-using Test, QCLNEGFRunner, SHA
+using Test, QCLNEGFRunner, SHA, Logging
 const R=QCLNEGFRunner
 const CALC="11111111-1111-4111-8111-111111111111"
 const INPUT="22222222-2222-4222-8222-222222222222"
 const OTHER="33333333-3333-4333-8333-333333333333"
+mutable struct Native3ScientificFailure <: Exception
+    marker::Int
+end
 const GRAPH_RAW="\n{\"format\":\"qcl-negf.git-graph.v1\",\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"components\":[]}\n"
 const PLAN_RAW=" \n{\"fingerprint\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"executions\":[{\"id\":\"E\"}]}\r\n"
 
@@ -26,13 +29,33 @@ include(joinpath(@__DIR__,"..","..","src","cli.jl"))
 end
 
 module OriginStaged
+import QCLNEGFRunner as R
 import QCLNEGFRunner: ScientificPlan, ExecutionEnvelope, VerifiedExactCheckpoint, PhaseObservationPolicy,
     _P05PlanCapture, _native_origin_ids, default_execution_envelope,
-    _scientific_resource_preflight, _require_source_graph
+    _scientific_resource_preflight, _require_source_graph, _p04_require, _native_origin_uuid,
+    _p04_json, _p04_parse, _light_json, _storage_bytes, _storage_available,
+    _storage_budget_used, _storage_free_permit, _p04_stat, sha256
+const QCLScientificWorkflow=R.QCLScientificWorkflow
+const effect=Ref{Function}((output,kw)->:sentinel_exit)
 const calls=Any[]
 # Actual staging dispatch, with only the downstream scientific compute replaced.
-execute_scientific_plan(plan,output;kwargs...)=(push!(calls,(output,(;kwargs...)));:sentinel_exit)
+execute_scientific_plan(plan,output;kwargs...)=(push!(calls,(output,(;kwargs...)));effect[](output,(;kwargs...)))
 include(joinpath(@__DIR__,"..","..","src","composition","scratch_execution.jl"))
+end
+
+# Include the actual owning source; only the stability callback is replaced.
+# Faults close the sole fixture-owned regular-file FD without descriptor reuse.
+module OriginCloseFault
+import QCLNEGFRunner as R
+import QCLNEGFRunner: ScientificPlan, ExecutionEnvelope, VerifiedExactCheckpoint, PhaseObservationPolicy,
+    _P05PlanCapture, _native_origin_ids, default_execution_envelope,
+    _scientific_resource_preflight, _require_source_graph, _p04_require, _native_origin_uuid, _p04_id, _p04_keys,
+    _p04_json, _p04_parse, _light_json, _storage_bytes, _storage_available,
+    _storage_budget_used, _storage_free_permit, sha256
+const QCLScientificWorkflow=R.QCLScientificWorkflow
+const stat_effect=Ref{Function}(R._p04_stat)
+_p04_stat(s)=stat_effect[](s)
+include(joinpath(dirname(pathof(R)),"composition","scratch_execution.jl"))
 end
 
 function native_document(;plan_raw=PLAN_RAW,graph_raw=GRAPH_RAW)
@@ -61,6 +84,320 @@ read_origin(x;kwargs...)=R._native_origin_inputs(x.plan,x.graph,x.native,x.outpu
 # Trailing JSON whitespace changes the whole raw claim, without changing the
 # parsed document or shortening provenance in a real scientific plan.
 pad_json(raw,bytes)=raw*repeat(" ",bytes-sizeof(raw))
+
+
+function native3_spec(x)
+    Dict{String,Any}("schema"=>"qcl-negf.capture-spec.v3",
+        "selection"=>Dict("calcjob_uuid"=>CALC,"execution_id"=>"E","attempt"=>7,"plan_fingerprint"=>repeat("b",64)),
+        "plan"=>Dict("path"=>"plan.json","bytes"=>sizeof(PLAN_RAW),"sha256"=>bytes2hex(sha256(PLAN_RAW))),
+        "capture_token"=>repeat("a",32),"allocation_id"=>"calcjob-process:$(CALC):7",
+        "allocated_logical_cpus"=>nothing,"scratch_root"=>nothing,"native_performance"=>Dict{String,Any}("run_uuid"=>OTHER),
+        "credits"=>Dict("performance_bytes"=>33554432,"scalar_bytes"=>67108864,"io_bytes"=>134217728,"reserve_bytes"=>0))
+end
+function native3_context(x;spec=native3_spec(x))
+    path=joinpath(x.job,"capture-spec.json");write(path,R._p04_json(spec))
+    R._capture_context((fingerprint=repeat("b",64),),x.output,"E",nothing;spec_path=path,
+        native_execution_path=x.native,source_plan_path=x.plan,source_graph_path=x.graph,
+        frozen_plan_bytes=Vector{UInt8}(codeunits(PLAN_RAW)),native_origin=read_origin(x))
+end
+function engineering_plan(;budget=1073741824,recovery=false)
+    S=R.QCLScientificWorkflow
+    outputs=S.ScientificOutputs(;recovery=S.RecoveryOutputPolicy(recovery,1800.0,2,budget,0))
+    execution=S.ScientificExecution{Nothing}("E","fixture","v","m",String[],nothing,
+        S.ScientificPolicies(),outputs,0,:diagnostic,1,:engineering,"fixture",Dict{String,Any}())
+    R.ScientificPlan{Nothing}("fixture",:run,"fixture",repeat("b",64),1,R.ScientificInclusion[],
+        [execution],R.ScientificPoint[],S.ScientificExecutionNode[])
+end
+
+
+@testset "File close preserves primary and diagnoses secondary; close alone refuses" begin
+    F=OriginCloseFault
+    for role in (:locator,:inherited_mandatory), breakclose in (false,true),
+            primary in (nothing,InterruptException(),Native3ScientificFailure(29))
+        fixture() do x
+            mkpath(joinpath(x.root,"jobs with spaces"))
+            context=native3_context(x);@test context!==nothing
+            context===nothing && return
+            before_fd=length(readdir("/proc/self/fd"));stat_calls=Ref(0);closed=Ref(0);effects=Ref(0)
+            path=role==:locator ? context.path : x.plan
+            F.stat_effect[]=s->begin
+                stat_calls[]+=1
+                # A primary is raised at the first stability callback. Without
+                # a primary, close only after the final (fourth) saved/named
+                # stamp, so the body succeeds and close itself is the refusal.
+                inject=primary!==nothing ? stat_calls[]==1 : breakclose && stat_calls[]==4
+                if inject
+                    if breakclose
+                        matches=String[]
+                        for fd in readdir("/proc/self/fd")
+                            try
+                                readlink("/proc/self/fd/"*fd)==path && push!(matches,fd)
+                            catch
+                            end
+                        end
+                        @test length(matches)==1
+                        @test ccall(:close,Cint,(Cint,),parse(Cint,only(matches)))==0
+                        closed[]+=1
+                    end
+                    primary===nothing || throw(primary)
+                end
+                R._p04_stat(s)
+            end
+            logger=Test.TestLogger(;min_level=Logging.Warn)
+            caught=try
+                Logging.with_logger(logger) do
+                    if role==:locator
+                        F._with_native_capture_birth(context,x.output) do
+                            effects[]+=1
+                            :scientific_sentinel
+                        end
+                    else
+                        F._native_origin_inputs(x.plan,x.graph,x.native,x.output,CALC,"E";
+                            frozen_plan_bytes=Vector{UInt8}(codeunits(PLAN_RAW)))
+                    end
+                end
+                nothing
+            catch error
+                error
+            finally
+                F.stat_effect[]=R._p04_stat
+            end
+            if primary!==nothing
+                @test caught===primary
+                @test effects[]==0
+                if breakclose
+                    @test any(record->get(record.kwargs,:exception,nothing) isa Base.IOError,logger.logs)
+                else
+                    @test isempty(logger.logs)
+                end
+            elseif breakclose
+                @test caught isa Base.IOError
+                @test effects[]==0
+            else
+                @test caught===nothing
+                @test effects[]==(role==:locator ? 1 : 0)
+            end
+            @test closed[]==(breakclose ? 1 : 0)
+            @test length(readdir("/proc/self/fd"))==before_fd
+            role==:inherited_mandatory && @test !ispath(x.output)
+            @test !ispath(joinpath(x.output,"manifest.json"))
+        end
+    end
+end
+
+@testset "Native3 refuses old shapes and invalid run/transport identity without birth" begin
+    fixture() do x
+        @test native3_context(x)!==nothing
+        for mutate in (d->(d["schema"]="qcl-negf.capture-spec.v1"),
+                d->(d["schema"]="qcl-negf.capture-spec.v2"),
+                d->delete!(d,"native_performance"),d->(d["native_performance"]["extra"]=true),
+                d->(d["native_performance"]["run_uuid"]="00000000-0000-0000-0000-000000000000"),
+                d->(d["native_performance"]["run_uuid"]=OTHER*"\n"),
+                d->(d["selection"]["attempt"]=9007199254740992),
+                d->(d["selection"]["attempt"]=true),d->(d["extra"]=true))
+            bad=native3_spec(x);mutate(bad)
+            @test native3_context(x;spec=bad)===nothing
+            @test !ispath(x.output) && !ispath(joinpath(x.job,"capture-source.json"))
+        end
+    end
+end
+
+@testset "Native3 actual credit precedes exclusive birth and held lifetime" begin
+    fixture() do x
+        # jobs anchor is an existing owned operand, never created from the spec.
+        mkpath(joinpath(x.root,"jobs with spaces"))
+        context=native3_context(x)
+        @test context!==nothing
+        if context!==nothing
+            origin=read_origin(x);graph=R._p04_parse(GRAPH_RAW)
+            call(;plan=engineering_plan())=OriginStaged.execute_scientific_plan_staged(plan,x.output;
+                execution_id="E",source_graph=graph,native_origin=origin,capture_context=context)
+            before_fd=length(readdir("/proc/self/fd"));empty!(OriginStaged.calls)
+            @test call(plan=engineering_plan(;budget=1))==:sentinel_exit
+            @test length(OriginStaged.calls)==1 && !ispath(x.output)
+            @test !ispath(joinpath(x.job,"capture-source.json"))
+            for schedule in (:observer_first,:science_first)
+                OriginStaged.effect[]=(output,kw)->begin
+                    locator=R._p04_parse(read(joinpath(x.job,"capture-source.json"),String))
+                    @test locator["schema"]=="qcl-negf.capture-source.v3"
+                    @test Set(keys(locator))==Set(["schema","capture_token","execution_id","plan_fingerprint","mode","actual_root","epoch","root_birth"])
+                    @test locator["actual_root"]==x.output && locator["mode"]=="direct" && locator["epoch"]===0
+                    b=locator["root_birth"]
+                    @test Set(keys(b))==Set(["boot_id","mount_namespace_device","mount_namespace_inode","producer_pid","producer_start_ticks","device","inode"])
+                    @test b["producer_pid"]==string(getpid()) && b["inode"]==string(stat(output).inode)
+                    @test b["device"]==string(stat(output).device)
+                    @test all(v isa String for v in values(b))
+                    @test b["boot_id"]==strip(read("/proc/sys/kernel/random/boot_id",String))
+                    @test b["mount_namespace_inode"]==string(stat("/proc/self/ns/mnt").inode)
+                    @test stat(output).mode & 0o7777==0o700
+                    @test length(readdir("/proc/self/fd"))>before_fd
+                    schedule==:science_first && mkdir(joinpath(output,"science-child"))
+                    observed=Base.Filesystem.open(output,Base.JL_O_RDONLY|Base.JL_O_NOFOLLOW|Base.JL_O_DIRECTORY)
+                    try
+                        @test string(stat(observed).inode)==b["inode"]
+                        schedule==:observer_first && mkdir(joinpath(output,"science-child"))
+                    finally
+                        close(observed)
+                    end
+                    :sentinel_exit
+                end
+                @test call()==:sentinel_exit
+                @test length(readdir("/proc/self/fd"))==before_fd
+                @test isdir(x.output) && !ispath(joinpath(x.output,"manifest.json"))
+                # A second invocation cannot reconstruct/adopt the born root.
+                count=length(OriginStaged.calls)
+                @test_throws ArgumentError call()
+                @test length(OriginStaged.calls)==count
+                rm(x.output;recursive=true);rm(joinpath(x.job,"capture-source.json"))
+            end
+            OriginStaged.effect[]=(output,kw)->:sentinel_exit
+        end
+    end
+end
+
+@testset "Native3 nofollow EEXIST replacement locator uncertainty and primary unwind" begin
+    fixture() do x
+        mkpath(joinpath(x.root,"jobs with spaces"))
+        context=native3_context(x);@test context!==nothing
+        if context!==nothing
+            graph=R._p04_parse(GRAPH_RAW);origin=read_origin(x)
+            call()=OriginStaged.execute_scientific_plan_staged(engineering_plan(),x.output;
+                execution_id="E",source_graph=graph,native_origin=origin,capture_context=context)
+            fd_before=length(readdir("/proc/self/fd"));empty!(OriginStaged.calls)
+            mkdir(joinpath(x.root,"jobs with spaces","native"));mkdir(x.output)
+            @test_throws ArgumentError call() # even our own empty final is never adopted
+            @test isempty(OriginStaged.calls) && isempty(readdir(x.output))
+            rm(x.output);rm(dirname(x.output))
+            alien=mkpath(joinpath(x.root,"alien"));symlink(alien,dirname(x.output))
+            @test_throws ArgumentError call()
+            @test isempty(readdir(alien)) && isempty(OriginStaged.calls)
+            rm(dirname(x.output))
+            # Actual atomic publication fails against a directory; science never starts.
+            locator=joinpath(x.job,"capture-source.json");mkdir(locator)
+            @test_throws Exception call()
+            @test isempty(OriginStaged.calls) && isdir(x.output)
+            @test length(readdir("/proc/self/fd"))==fd_before
+            rm(locator);rm(x.output)
+            # A cancellation retains its identity even when final named validation fails.
+            for primary in (InterruptException(),Native3ScientificFailure(17))
+                OriginStaged.effect[]=(output,kw)->begin
+                    mv(output,output*"-old");mkdir(output)
+                    throw(primary)
+                end
+                caught=try call();nothing catch e;e end
+                @test caught===primary && isdir(x.output*"-old") && isdir(x.output)
+                @test length(readdir("/proc/self/fd"))==fd_before
+                rm(x.output);rm(x.output*"-old");rm(locator)
+            end
+            # Without a primary exception, late replacement must refuse successful return.
+            OriginStaged.effect[]=(output,kw)->(mv(output,output*"-old");mkdir(output);:sentinel_exit)
+            @test_throws ArgumentError call()
+            @test length(readdir("/proc/self/fd"))==fd_before
+            OriginStaged.effect[]=(output,kw)->:sentinel_exit
+        end
+    end
+end
+
+
+@testset "Native3 exact same-handle locator retry refuses changed bytes and closes once" begin
+    fixture() do x
+        mkpath(joinpath(x.root,"jobs with spaces"))
+        context=native3_context(x);@test context!==nothing
+        if context!==nothing
+            fd_before=length(readdir("/proc/self/fd"))
+            birth=R._native_capture_birth(context,x.output)
+            try
+                R._native_capture_locator!(birth,context)
+                locator=joinpath(x.job,"capture-source.json");raw=read(locator)
+                inode=stat(x.output).inode
+                @test R._native_capture_locator!(birth,context)===nothing
+                @test read(locator)==raw && stat(x.output).inode==inode
+                @test_throws ArgumentError R._native_capture_locator!(birth,merge(context,(token=repeat("f",32),)))
+                @test read(locator)==raw
+                write(locator,vcat(raw,UInt8[0x20]))
+                @test_throws ArgumentError R._native_capture_locator!(birth,context)
+                @test stat(x.output).inode==inode
+                # A held descriptor is not authority for a rebound selected name.
+                mv(dirname(x.output),dirname(x.output)*"-old");mkdir(dirname(x.output))
+                @test_throws ArgumentError R._native_capture_validate(birth)
+            finally
+                R._native_capture_close!(birth)
+                @test R._native_capture_close!(birth)===nothing
+            end
+            @test length(readdir("/proc/self/fd"))==fd_before
+        end
+    end
+end
+
+@testset "Native3 original missing anchor and unsafe parent refuse before root and locator" begin
+    fixture() do x
+        context=native3_context(x);@test context!==nothing
+        if context!==nothing
+            fd_before=length(readdir("/proc/self/fd"))
+            @test_throws ArgumentError R._native_capture_birth(context,x.output)
+            @test !ispath(x.output) && !ispath(joinpath(x.job,"capture-source.json"))
+            mkpath(dirname(x.output));chmod(dirname(x.output),0o777)
+            try
+                @test_throws ArgumentError R._native_capture_birth(context,x.output)
+                @test !ispath(x.output)
+            finally
+                chmod(dirname(x.output),0o700)
+            end
+            @test length(readdir("/proc/self/fd"))==fd_before
+        end
+    end
+end
+
+
+
+@testset "Native3 real close uncertainty still releases remaining owned descriptors once" begin
+    fixture() do x
+        mkpath(joinpath(x.root,"jobs with spaces"))
+        context=native3_context(x);@test context!==nothing
+        if context!==nothing
+            fd_before=length(readdir("/proc/self/fd"))
+            birth=R._native_capture_birth(context,x.output)
+            # Make a genuinely invalid owned FD, without opening any descriptor
+            # in between. The remaining descriptors must still all be closed.
+            @test ccall(:close,Cint,(Cint,),birth.directories[end].fd)==0
+            @test_throws ArgumentError R._native_capture_close!(birth)
+            @test R._native_capture_close!(birth)===nothing
+            @test length(readdir("/proc/self/fd"))==fd_before
+            @test isdir(x.output) && !ispath(joinpath(x.job,"capture-source.json"))
+        end
+    end
+end
+
+@testset "Ordinary1 direct and recovery dispatch retain best-effort locator without early birth" begin
+    fixture() do x
+        spec=native3_spec(x);spec["schema"]="qcl-negf.capture-spec.v1";delete!(spec,"native_performance")
+        path=joinpath(x.job,"capture-spec.json");write(path,R._p04_json(spec))
+        output=joinpath(x.job,"result")
+        context=R._capture_context((fingerprint=repeat("b",64),),output,"E",7;spec_path=path)
+        @test context!==nothing
+        if context!==nothing
+            OriginStaged.effect[]=(out,kw)->begin
+                @test out==output && !ispath(output)
+                locator=R._p04_parse(read(joinpath(x.job,"capture-source.json"),String))
+                @test locator["schema"]=="qcl-negf.capture-source.v1" && length(locator)==7
+                @test !haskey(locator,"root_birth") && locator["mode"]=="direct"
+                @test kw.native_origin===nothing && kw.attempt===7
+                :ordinary_exit
+            end
+            try
+                for recovery in (false,true)
+                    scratch=recovery ? joinpath(x.root,"scratch") : nothing
+                    @test OriginStaged.execute_scientific_plan_staged(engineering_plan(;recovery),output;
+                        execution_id="E",source_graph=R._p04_parse(GRAPH_RAW),attempt=7,
+                        capture_context=context,scratch_root=scratch)==:ordinary_exit
+                    @test !ispath(output) && (scratch===nothing || !ispath(scratch))
+                end
+            finally
+                OriginStaged.effect[]=(output,kw)->:sentinel_exit
+            end
+        end
+    end
+end
 
 @testset "Native creator origin" begin
 @testset "Native origin CLI is mandatory with capture off, and both flags are paired" begin
@@ -125,7 +462,7 @@ end
 @testset "Optional capture never selects a different native CalcJob" begin
     fixture() do x
         raw=read(x.native)
-        spec=Dict("schema"=>"qcl-negf.capture-spec.v1",
+        spec=Dict("schema"=>"qcl-negf.capture-spec.v3","native_performance"=>Dict{String,Any}("run_uuid"=>OTHER),
             "selection"=>Dict("calcjob_uuid"=>CALC,"execution_id"=>"E","attempt"=>7,"plan_fingerprint"=>repeat("b",64)),
             "plan"=>Dict("path"=>"plan.json","bytes"=>sizeof(PLAN_RAW),"sha256"=>bytes2hex(sha256(PLAN_RAW))),
             "capture_token"=>repeat("a",32),"allocation_id"=>"calcjob-process:$(CALC):7",
