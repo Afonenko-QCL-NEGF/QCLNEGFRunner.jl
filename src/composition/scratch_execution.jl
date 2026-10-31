@@ -85,6 +85,48 @@ function _native_origin_inputs(plan_path,graph_path,native_path,output,calcjob_u
     _native_origin_ids((calcjob_uuid=String(calcjob_uuid),native_execution_uuid=String(storage["execution_binding_uuid"])))
 end
 
+# Optional original-job help-only birth. The caller has already validated the
+# original native inputs; actual Code/caller/exclusive-writer trust is a Root gate.
+# A preexisting result namespace is never adopted, chmodded, replaced or removed.
+function _native_help_mirror(job,output)
+    birth=nothing;primary=nothing
+    try
+        job=abspath(job); output=abspath(output)
+        isdir(job) && !islink(job) && realpath(job)==job &&
+            output!=job && !startswith(output,job*"/") && !startswith(job,output*"/") ||
+            throw(QCLScientificWorkflow._ModelHelpUnavailable("native_help_original_workdir_unavailable"))
+        birth=_NativeCaptureBirth(Any[],_native_capture_process(),nothing,false)
+        parent=_native_capture_chain!(birth,job)
+        parent=_native_capture_hold!(birth,parent,"result";fresh=true)
+        _native_capture_hold!(birth,parent,"executions";fresh=true)
+        _native_capture_validate(birth)
+        return (;birth,root=joinpath(job,"result","executions"))
+    catch e
+        primary=e
+        (e isa ArgumentError || QCLScientificWorkflow._model_help_expected(e)) || rethrow()
+        @warn "optional native help namespace unavailable" exception=e
+        return nothing
+    finally
+        primary===nothing || birth===nothing || QCLScientificWorkflow._model_help_close_birth(birth,primary)
+    end
+end
+function _close_native_help_mirror(mirror,primary)
+    mirror===nothing && return nothing
+    try
+        _native_capture_validate(mirror.birth)
+    catch e
+        primary===nothing && !QCLScientificWorkflow._model_help_expected(e) && !(e isa ArgumentError) && rethrow()
+        @warn "optional native help namespace final validation failed" exception=e
+    finally
+        # Expected optional close failures do not replace science or cancellation.
+        try QCLScientificWorkflow._model_help_close_birth(mirror.birth,primary) catch e
+            QCLScientificWorkflow._model_help_expected(e) || e isa ArgumentError || rethrow()
+            @warn "optional native help namespace close uncertain" exception=e
+        end
+    end
+    nothing
+end
+
 function _capture_context(plan, output, execution_id, attempt;
     spec_path=get(ENV,"QCL_NEGF_CAPTURE_SPEC",""),scratch_root=nothing,
     frozen_plan_bytes=nothing,source_plan_path=nothing,
@@ -594,6 +636,7 @@ function execute_scientific_plan_staged(
     parent_checkpoint::Union{Nothing,VerifiedExactCheckpoint}=nothing,
     phase_observation_policy::Union{Nothing,PhaseObservationPolicy}=nothing,
     native_origin=nothing,
+    model_help_mirror=nothing,
     resource_policy::Symbol = :standalone,
     envelope::Union{Nothing,ExecutionEnvelope} = default_execution_envelope(),
 )
@@ -632,11 +675,11 @@ function execute_scientific_plan_staged(
         scratch_root===nothing || @warn "portable recovery publishes directly to output storage; scratch staging is disabled for this execution"
         if _native_capture3(capture_context)
             return _with_native_capture_birth(capture_context,output) do
-                execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy,native_origin)
+                execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy,native_origin,model_help_mirror)
             end
         end
         _capture_locator(capture_context,:direct,output,0)
-        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy,native_origin)
+        return execute_scientific_plan(plan,output;execution_id,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,parent_checkpoint,phase_observation_policy,native_origin,model_help_mirror)
     end
     selected=[e for e in plan.executions if execution_id===nothing || e.id==execution_id]
     parent_checkpoint === nothing || throw(ArgumentError("native5_recovery_import_unavailable: scratch closure import requires P07"))
@@ -656,7 +699,7 @@ function execute_scientific_plan_staged(
     local_result = joinpath(workspace, "result")
     try
         _capture_locator(capture_context,:scratch,local_result,0)
-        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,phase_observation_policy,native_origin)
+        result = execute_scientific_plan(plan, local_result; execution_id, resume=false,attempt,recovery_bundle,telemetry_sink,archive_bundle,archive_byte_budget,resource_policy,envelope,capture_reserve_bytes,frozen_plan_bytes,frozen_plan_capture,run_id,source_graph,phase_observation_policy,native_origin,model_help_mirror)
         declared=minimum(e.configuration.production.memory_budget_bytes for e in selected)
         metadata_roots=(;entry=(plan,selected,source_graph,result),resources=(envelope,),construction=(),continuation=(),history=(),
             observers=(telemetry_sink,),inputs_publication=(workspace,local_result,destination,byte_budget,reserve_bytes,

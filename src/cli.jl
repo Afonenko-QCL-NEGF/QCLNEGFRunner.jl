@@ -182,9 +182,12 @@ function _cli_heavy(arguments)
             frozen_plan_bytes=loaded.bytes,source_plan_path=arguments[2],
             native_execution_path=native_mode ? options["--native-execution"] : isempty(native_capture_input) ? nothing : native_capture_input,
             source_graph_path=get(options,"--source-graph",nothing),native_origin) : nothing
-        result = execute_scientific_plan_staged(plan, arguments[3];
+        model_help_mirror=native_mode ? _native_help_mirror(dirname(abspath(arguments[2])),arguments[3]) : nothing
+        help_primary=nothing
+        result=try
+            execute_scientific_plan_staged(plan, arguments[3];
             capture_context,
-            native_origin,
+            native_origin,model_help_mirror,
             frozen_plan_capture=loaded.capture,
             source_graph=haskey(options,"--source-graph") ? _load_source_graph_file(options["--source-graph"]) : nothing,
             parent_checkpoint,
@@ -195,6 +198,11 @@ function _cli_heavy(arguments)
             telemetry_sink=haskey(ENV,"QCL_TELEMETRY_ENDPOINT") ? http_telemetry_sink(ENV["QCL_TELEMETRY_ENDPOINT"]) : nothing,
             archive_bundle=get(options,"--archive-bundle",nothing),
             archive_byte_budget=haskey(options,"--archive-byte-budget") ? parse(Int,options["--archive-byte-budget"]) : 64*1024^3)
+        catch error
+            help_primary=error;rethrow()
+        finally
+            _close_native_help_mirror(model_help_mirror,help_primary)
+        end
         # Typed DTO output is independent of Q1 transport-close. The stationary
         # entry gate remains until the same DTO readers/actor/close are qualified.
         write_scientific_result(stdout, result)
