@@ -15,6 +15,7 @@ module QCLScientificWorkflow
 end
 const calls=Any[]
 _capture_context(args...;kwargs...)=R._capture_context(args...;kwargs...)
+_native_origin_inputs(args...;kwargs...)=R._native_origin_inputs(args...;kwargs...)
 _load_source_graph_file(path)=R._load_source_graph_file(path)
 execute_scientific_plan_staged(plan,output;kwargs...)=(push!(calls,(plan,output,(;kwargs...)));nothing)
 write_scientific_result(io,result)=nothing
@@ -65,7 +66,8 @@ end
 end
 
 @testset "Paired native admission separates transport attempt from solver continuation" begin
-    mktempdir() do root
+    mktempdir() do fixture_root
+        root=mkpath(joinpath(fixture_root,"upload"))
         uuid="00000000-0000-4000-8000-000000000001"
         plan_raw=" \n{\"fingerprint\":\"$(repeat("a",64))\",\"executions\":[{\"id\":\"E\"}]}\n"
         graph_raw="\n{\"format\":\"qcl-negf.git-graph.v1\",\"revision\":\"$(repeat("c",40))\",\"components\":[]}\n"
@@ -80,7 +82,7 @@ end
             "code"=>Dict("code_uuid"=>uuid,"computer_uuid"=>uuid,"solver_executable"=>"/nix/store/synthetic/bin/qcl-negf",
                 "release_id"=>"release","build_receipt_ref"=>"build"))
         native_path=joinpath(root,"native-execution.json")
-        spec=Dict("schema"=>"qcl-negf.capture-spec.v1",
+        spec=Dict("schema"=>"qcl-negf.capture-spec.v3","native_performance"=>Dict("run_uuid"=>uuid),
             "selection"=>Dict("calcjob_uuid"=>uuid,"execution_id"=>"E","attempt"=>3,"plan_fingerprint"=>repeat("a",64)),
             "plan"=>Dict("path"=>"plan.json","bytes"=>sizeof(plan_raw),"sha256"=>bytes2hex(R.sha256(plan_raw))),
             "capture_token"=>repeat("b",32),"allocation_id"=>"calcjob-process:$(uuid):3",
@@ -89,46 +91,53 @@ end
         spec_path=joinpath(root,"capture-spec.json")
         publish()=(R.QCLScientificWorkflow._scientific_json(spec_path,spec);R.QCLScientificWorkflow._scientific_json(native_path,native))
         publish()
-        output=joinpath(root,"jobs with spaces","native","new-domain")
+        output=joinpath(fixture_root,"jobs with spaces","native","new-domain")
         plan=(fingerprint=repeat("a",64),)
         # Old ordinary checks remain strict for absent attempt/canonical jobs output.
         @test R._capture_context(plan,output,"E",nothing;spec_path)===nothing
+        @test R._capture_context(plan,joinpath(root,"result"),"E",3;spec_path)===nothing
+        ordinary=deepcopy(spec);ordinary["schema"]="qcl-negf.capture-spec.v1";delete!(ordinary,"native_performance")
+        R.QCLScientificWorkflow._scientific_json(spec_path,ordinary)
         @test R._capture_context(plan,joinpath(root,"result"),"E",3;spec_path)!==nothing
+        publish()
         frozen=Vector{UInt8}(codeunits(plan_raw))
         context=R._capture_context(plan,output,"E",nothing;spec_path,native_execution_path=native_path,
-            frozen_plan_bytes=frozen,source_plan_path=plan_path,source_graph_path=graph_path)
+            frozen_plan_bytes=frozen,source_plan_path=plan_path,source_graph_path=graph_path,
+            native_origin=(calcjob_uuid=uuid,native_execution_uuid=uuid))
         @test frozen==Vector{UInt8}(codeunits(plan_raw))
         @test context!==nothing
         CaptureCLISentinel.QCLScientificWorkflow.loaded[]=(plan=plan,bytes=frozen,capture=nothing)
         empty!(CaptureCLISentinel.calls)
-        argv=["run-plan",plan_path,output,"--execution-id","E","--source-graph",graph_path]
+        argv=["run-plan",plan_path,output,"--execution-id","E","--source-graph",graph_path,
+            "--native-execution",native_path,"--native-calcjob-uuid",uuid]
         withenv("QCL_NEGF_CAPTURE_SPEC"=>spec_path,"QCL_NEGF_NATIVE_CAPTURE_INPUT"=>native_path,"QCL_TELEMETRY_ENDPOINT"=>nothing) do
             @test CaptureCLISentinel.main(argv)==0
             @test length(CaptureCLISentinel.calls)==1
             forwarded=last(CaptureCLISentinel.calls)
             @test forwarded[2]==output && forwarded[3].capture_context!==nothing && forwarded[3].attempt===nothing
-            @test CaptureCLISentinel.main(vcat(argv,["--attempt","2"]))==0
-            @test last(CaptureCLISentinel.calls)[3].capture_context===nothing && last(CaptureCLISentinel.calls)[3].attempt==2
-            @test CaptureCLISentinel.main(vcat(argv,["--scratch-root",joinpath(root,"scratch")]))==0
+            for flags in (["--attempt","2"],["--scratch-root",joinpath(root,"scratch")],["--archive-byte-budget","123"])
+                @test CaptureCLISentinel.main(vcat(argv,flags))==2
+                @test length(CaptureCLISentinel.calls)==1 && !ispath(output)
+            end
+            # Environment claims alone do not establish mandatory native origin.
+            @test CaptureCLISentinel.main(argv[1:7])==0
             @test last(CaptureCLISentinel.calls)[3].capture_context===nothing
-            @test CaptureCLISentinel.main(vcat(argv,["--archive-byte-budget","123"]))==0
-            @test last(CaptureCLISentinel.calls)[3].capture_context===nothing
-            @test length(CaptureCLISentinel.calls)==4
         end
+        R.QCLScientificWorkflow._scientific_json(spec_path,ordinary)
         withenv("QCL_NEGF_CAPTURE_SPEC"=>spec_path,"QCL_NEGF_NATIVE_CAPTURE_INPUT"=>nothing,"QCL_TELEMETRY_ENDPOINT"=>nothing) do
             ordinary=["run-plan",plan_path,joinpath(root,"result"),"--execution-id","E","--attempt","3","--source-graph",graph_path]
             @test CaptureCLISentinel.main(ordinary)==0
             @test last(CaptureCLISentinel.calls)[3].capture_context!==nothing && last(CaptureCLISentinel.calls)[3].attempt==3
         end
+        publish()
         if context!==nothing
-            R._capture_locator(context,:direct,output,0)
-            locator=YAML.load_file(joinpath(root,"capture-source.json"))
-            @test locator["actual_root"]==output && locator["capture_token"]==repeat("b",32)
-            @test locator["mode"]=="direct"
+            @test_throws ArgumentError R._capture_locator(context,:direct,output,0)
+            @test !ispath(joinpath(root,"capture-source.json"))
         end
         admit(;out=output,attempt=nothing,scratch_root=nothing,native_file=native_path,plan_file=plan_path,graph_file=graph_path)=
             R._capture_context(plan,out,"E",attempt;spec_path,scratch_root,native_execution_path=native_file,
-                source_plan_path=plan_file,source_graph_path=graph_file)
+                source_plan_path=plan_file,source_graph_path=graph_file,
+                native_origin=(calcjob_uuid=uuid,native_execution_uuid=uuid))
         # Native scratch and explicit CLI/native counter are unsupported, no credit.
         @test admit(attempt=3)===nothing
         @test admit(scratch_root=joinpath(root,"scratch"))===nothing
@@ -179,7 +188,7 @@ end
         @test admit()!==nothing
         # Inputs and a source-array sentinel are never rewritten by admission/locator.
         sentinel=joinpath(root,"source-array.bin");sentinel_raw=UInt8[0x00,0xff,0x80,0x01];write(sentinel,sentinel_raw)
-        R._capture_locator(context,:direct,output,0)
+        @test_throws ArgumentError R._capture_locator(context,:direct,output,0)
         @test read(plan_path,String)==plan_raw && read(graph_path,String)==graph_raw
         @test read(sentinel)==sentinel_raw
     end
