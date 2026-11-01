@@ -450,4 +450,223 @@ int fsync(int fd){
         boundary_case(0,0;reuse=true)
     end
 end
+
+# BEGIN positive native fixture contract
+if isempty(P20_DIRECTORY_FAULT_SHIM)
+@testset "Explicit constructor fixture keeps scientific failure and original strong publication" begin
+    W=R.QCLScientificWorkflow
+    source=joinpath(pkgdir(R),"examples","config","native-publication-fixture.yaml")
+    available=isdefined(W,:_execute_native_publication_fixture)
+    @test isfile(source)
+    @test available
+    if isfile(source) && available
+        plan=resolve_scientific_plan(source;maximum_solver_runs=1)
+        @test W._native_publication_fixture_mode(plan;execution_id="execution-1")=="native-publication-v1"
+        @test length(plan.executions)==length(plan.points)==1
+        @test plan.points[1].id=="point-1" && plan.points[1].initialization===:cold
+        @test plan.executions[1].purpose===:benchmark && plan.executions[1].operation===:stationary
+        @test_throws ArgumentError W._native_publication_fixture_mode(plan;execution_id="foreign")
+        prior_blas=R.BLAS.get_num_threads();R.BLAS.set_num_threads(2)
+        try
+            resources=W._native_publication_fixture_resources(plan;execution_id="execution-1",envelope=nothing)
+            @test resources.resource_plan.worker_count==1
+            @test R.BLAS.get_num_threads()==1
+        finally
+            R.BLAS.set_num_threads(prior_blas)
+        end
+        # A real explicit grant that cannot contain the estimator is refused
+        # without constructing a problem or any output directory.
+        tiny=R.ExecutionEnvelope("fixture-denied",1,1,1,3,1,[0])
+        @test_throws ArgumentError W._native_publication_fixture_resources(plan;execution_id="execution-1",envelope=tiny)
+        ordinary=resolve_scientific_plan(joinpath(pkgdir(R),"examples","config","operator-algebra.yaml");maximum_solver_runs=1)
+        @test W._native_publication_fixture_mode(ordinary;execution_id="execution-1")===nothing
+        raw=scientific_plan_dict(plan)
+        mktempdir() do root
+            relocated=joinpath(root,"config")
+            cp(dirname(source),relocated)
+            relocated_plan=resolve_scientific_plan(joinpath(relocated,basename(source));maximum_solver_runs=1)
+            @test relocated_plan.fingerprint!=plan.fingerprint
+            @test W._native_publication_fixture_mode(relocated_plan;execution_id="execution-1")=="native-publication-v1"
+        end
+        for mutate in (d->(d["name"]="ordinary study"),
+                d->(d["executions"][1]["purpose"]="diagnostic"),
+                d->(d["executions"][1]["label"]="ordinary"),
+                d->(d["points"][1]["initialization"]="continuation"),
+                d->(d["executions"][1]["output"]["telemetry"]["enabled"]=true),
+                d->(d["executions"][1]["policies"]["voltage"]["mode"]="strict"),
+                d->(d["executions"][1]["resolved_snapshot"]["default_rule_sources"]["Core:src/domain/types.jl"]=repeat("f",64)),
+                d->(push!(d["executions"][1]["resolved_snapshot"]["sections"]["physical"]["input_assigning_histories"]["physical.sound_velocity"],"invented-rule")),
+                d->(push!(d["executions"][1]["provenance"]["sources"]["physical.sound_velocity"],"invented-rule")),
+                d->(d["executions"][1]["resolved_snapshot"]["sections"]["physical"]["input_assigning_histories"]["physical.sound_velocity"][1]*="#changed-rule"),
+                d->(d["unknown_fixture_key"]=true),
+                d->(d["executions"][1]["resolved_configuration"]["numerical"]["energy_nodes"]=11),
+                d->(d["executions"][1]["resolved_configuration"]["physical"]["donor_sheet_density"]="1e12 m^-2"))
+            bad=deepcopy(raw);mutate(bad)
+            @test_throws ArgumentError W._native_publication_fixture_mode(bad;execution_id="execution-1")
+        end
+        mktempdir() do root
+            path=joinpath(root,"plan.json");io=IOBuffer();write_scientific_plan(io,plan);bytes=take!(io);write(path,bytes)
+            output=joinpath(root,"not-born")
+            error=try
+                R._cli_heavy(["run-plan",path,output,"--execution-id","execution-1"]);nothing
+            catch e;e;end
+            @test error isa ArgumentError && occursin("engineering_fixture_entry_required",sprint(showerror,error))
+            @test !ispath(output)
+            if haskey(ENV,"QCL_FIXTURE_TEST_SOURCE_GRAPH")
+                error=try
+                    R.execute_scientific_plan(plan,output;execution_id="execution-1",
+                        source_graph=R._load_source_graph_file(ENV["QCL_FIXTURE_TEST_SOURCE_GRAPH"]));nothing
+                catch e;e;end
+                @test error isa ArgumentError && occursin("native5_final_writer_unavailable",sprint(showerror,error))
+            else
+                @test_skip false # Actual source graph is a mandatory original input.
+            end
+            @test !ispath(output)
+            @test_throws ArgumentError R._cli_heavy(["native-publication-fixture",path,output])
+            @test !ispath(output)
+        end
+        # Actual native INPUT assertions and actual virgin birth are L operands;
+        # external ORM/Code/installed/native qualification remains a Root gate.
+        graph_path=get(ENV,"QCL_FIXTURE_TEST_SOURCE_GRAPH","")
+        if isempty(graph_path)
+            @test_skip false # Owning integration harness supplies its real selected graph.
+        else
+            graph=R._load_source_graph_file(graph_path)
+            let root=mktempdir(;cleanup=false)
+                job=joinpath(root,"original");mkdir(job)
+                io=IOBuffer();write_scientific_plan(io,plan);bytes=take!(io)
+                write(joinpath(job,"plan.json"),bytes);graph_bytes=read(graph_path);write(joinpath(job,"source-graph.json"),graph_bytes)
+                uuid(n)="00000000-0000-4000-8000-"*lpad(string(n),12,'0')
+                claim(n,raw)=Dict("node_uuid"=>uuid(n),"bytes"=>string(length(raw)),"sha256"=>bytes2hex(sha256(raw)))
+                output=joinpath(root,"jobs","fixture","result")
+                mkdir(joinpath(root,"jobs"))
+                native=Dict("schema"=>"qcl-negf.aiida-native-execution.v1","request_id"=>uuid(2),"execution_id"=>"execution-1",
+                    "input_plan"=>claim(3,bytes),"source_graph"=>claim(4,graph_bytes),"access_receipt_ref"=>"local-L-access",
+                    "storage"=>Dict("namespace_id"=>"local-L","storage_identity"=>"local-L-storage","relative_execution_root"=>"fixture/result",
+                        "computer_uuid"=>uuid(5),"execution_binding_uuid"=>uuid(6),"retention_policy_id"=>"local-L-policy",
+                        "retention_owner_id"=>"local-L-owner","hold_ref"=>"local-L-hold","access_binding_ref"=>"local-L-access"),
+                    "code"=>Dict("code_uuid"=>uuid(7),"computer_uuid"=>uuid(5),"solver_executable"=>ENV["QCL_FIXTURE_TEST_INSTALLED_CODE"],
+                        "release_id"=>"local-L-original","build_receipt_ref"=>"local-L-assertion"))
+                write(joinpath(job,"native-execution.json"),R._p04_json(native))
+                spec=Dict("schema"=>"qcl-negf.capture-spec.v3","selection"=>Dict("calcjob_uuid"=>uuid(1),"execution_id"=>"execution-1","attempt"=>1,"plan_fingerprint"=>plan.fingerprint),
+                    "plan"=>Dict("path"=>"plan.json","bytes"=>length(bytes),"sha256"=>bytes2hex(sha256(bytes))),
+                    "capture_token"=>bytes2hex(sha256(bytes))[1:32],"allocation_id"=>"calcjob-process:$(uuid(1)):1",
+                    "allocated_logical_cpus"=>nothing,"scratch_root"=>nothing,"native_performance"=>Dict("run_uuid"=>uuid(8)),
+                    "credits"=>Dict("performance_bytes"=>32*1024^2,"scalar_bytes"=>64*1024^2,"io_bytes"=>128*1024^2,"reserve_bytes"=>0))
+                spec_path=joinpath(job,"capture-spec.json");write(spec_path,R._p04_json(spec))
+                argv=["native-publication-fixture",joinpath(job,"plan.json"),output,"--execution-id","execution-1",
+                    "--source-graph",joinpath(job,"source-graph.json"),"--native-execution",joinpath(job,"native-execution.json"),"--native-calcjob-uuid",uuid(1)]
+                # Original raw fields that typed plan reconstruction discards
+                # must be refused before any output or locator is born. Keep
+                # fingerprints and native INPUT claims valid for each mutation.
+                for (variant,mutate) in (("unknown_top_key",d->(d["unknown_fixture_key"]=true)),
+                        ("resource_schedule",d->(d["resources"]["scheduling"]="foreign_schedule")),
+                        ("archive_preflight",d->(d["science_archive_preflight"]=Dict("foreign"=>true))))
+                    raw=scientific_plan_dict(plan);mutate(raw);raw["fingerprint"]=W._plan_fingerprint(raw)
+                    original_bytes=Vector{UInt8}(codeunits(R._p04_json(raw)))
+                    variant_job=joinpath(job,variant);mkdir(variant_job)
+                    write(joinpath(variant_job,"plan.json"),original_bytes)
+                    write(joinpath(variant_job,"source-graph.json"),graph_bytes)
+                    original_native=deepcopy(native);original_native["input_plan"]=claim(3,original_bytes)
+                    original_native["storage"]["relative_execution_root"]=variant*"/result"
+                    native_path=joinpath(variant_job,"native-execution.json");write(native_path,R._p04_json(original_native))
+                    original_spec=deepcopy(spec);original_spec["selection"]["plan_fingerprint"]=raw["fingerprint"]
+                    original_spec["plan"]["bytes"]=length(original_bytes)
+                    original_spec["plan"]["sha256"]=bytes2hex(sha256(original_bytes))
+                    original_spec["capture_token"]=bytes2hex(sha256(original_bytes))[1:32]
+                    original_spec_path=joinpath(variant_job,"capture-spec.json");write(original_spec_path,R._p04_json(original_spec))
+                    original_output=joinpath(root,"jobs",variant,"result")
+                    original_argv=["native-publication-fixture",joinpath(variant_job,"plan.json"),original_output,
+                        "--execution-id","execution-1","--source-graph",joinpath(variant_job,"source-graph.json"),
+                        "--native-execution",native_path,"--native-calcjob-uuid",uuid(1)]
+                    error=withenv("QCL_NEGF_CAPTURE_SPEC"=>original_spec_path,"QCL_NEGF_NATIVE_CAPTURE_INPUT"=>native_path) do
+                        try R._cli_heavy(original_argv);nothing catch e;e end
+                    end
+                    error_text=error===nothing ? nothing : sprint(showerror,error)
+                    println("NATIVE_FIXTURE_RAW_PROFILE=",R._p04_json(Dict("variant"=>variant,
+                        "error"=>error_text,"output_born"=>ispath(original_output),
+                        "locator_published"=>ispath(joinpath(variant_job,"capture-source.json")))))
+                    @test error isa ArgumentError && occursin("native_publication_fixture_profile_mismatch",sprint(showerror,error))
+                    @test !ispath(original_output)
+                    @test !ispath(joinpath(variant_job,"capture-source.json"))
+                    # The implementation entry must keep the full-document gate
+                    # even when its caller already supplies an owned directory.
+                    loaded=W._load_scientific_plan_bytes(joinpath(variant_job,"plan.json"))
+                    owned=joinpath(variant_job,"entry-owned");mkdir(owned)
+                    error=try
+                        W._execute_native_publication_fixture(loaded.plan,owned;
+                            frozen_plan_capture=loaded.capture,execution_id="execution-1",
+                            source_graph=graph,native_origin=nothing,envelope=nothing);nothing
+                    catch e;e end
+                    @test error isa ArgumentError && occursin("native_publication_fixture_profile_mismatch",sprint(showerror,error))
+                    @test isempty(readdir(owned))
+                end
+                # Metadata context alone cannot authorise birth.
+                @test_throws ArgumentError R._cli_heavy(argv)
+                @test !ispath(output) && !ispath(joinpath(job,"capture-source.json"))
+                # Replace only the existing free-space boundary for this exact
+                # parent; every other path still queries the actual filesystem.
+                # This differentiates valid metadata from actual credit admission.
+                @eval R begin
+                    const _fixture_test_storage_denied=Ref{Union{Nothing,String}}(nothing)
+                    const _fixture_test_strong_publications=Ref(0)
+                    function _storage_available(path::String)
+                        path==_fixture_test_storage_denied[] && return 0
+                        invoke(_storage_available,Tuple{Any},path)
+                    end
+                    function _p07_final_directories!(path::String,finals,budget)
+                        _fixture_test_strong_publications[]+=1
+                        invoke(_p07_final_directories!,Tuple{Any,Any,Any},path,finals,budget)
+                    end
+                end
+                withenv("QCL_NEGF_CAPTURE_SPEC"=>spec_path,"QCL_NEGF_NATIVE_CAPTURE_INPUT"=>joinpath(job,"native-execution.json")) do
+                    R._fixture_test_storage_denied[]=joinpath(root,"jobs")
+                    try
+                        error=try Base.invokelatest(R._cli_heavy,argv);nothing catch e;e end
+                        @test error isa ArgumentError && occursin("capture credit unavailable",sprint(showerror,error))
+                        @test !ispath(output) && !ispath(joinpath(job,"capture-source.json"))
+                    finally
+                        R._fixture_test_storage_denied[]=nothing
+                    end
+                    @test Base.invokelatest(R._cli_heavy,argv)==0
+                    @test R._fixture_test_strong_publications[]==1
+                    @test_throws Exception Base.invokelatest(R._cli_heavy,argv) # no EEXIST adoption/retry
+                end
+                locator=R._p04_parse(read(joinpath(job,"capture-source.json"),String))
+                @test locator["schema"]=="qcl-negf.capture-source.v3"
+                result=R._p04_parse(read(joinpath(output,"series_result.json"),String))
+                @test result["status"]=="failed" && isempty(result["attempt_history"])
+                point=only(result["points"])
+                @test point["status"]=="failed" && point["quality"]=="invalid" && !point["converged"]
+                @test any(w->w["code"]=="SYNTHETIC_NATIVE_PUBLICATION_FIXTURE" && w["scope"]=="execution" &&
+                    w["message"]=="synthetic; not_scientific; constructor-only; no SCBA/Poisson",point["warnings"])
+                @test point["data"]["native_source"]["kind"]=="final"
+                @test !ispath(joinpath(output,"performance")) && !ispath(joinpath(output,"performance-source.json"))
+                selection=R._p04_parse(read(joinpath(output,"native-selection.json"),String))
+                @test length(selection["selected_inputs"])==1
+                @test only(selection["selected_inputs"])["selected_state"]==point["data"]["native_source"]["selected_state"]
+                @test read(joinpath(output,only(selection["selected_inputs"])["plan"]["path"]))==bytes
+                # Only bounded JSON metadata is read here; numerical HDF5
+                # payloads remain untouched after the actual strong publication.
+                selected=only(selection["selected_inputs"])["selected_state"]
+                manifest=R._p04_parse(read(joinpath(output,selected["manifest"]["path"]),String))
+                declaration=R._p04_parse(read(joinpath(output,manifest["checkpoint"]["path"]),String))
+                context=declaration["state"]["fields"]["measurement_context"]["fields"]
+                @test declaration["numerical_binding"]["execution"]["fields"]["blas_threads"]["decimal"]=="1"
+                @test context["backend"]==Dict("kind"=>"symbol","value"=>"not_executed")
+                @test context["hilbert_roundoff_measured"]===nothing && context["map_kernels_shared_with_solver"]===nothing
+                @test context["final_state_alignment"]==Dict("kind"=>"symbol","value"=>"producer_aligned")
+                @test manifest["provenance"]==graph && manifest["lineage"]["parent_state"]===nothing
+                @test manifest["status"]["process"]==Dict("state"=>"succeeded","exit_code"=>0,"reason"=>nothing)
+                for name in ("discretization","experimental")
+                    @test manifest["status"][name]==Dict("state"=>"not_measured","reason"=>"constructor_only","evidence"=>nothing)
+                end
+                @test !point["observables"]["scientific_assessment"]["scientific_accepted"]
+                println("NATIVE_FIXTURE_LOCAL_L_ROOT=",root)
+            end
+        end
+    end
+end
+end
+# END positive native fixture contract
 end

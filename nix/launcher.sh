@@ -3,6 +3,10 @@
 set -eu
 solver='@solver@'
 capture='@capture@'
+if [ "${1-}" = native-publication-fixture ]; then
+    [ -n "${QCL_NEGF_CAPTURE_SPEC-}" ] && [ -n "${QCL_NEGF_NATIVE_CAPTURE_INPUT-}" ] && [ -n "$capture" ] && [ -x "$capture" ] || exit 125
+    exec "$capture" capture-run --spec "$QCL_NEGF_CAPTURE_SPEC" --solver "$solver" --native-execution "$QCL_NEGF_NATIVE_CAPTURE_INPUT" -- "$@"
+fi
 if [ "${1-}" = run-plan ] && [ -n "${QCL_NEGF_CAPTURE_SPEC-}" ] && [ -n "$capture" ] && [ -x "$capture" ]; then
     # No spec/NFS read here: capture supervisor spawns Julia before its observer.
     if [ -n "${QCL_NEGF_NATIVE_CAPTURE_INPUT-}" ]; then
