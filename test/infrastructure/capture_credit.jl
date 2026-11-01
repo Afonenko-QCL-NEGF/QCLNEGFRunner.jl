@@ -9,6 +9,8 @@ const R=QCLNEGFRunner
 module CaptureCLISentinel
 import QCLNEGFRunner as R
 const ConfigurationError=R.ConfigurationError
+const _native_help_mirror=R._native_help_mirror
+const _close_native_help_mirror=R._close_native_help_mirror
 module QCLScientificWorkflow
     const loaded=Ref{Any}()
     _load_scientific_plan_bytes(path)=loaded[]

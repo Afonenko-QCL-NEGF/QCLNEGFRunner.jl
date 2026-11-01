@@ -1,0 +1,65 @@
+schema: qcl-negf-study-v2
+kind: study
+id: native-publication-fixture-v1
+name: 'SYNTHETIC native publication fixture v1; not_scientific'
+purpose: benchmark
+operation: stationary
+configuration:
+  sources:
+  - reference-2019-70k.yaml
+  - analytical-diagnostic.yaml
+  overrides:
+    numerical:
+      spatial_nodes: 25
+      basis_states: 2
+      basis_periods: 1
+      energy_nodes: 9
+      momentum_nodes: 3
+      longitudinal_momentum_nodes: 3
+      angular_nodes: 4
+    scattering:
+      lo_phonon: false
+      acoustic_phonon: false
+      ionized_impurity: false
+      interface_roughness: false
+      alloy_disorder: false
+    solver:
+      maximum_scba_iterations: 3
+      maximum_poisson_iterations: 3
+    production:
+      worker_count: 1
+      phase_timing: false
+      progress_every_scba: 1
+      progress_every_outer: 1
+    execution:
+      strategy: manual
+      julia_threads: 1
+    domain_adaptation:
+      mode: none
+    output:
+      live_visualization: false
+axes:
+  temperatures:
+    values: [70]
+    unit: K
+  voltages:
+    values: [50]
+    unit: mV
+policies:
+  scba_to_poisson: adaptive_working
+  voltage:
+    mode: independent
+    invalid_predecessor: stop_branch
+  on_child_failure: continue
+output:
+  archive:
+    full_final: true
+    projections: false
+    optical: false
+    intermediate_history: 3
+  recovery:
+    enabled: false
+    byte_budget: 8589934592
+    reserve_bytes: 67108864
+  telemetry:
+    enabled: false

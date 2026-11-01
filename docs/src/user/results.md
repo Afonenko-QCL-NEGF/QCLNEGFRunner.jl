@@ -412,6 +412,40 @@ qualification fences remain. This increment adds neither scratch/recovery import
 nor capture ingress. The later transport packet remains five files total: result,
 selection, owner-close projection and the two stock scheduler logs.
 
+### Constructor-only native publication fixture
+
+`examples/config/native-publication-fixture.yaml` is an explicit engineering
+profile. Plan it with `plan CONFIG --max-runs 1`, then use exactly:
+
+```sh
+qcl-negf native-publication-fixture plan.json OUTPUT --execution-id execution-1 --source-graph source-graph.json --native-execution native-execution.json --native-calcjob-uuid ACTUAL_UUID
+```
+
+The reserved `root_definition_id` selects a full source-owned profile check;
+it does not certify a creator or a native origin. Ordinary `run-plan` refuses
+that profile. The fixture requires original native inputs and native3 capture,
+actual memory admission, free storage and capture credit before a virgin output
+birth. The installed launcher refuses this command without its capture wrapper.
+Existing output directories are refused.
+
+The fixture builds only a small static problem and an invalid constructor carrier.
+It never calls SCBA or Poisson. Its public Core acceptance context is
+`not_executed`; both measurement flags are unknown. It commits the original
+plan/model through the public final writer and passes the actual returned final
+handle to strong control publication. It does not reread numerical arrays for
+publication or emit phase/scalar/performance samples. The single point and series
+are `failed`, quality is `invalid`, convergence is false, and the warning
+`SYNTHETIC_NATIVE_PUBLICATION_FIXTURE` says
+`synthetic; not_scientific; constructor-only; no SCBA/Poisson`.
+Discretization and experimental evidence remain `not_measured` with reason
+`constructor_only`; attempt history is empty. Process exit zero means only that
+this deliberately invalid fixture was published successfully. Scientific readers
+must retain its failure.
+
+Local constructor evidence does not establish installed Code/ORM association,
+native observer close, source qualification or scientific acceptance. Those gates
+remain separate, and the ordinary stationary execution fence is unchanged.
+
 ## [Actual solver input help](@id solver-input-help)
 
 The optional `model-help-inputs.json` records eight scalar inputs immediately before an actual

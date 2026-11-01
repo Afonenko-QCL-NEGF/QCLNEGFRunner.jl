@@ -39,6 +39,39 @@ using Test
     end
 end
 
+@testset "Explicit publication fixture requires capture and never falls back" begin
+    mktempdir() do root
+        solver=joinpath(root,"solver");capture=joinpath(root,"capture");launcher=joinpath(root,"launcher");calls=joinpath(root,"calls")
+        write(solver,"#!/bin/sh\nprintf 'solver\\n' >> \"\$CALLS\"\nexit 7\n")
+        write(capture,"""#!/bin/sh
+            set -eu
+            printf 'capture\\n' >> "\$CALLS"
+            test "\$1" = capture-run; shift
+            test "\$1" = --spec; shift 2
+            test "\$1" = --solver; solver="\$2"; shift 2
+            test "\$1" = --native-execution; shift 2
+            test "\$1" = --; shift
+            exec "\$solver" "\$@"
+            """)
+        chmod(solver,0o700);chmod(capture,0o700)
+        template=read(joinpath(@__DIR__,"..","..","nix","launcher.sh"),String)
+        write(launcher,replace(template,"@bash@"=>"/bin/sh","@solver@"=>solver,"@capture@"=>capture));chmod(launcher,0o700)
+        env=merge(Dict(ENV),Dict("CALLS"=>calls,"QCL_NEGF_CAPTURE_SPEC"=>"original spec.json","QCL_NEGF_NATIVE_CAPTURE_INPUT"=>"native-execution.json"))
+        argv=["native-publication-fixture","plan.json","OUTPUT","--execution-id","execution-1","--source-graph","source-graph.json",
+            "--native-execution","native-execution.json","--native-calcjob-uuid","00000000-0000-4000-8000-000000000001"]
+        child=run(ignorestatus(setenv(Cmd(vcat([launcher],argv)),env)))
+        @test child.exitcode==7 && readlines(calls)==["capture","solver"]
+        for key in ("QCL_NEGF_CAPTURE_SPEC","QCL_NEGF_NATIVE_CAPTURE_INPUT")
+            rm(calls;force=true)
+            child=run(ignorestatus(setenv(Cmd(vcat([launcher],argv)),merge(env,Dict(key=>"")))))
+            @test child.exitcode==125 && !ispath(calls)
+        end
+        rm(calls;force=true);rm(capture)
+        child=run(ignorestatus(setenv(Cmd(vcat([launcher],argv)),env)))
+        @test child.exitcode==125 && !ispath(calls)
+    end
+end
+
 @testset "Native paired wrapper keeps literal argv, clears both markers on fallback" begin
     mktempdir() do root
         solver=joinpath(root,"internal solver"); capture=joinpath(root,"capture")

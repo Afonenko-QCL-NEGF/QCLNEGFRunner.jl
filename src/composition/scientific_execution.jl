@@ -1487,3 +1487,174 @@ function _scientific_next_state_sequence(directory)
     end
     return isempty(sequences) ? 1 : maximum(sequences)+1
 end
+
+function _native_publication_fixture_profile(input::AbstractDict)
+    value=deepcopy(input);delete!(value,"fingerprint")
+    executions=get(value,"executions",nothing)
+    executions isa AbstractVector || throw(ArgumentError("native publication fixture executions differ"))
+    for execution in executions
+        execution isa AbstractDict || throw(ArgumentError("native publication fixture execution differs"))
+        # Normalize only existing provenance locator leaves. Preserve their
+        # keys, ordered histories, filenames and generated-rule fragments.
+        # No model/configuration value or owning rule origin is rewritten.
+        histories=(execution["provenance"]["sources"],
+            (s["input_assigning_histories"] for s in values(execution["resolved_snapshot"]["sections"]))...)
+        for history in histories, (key,locators) in history
+            history[key]=map(locators) do locator
+                locator isa AbstractString || throw(ArgumentError("invalid fixture provenance locator"))
+                parts=split(locator,'#';limit=2);path=first(parts)
+                if isabspath(path)
+                    file=basename(path)
+                    file in ("reference-2019-70k.yaml","analytical-diagnostic.yaml","native-publication-fixture.yaml") ||
+                        throw(ArgumentError("unknown fixture provenance source"))
+                    return "fixture-source:"*file*(length(parts)==2 ? "#"*parts[2] : "")
+                end
+                String(locator)
+            end
+        end
+        estimate=get(execution,"resource_estimate",nothing)
+        estimate isa AbstractDict || throw(ArgumentError("native publication fixture estimate differs"))
+        delete!(estimate,"worker_capacity")
+    end
+    value
+end
+
+# An explicit engineering selector, never evidence of a producer or a solve.
+function _native_publication_fixture_mode(plan;execution_id)
+    document=plan isa ScientificPlan ? scientific_plan_dict(plan) : plan
+    document isa AbstractDict || throw(ArgumentError("native publication fixture requires a plan"))
+    get(document,"root_definition_id",nothing)=="native-publication-fixture-v1" || return nothing
+    execution_id=="execution-1" || throw(ArgumentError("native publication fixture execution differs"))
+    reference=scientific_plan_dict(resolve_scientific_plan(
+        _package_path("examples","config","native-publication-fixture.yaml");maximum_solver_runs=1))
+    canonical_bytes(_native_publication_fixture_profile(document))==canonical_bytes(_native_publication_fixture_profile(reference)) ||
+        throw(ArgumentError("native_publication_fixture_profile_mismatch"))
+    "native-publication-v1"
+end
+
+function _native_publication_fixture_resources(plan;execution_id,envelope)
+    _native_publication_fixture_mode(plan;execution_id)=="native-publication-v1" ||
+        throw(ArgumentError("native_publication_fixture_profile_required"))
+    _scientific_resource_preflight(:standalone,envelope)
+    execution=only(plan.executions);point=only(plan.points)
+    configuration=_point_resolved_configuration(execution.configuration,point)
+    configuration,resource_plan=resolve_execution_strategy(configuration;envelope)
+    resource_plan.worker_count==1 || throw(ArgumentError("native fixture requires one producer worker"))
+    configure_execution!(configuration)
+    reservation=_scientific_memory_reservation(configuration,resource_plan,envelope)
+    admission=_p05_begin_observers!(;phase_request=nothing,scalar_request=nothing)
+    try
+        roots=(;entry=(plan,execution,point,configuration),resources=(resource_plan,reservation,envelope),
+            construction=(),continuation=(),history=(),observers=(),inputs_publication=())
+        _p05_scientific_build_admission!(configuration,resource_plan,reservation,roots;observer_admission=admission)
+    finally
+        _p05_end_observers!(admission)
+    end
+    (;execution,point,configuration,resource_plan,reservation)
+end
+
+function _native_publication_fixture_carrier(problem,configuration,execution)
+    Q=QCLNEGF;n=problem.numerical;options=configuration.solver;p=configuration.production
+    shape=(n.N_E,n.N_k,n.N_b,n.N_b)
+    green=Q.GreenState(fill(1.0-1im,shape),fill(0.5im,shape),fill(-1.5im,shape),
+        fill(2.0+0im,shape),ones(n.N_E,n.N_k),ones(n.N_E,n.N_k))
+    family()=Q.SelfEnergyFamily(ntuple(_->zeros(ComplexF64,shape),3)...)
+    # This literal row is a constructor carrier, not an observed solver iteration.
+    row=Q.SCBAIteration(1,0.2,0.3,0.4,0.5,0.,1.,0.,0.,0.,Inf,Inf,3.,1.,1.,1.,NaN,nothing,nothing)
+    names=fieldnames(Q.SCBAIteration)
+    invalid=merge(NamedTuple{names}(Tuple(getfield(row,name) for name in names)),(;r_K=Inf,r_Σ=Inf))
+    row=Q.SCBAIteration((getfield(invalid,name) for name in names)...)
+    restart_value(x::Symbol)=String(x)
+    restart_value(x::Union{Real,AbstractString,Nothing})=x
+    restart_value(x)=Dict{String,Any}(string(k)=>restart_value(getfield(x,k)) for k in fieldnames(typeof(x)))
+    contract=Dict{String,Any}("schema"=>"qcl-negf-exact-restart-v1","algorithms"=>restart_value(p.algorithms),
+        "solver"=>Dict{String,Any}(string(k)=>restart_value(getfield(options,k)) for k in fieldnames(Q.SolverOptions)
+            if k ∉ (:max_scba,:max_poisson)))
+    scba=Q.SCBAResult(green,Dict{Symbol,Q.SelfEnergyFamily}(),family(),family(),family(),[row],false,
+        :invalid_candidate,:invalid,contract,Q.SCBAMixerState())
+    report=Q.ConvergenceReport(false,Dict(:r_K=>NaN,:r_U=>Inf),["synthetic constructor; no SCBA/Poisson"])
+    context=Dict("backend"=>"not_executed","hilbert_roundoff_measured"=>nothing,
+        "map_kernels_shared_with_solver"=>nothing,"final_state_alignment"=>"producer_aligned")
+    observations=Dict{Symbol,Any}(:quality=>:invalid,:warnings=>Any[],:acceptance_measurement_context=>context)
+    solution=Q.NEGFSolution(problem,options,zeros(n.N_z),ones(n.N_z),scba,Q.OuterIteration[],observations,
+        report,false,:scba_invalid_candidate)
+    identity=Q.exact_restart_identity(problem,options,p,execution;
+        domain_adaptation=configuration.domain_adaptation,kernel_options=nothing)
+    state=Q.ExactSolverState(;identity,boundary=:final,published_U=solution.Uᴴ,published_n=solution.n,scba,
+        mixer_position=Q.MixerPosition(;applied_mixes=0,retained_mix_indices=(),last_reset_mix=0,
+            last_reset_reason=:none,last_coefficient_fallback=:none),family_order=(:embedding_plus,:embedding_minus),
+        outer_history=Q.OuterIteration[],progress=Q.SolverProgress(;completed_outer=0,current_outer=1,
+            accepted_scba=1,outer_strict_streak=0,inner_strict_streak=0,diagnostic_streak=0),
+        continuation=nothing,status=solution.status,warnings=(),policy_evaluations=(),adaptation=nothing,
+        measurement_context=Q.AcceptanceContext(backend=:not_executed,algorithms=p.algorithms,
+            hilbert_roundoff_measured=nothing,map_kernels_shared_with_solver=nothing,final_state_alignment=:producer_aligned),
+        final_evidence=Q.FinalEvidenceSnapshot(;report,original_converged=false,original_status=solution.status,
+            observations=Q.CoreRecord(Dict(:quality=>:invalid,:acceptance_measurement_context=>context))))
+    (;solution,state)
+end
+
+function _execute_native_publication_fixture(plan::ScientificPlan,output::AbstractString;
+    frozen_plan_capture::_P05PlanCapture,execution_id::AbstractString,source_graph::AbstractDict,
+    native_origin,envelope::Union{Nothing,ExecutionEnvelope}=default_execution_envelope())
+    root=abspath(output);isdir(root) && !islink(root) || throw(ArgumentError("native fixture requires owned birth"))
+    frozen_plan_capture.kind===:scientific_plan_v2 || throw(ArgumentError("native fixture requires original scientific plan"))
+    _native_publication_fixture_mode(frozen_plan_capture.document;execution_id)=="native-publication-v1" ||
+        throw(ArgumentError("native_publication_fixture_profile_required"))
+    # Re-decode the exact original, rejecting stale typed aliases.
+    original=load_scientific_plan(frozen_plan_capture.document)
+    canonical_bytes(scientific_plan_dict(original))==canonical_bytes(scientific_plan_dict(plan)) ||
+        throw(ArgumentError("native fixture original plan differs"))
+    resources=_native_publication_fixture_resources(original;execution_id,envelope)
+    config=resources.configuration;point=resources.point;execution=resources.execution
+    graph=_require_source_graph(source_graph);origin=_native_origin_ids(native_origin)
+    origin===nothing && throw(ArgumentError("native fixture requires original native origin"))
+    sources=_capture_solver_sources();exact=_capture_exact_execution(config.production,sources)
+    plan_binding=_freeze_scientific_plan(original,root;frozen_plan_capture)
+    run=_scientific_run_id(original,sources,nothing)
+    identity=_scientific_point_identity(original,execution,point,1;run_id=run,plan_sha256=plan_binding.plan_sha256)
+    unmeasured()=Dict{String,Any}("state"=>"not_measured","reason"=>"constructor_only","evidence"=>nothing)
+    initial=Dict{String,Any}("process"=>Dict{String,Any}("state"=>"running","exit_code"=>nothing,"reason"=>nothing),
+        (n=>unmeasured() for n in ("convergence","physics","discretization","experimental"))...)
+    directory=joinpath(root,"executions",execution.id,point.id,"attempt-1")
+    recorder=ScientificHistoryRecorder(directory;artifact_root=root,identity,source_epoch=_native_source_epoch(origin),
+        provenance=graph,status=initial,maximum_scba_rows=config.solver.max_scba)
+    admission=_p05_begin_observers!(;phase_request=nothing,scalar_request=nothing)
+    try
+        roots=(;entry=(plan,original,execution,point,config,source_graph,graph,native_origin,origin),
+            resources=(resources,envelope,exact,sources),construction=(),continuation=(),history=(recorder,),observers=(),
+            inputs_publication=(frozen_plan_capture,plan_binding,initial,identity))
+        grant=min(resources.reservation["memory_budget_bytes"],resources.resource_plan.memory_budget_bytes,config.production.memory_budget_bytes)
+        _p05_scientific_build_admission!(config,resources.resource_plan,resources.reservation,roots;observer_admission=admission)
+        problem=QCLNEGF.build_problem(;physical=config.physical,numerical=config.numerical,scattering=config.scattering,
+            scales=config.scales,localization=config.algorithms.localization,physical_models=config.physical_models)
+        carrier=_native_publication_fixture_carrier(problem,config,exact.execution)
+        roots=merge(roots,(;construction=(problem,carrier.solution,carrier.state)))
+        request=_p05_prepare_scientific_request!(recorder,plan_binding,config,point;
+            grant_bytes=grant,live_roots=roots,observer_admission=admission)
+        status=_p05_final_status_input(Dict("state"=>"succeeded","exit_code"=>0,"reason"=>nothing),initial)
+        limits=_p05_final_limits(carrier.solution,carrier.state,recorder,request.request,status;
+            production_options=config.production,grant_bytes=grant,live_roots=roots,
+            input_documents=(;plan=plan_binding.document,model=request.model_preimage),observer_admission=admission)
+        committed,presentation=_p05_commit_final_with_presentation!(recorder,carrier.solution,carrier.state;
+            options=config.solver,production_options=config.production,execution=exact.execution,
+            domain_adaptation=config.domain_adaptation,kernel_options=nothing,status,request=request.request,source_mode=:produced,limits...)
+        rows=Dict{String,Any}[]
+        _p07_retain_input_pair!(rows,".",committed.checkpoint,request.request,limits.maximum_metadata_bytes)
+        warning=Dict{String,Any}("code"=>"SYNTHETIC_NATIVE_PUBLICATION_FIXTURE","scope"=>"execution",
+            "message"=>"synthetic; not_scientific; constructor-only; no SCBA/Poisson")
+        record=_point_result(point,1,_initialization("cold"),:failed,:invalid,false;warnings=[warning],
+            observables=Dict{String,Any}("scientific_accepted"=>false,"scientific_assessment"=>presentation.stationary_assessment),
+            data=Dict{String,Any}("native_source"=>_p05_native_source(".";committed...),"optical_attachment"=>nothing),
+            phase_source=(status=:disabled,session_id=nothing,current_path=nothing,reason="synthetic_fixture"))
+        document=_series_document(original,[record],:failed);document["attempt_history"]=Any[]
+        document["selected_execution_id"]=execution_id
+        roots=merge(roots,(;history=(recorder,rows,committed.checkpoint,record,document),
+            inputs_publication=(frozen_plan_capture,plan_binding,initial,identity,request,committed,presentation,status)))
+        publication_cap=_p05_input_metadata_limit(grant,roots;observer_admission=admission)
+        publish_native_selection!(root,document;selected_inputs=rows,maximum_metadata_bytes=publication_cap,
+            published_final_checkpoints=[committed.checkpoint])
+        document
+    finally
+        _p05_end_observers!(admission)
+    end
+end

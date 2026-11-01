@@ -140,6 +140,45 @@ function _cli_parent_checkpoint(options::AbstractDict, artifact_root::AbstractSt
         expected_identity=identity,maximum_metadata_bytes=allowance)
 end
 
+function _cli_native_publication_fixture(arguments)
+    length(arguments)==11 && arguments[4]=="--execution-id" && arguments[6]=="--source-graph" &&
+        arguments[8]=="--native-execution" && arguments[10]=="--native-calcjob-uuid" ||
+        throw(ArgumentError("native-publication-fixture expects PLAN OUTPUT --execution-id ID --source-graph FILE --native-execution FILE --native-calcjob-uuid UUID"))
+    loaded=QCLScientificWorkflow._load_scientific_plan_bytes(arguments[2]);plan=loaded.plan
+    execution_id=arguments[5];output=arguments[3]
+    QCLScientificWorkflow._native_publication_fixture_mode(loaded.capture.document;execution_id)=="native-publication-v1" ||
+        throw(ArgumentError("native_publication_fixture_profile_required"))
+    _p05_scientific_profile(loaded.capture.document)
+    native_origin=_native_origin_inputs(arguments[2],arguments[7],arguments[9],output,arguments[11],execution_id;
+        frozen_plan_bytes=loaded.bytes)
+    capture_input=get(ENV,"QCL_NEGF_NATIVE_CAPTURE_INPUT","")
+    !isempty(capture_input) && abspath(capture_input)==abspath(arguments[9]) &&
+        !isempty(get(ENV,"QCL_NEGF_CAPTURE_SPEC","")) || throw(ArgumentError("native fixture requires native3 capture"))
+    context=_capture_context(plan,output,execution_id,nothing;frozen_plan_bytes=loaded.bytes,
+        source_plan_path=arguments[2],native_execution_path=arguments[9],source_graph_path=arguments[7],native_origin)
+    _native_capture3(context) || throw(ArgumentError("native fixture requires native3 capture"))
+    graph=_load_source_graph_file(arguments[7]);envelope=default_execution_envelope()
+    # Metadata validation is separate from actual memory, storage and capture
+    # credit admission. All three must succeed before the virgin birth.
+    QCLScientificWorkflow._native_publication_fixture_resources(plan;execution_id,envelope)
+    forecast=QCLScientificWorkflow._minimum_scientific_output_bytes(plan)
+    budget=minimum(e.outputs.recovery.byte_budget for e in plan.executions)
+    reserve=maximum(e.outputs.recovery.reserve_bytes for e in plan.executions)
+    parent=abspath(output)
+    while !ispath(parent)
+        parent=dirname(parent)
+    end
+    credit=_capture_credit([joinpath(output,"executions"),joinpath(output,"recovery")],budget,reserve,forecast,parent)
+    credit>0 || throw(ArgumentError("native fixture capture credit unavailable"))
+    _check_storage_free(parent,Base.checked_add(Base.checked_add(forecast,reserve),credit))
+    result=_with_native_capture_birth(context,output) do
+        QCLScientificWorkflow._execute_native_publication_fixture(plan,output;
+            frozen_plan_capture=loaded.capture,execution_id,source_graph=graph,native_origin,envelope)
+    end
+    write_scientific_result(stdout,result)
+    return 0
+end
+
 function _cli_heavy(arguments)
     command=first(arguments)
     if command == "plan"
@@ -150,6 +189,8 @@ function _cli_heavy(arguments)
             maximum = parse(Int, arguments[4])
         end
         write_scientific_plan(stdout, resolve_scientific_plan(arguments[2]; maximum_solver_runs=maximum))
+    elseif command == "native-publication-fixture"
+        return _cli_native_publication_fixture(arguments)
     elseif command == "run-plan"
         length(arguments) >= 3 && isodd(length(arguments)) ||
             throw(ArgumentError("run-plan expects PLAN OUTPUT [--execution-id ID] [--scratch-root DIRECTORY]"))
@@ -167,6 +208,8 @@ function _cli_heavy(arguments)
         parent_checkpoint=_cli_parent_checkpoint(options,arguments[3])
         loaded=QCLScientificWorkflow._load_scientific_plan_bytes(arguments[2])
         plan=loaded.plan
+        hasproperty(plan,:root_definition_id) && plan.root_definition_id=="native-publication-fixture-v1" &&
+            throw(ArgumentError("engineering_fixture_entry_required: use native-publication-fixture"))
         native_origin=native_mode ? _native_origin_inputs(arguments[2],options["--source-graph"],
             options["--native-execution"],arguments[3],options["--native-calcjob-uuid"],options["--execution-id"];
             frozen_plan_bytes=loaded.bytes) : nothing
