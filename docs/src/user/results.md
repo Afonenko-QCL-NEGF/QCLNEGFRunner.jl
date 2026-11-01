@@ -170,6 +170,33 @@ or cleanup. A crash guarantees only the last committed history/checkpoint; uncom
 lost. Local rename/fsync fixtures do not establish cross-NFS durability, installed service recovery,
 worker-loss behavior or scientific acceptance.
 
+`publish_native_selection!` keeps its two operational claims (`result`, `selection`)
+and the existing `series_result.json` / `native-selection.json` bytes. Its default
+path verifies explicitly selected sources and makes no producer, native-stop or
+scientific-acceptance claim.
+
+The owning composition can also pass `published_final_checkpoints`, containing the
+actual successful `commit_final!` checkpoint returns that it still holds. This
+path supports only current produced, closed finals without imported ancestry;
+exact duplicate current rows in `attempt_history` share their one selected handle.
+Restored, older, absent and nonfinal sources retain the operational path. The
+publisher binds each held identity, source epoch, original plan/model and selected
+final refs, checks immutable payload signatures, and syncs the named publication
+directory ancestors up to the already-owned artifact root. It neither reopens and
+rehashes the full numerical payloads nor fsyncs those arrays again. Metadata and
+held proof copies share the original publication allowance. Directory closes in
+both later control publications are also checked; a close failure preserves any
+primary sync error together with the cleanup error before acknowledgement.
+
+This guarantee depends on the qualified owning callsite passing its real commit
+returns. A constructed or reopened handle is not a publication-birth certificate.
+Errors retain partial publications and fail before acknowledgement; the two
+control names are still not an atomic pair. Platform must separately establish
+the actual Slurm generation, whole-job stop, finite writer/retention boundary and
+post-terminal solver/stock-log durability. Runner cannot close its own stdout
+before exit. This API does not qualify installed resource `finish`, restore or
+technical-output retention, and does not certify a scientific result.
+
 Constructor-only fixtures and an independent Python/h5py literal checker are documented in
 [`test/fixtures/result-v2/README.md`](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/HEAD/test/fixtures/result-v2/README.md).
 They test actual rank1/2/4, non-square and empty arrays, exact bits, complete outer vectors, frozen

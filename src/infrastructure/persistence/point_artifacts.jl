@@ -12,15 +12,24 @@ function _sync_artifact_file(path; release_cache::Bool = false)
     end
     return nothing
 end
-function _sync_artifact_directory(path)
+function _sync_artifact_directory(path; checked_close::Bool=false)
     Sys.isunix() || return nothing
     descriptor=ccall(:open, Cint, (Cstring, Cint), path, 0)
     descriptor>=0 || throw(SystemError("open directory $(path)", Libc.errno()))
+    primary=nothing
     try
         ccall(:fsync, Cint, (Cint,), descriptor)==0 ||
             throw(SystemError("fsync directory $(path)", Libc.errno()))
+    catch error
+        primary=error
+        rethrow()
     finally
-        ccall(:close, Cint, (Cint,), descriptor)
+        result=ccall(:close, Cint, (Cint,), descriptor)
+        if checked_close && result!=0
+            close_errno=Libc.errno()
+            secondary=SystemError("close directory $(path)",close_errno)
+            primary===nothing ? throw(secondary) : throw(CompositeException([primary,secondary]))
+        end
     end
     return nothing
 end
@@ -558,7 +567,7 @@ function _p07_control_bytes(root,path,expected,budget)
     nothing
 end
 
-function _p07_publish_control!(root,name,bytes,budget)
+function _p07_publish_control!(root,name,bytes,budget;checked_directory_close::Bool=false)
     destination=_p04_path(root,name)
     if !ispath(destination) && !islink(destination)
         temporary,io=mktemp(root;cleanup=false)
@@ -584,12 +593,102 @@ function _p07_publish_control!(root,name,bytes,budget)
             ispath(destination) && !islink(destination) || rethrow()
             _p07_control_bytes(root,name,bytes,budget) # identical concurrent/retried publication only
         end
-        rm(temporary);_sync_artifact_directory(root)
+        rm(temporary);_sync_artifact_directory(root;checked_close=checked_directory_close)
     end
     _p07_control_bytes(root,name,bytes,budget)
-    _sync_artifact_file(destination);_sync_artifact_directory(root)
+    _sync_artifact_file(destination);_sync_artifact_directory(root;checked_close=checked_directory_close)
     _p07_control_bytes(root,name,bytes,budget)
     Dict{String,Any}("path"=>name,"bytes"=>length(bytes),"sha256"=>bytes2hex(sha256(bytes)))
+end
+
+function _p07_held_final!(handle, row, source, budget, ports)
+    _p04_require(handle isa VerifiedExactCheckpoint,"published final requires an owning checkpoint handle")
+    reference=_p05_parse(handle.reference_json,budget)
+    manifest=_p05_parse(handle.manifest_json,budget)
+    declaration=_p05_parse(handle.declaration_json,budget)
+    _p04_require(reference==row["selected_state"] && manifest["identity"]==reference["identity"] &&
+        declaration["identity"]==reference["identity"] && manifest["closed"]===true &&
+        manifest["lineage"]["parent_state"]===nothing &&
+        manifest["invocation"]==declaration["invocation"] &&
+        reference["state_id"]==manifest["invocation"]["source_epoch"]*"-state-"*reference["state_sequence"],
+        "published final identity/epoch/closed scope differs")
+    _p04_require(source["kind"]=="final" && source["relation"]=="current_point_attempt",
+        "published final scope excludes retained/nonfinal sources")
+    # The producer has already streamed, hashed and synced its immutable payloads.
+    # Keep its exact handle; reopening would hash those payloads again.
+    verify_checkpoint_inputs(handle;plan_ref=row["plan"],model_ref=row["model"],
+        maximum_metadata_bytes=_p07_port_allowance!(budget,ports))
+    verify_final_artifacts(handle;diagnostics_ref=source["diagnostics"],observations_ref=source["observations"],
+        maximum_metadata_bytes=_p07_port_allowance!(budget,ports))
+    observation=_p05_read_analysis(handle.root,source["observations"],declaration["identity"],
+        declaration["invocation"],"final_observations",budget)
+    _p04_require(observation["source_mode"]=="produced" && observation["request"]["plan"]==row["plan"] &&
+        observation["request"]["model"]==row["model"],"published final is restored or original input pair differs")
+    (reference=reference,manifest=manifest)
+end
+
+function _p07_final_unchanged!(handle, reference)
+    _p04_check_ref(handle.root,reference["manifest"])
+    for known in values(handle.verified)
+        path=_p04_path(handle.root,known.reference["path"])
+        _p04_require(isfile(path) && known.signature==_p04_stat(stat(path)),
+            "published final payload changed after commit")
+    end
+    nothing
+end
+
+function _p07_sync_final_directory!(directory,identity)
+    _p04_require(!islink(directory) && realpath(directory)==directory,"publication directory alias")
+    file=Base.Filesystem.open(directory,Base.JL_O_RDONLY|Base.JL_O_DIRECTORY|Base.JL_O_NOFOLLOW|Base.JL_O_NONBLOCK)
+    primary=nothing
+    try
+        before=stat(file);named=lstat(directory)
+        _p04_require(isdir(before) && !islink(directory) &&
+            identity==(UInt(before.device),UInt(before.inode))==(UInt(named.device),UInt(named.inode)),
+            "publication directory replaced before sync")
+        ccall(:fsync,Cint,(Cint,),fd(file))==0 || throw(SystemError("fsync directory $directory",Libc.errno()))
+        after=stat(file);named=lstat(directory)
+        _p04_require(!islink(directory) && identity==(UInt(after.device),UInt(after.inode))==
+            (UInt(named.device),UInt(named.inode)),"publication directory replaced during sync")
+    catch error
+        primary=error;rethrow()
+    finally
+        try
+            close(file)
+        catch secondary
+            primary===nothing ? throw(secondary) : throw(CompositeException([primary,secondary]))
+        end
+    end
+    nothing
+end
+
+function _p07_final_directories!(root, finals, budget)
+    directories=Dict{String,Tuple{UInt,UInt}}()
+    function retain(handle_root,path)
+        current=dirname(_p04_path(handle_root,path))
+        while true
+            if !haskey(directories,current)
+                _p05_charge!(budget,_p05_add(4096,_p05_mul(16,ncodeunits(current))))
+                _p04_require(isdir(current) && !islink(current) && realpath(current)==current,
+                    "published final directory changed")
+                st=stat(current);directories[current]=(UInt(st.device),UInt(st.inode))
+            end
+            current==root && break
+            current=dirname(current)
+        end
+    end
+    for final in finals
+        retain(final.handle.root,final.reference["manifest"]["path"])
+        for item in final.manifest["artifacts"];retain(final.handle.root,item["path"]);end
+        head=final.manifest["history"]["head"]
+        head===nothing || retain(final.handle.root,head["path"])
+    end
+    # Only named ancestors of this publication, never a scientific-tree walk.
+    for directory in sort!(collect(keys(directories));by=p->(-length(splitpath(p)),p))
+        _p04_read_observer[](:directory_sync,directory,0)
+        _p07_sync_final_directory!(directory,directories[directory])
+    end
+    directories
 end
 
 """Publish exact original v4 result bytes and a bounded explicit input selection.
@@ -600,11 +699,25 @@ input order never selects a newer state. Public native verifiers check actual by
 Returns only operational `(result,selection)` path/Int-bytecount/SHA claims after
 sync and readback. Errors retain partial publications; no pair atomicity, native
 writer closure, provenance actor or scientific acceptance is asserted.
+
+With `published_final_checkpoints`, the qualified owning composition supplies its
+actual successful `commit_final!` handles. Only current produced closed finals
+without imported ancestry are supported. Named publication ancestors are synced;
+payloads are checked by their held immutable signatures, never rehashed or synced
+again. The optional path preserves the same two claims and wire. A handle alone
+is not a producer certificate; the caller owns its actual commit-return origin.
 """
 function publish_native_selection!(artifact_root::AbstractString,result::AbstractDict;
-    selected_inputs::AbstractVector,maximum_metadata_bytes::Int)::NamedTuple
+    selected_inputs::AbstractVector,maximum_metadata_bytes::Int,
+    published_final_checkpoints::Union{Nothing,AbstractVector}=nothing)::NamedTuple
     budget=Ref(_p05_cap(maximum_metadata_bytes))
     _p05_charge!(budget,_p05_metadata_cost((artifact_root,result,selected_inputs),budget[];portable=true))
+    held=nothing
+    if published_final_checkpoints!==nothing
+        _p04_require(all(h->h isa VerifiedExactCheckpoint,published_final_checkpoints),"published checkpoint handles required")
+        _p05_charge!(budget,_p05_mul(2,_p05_metadata_cost(published_final_checkpoints,budget[])))
+        held=deepcopy(published_final_checkpoints)
+    end
     root=_p07_root(artifact_root);root_stamp=(stat(root).device,stat(root).inode)
     # Capture the original public encoding once. Verification and publication use
     # this detached byte selection even if a caller mutates its old containers.
@@ -624,7 +737,10 @@ function publish_native_selection!(artifact_root::AbstractString,result::Abstrac
     ordered=Any[];sources=Any[]
     _p05_charge!(budget,_p05_metadata_cost((checked.wire,selected_inputs),budget[];portable=true))
     for point in Iterators.flatten((checked.wire["points"],get(checked.wire,"attempt_history",Any[])))
-        source=point["data"]["native_source"];source["kind"]=="absent" && continue
+        source=point["data"]["native_source"]
+        held===nothing || _p04_require(source["kind"]=="final" && source["relation"]=="current_point_attempt",
+            "published final scope requires every current row to be final")
+        source["kind"]=="absent" && continue
         state=source["selected_state"];identity=state["identity"]
         _p04_require(identity["point_id"]==point["id"] && identity["execution_id"]==point["execution_id"],"selected native row identity differs")
         _p04_require(source["relation"]=="current_point_attempt" ? identity["attempt"]==string(point["attempt"]) :
@@ -643,9 +759,20 @@ function publish_native_selection!(artifact_root::AbstractString,result::Abstrac
         end
     end
     _p04_require(length(ordered)==length(selected_inputs),"extra selected input pair")
+    finals=Any[]
+    held===nothing || _p04_require(!isempty(ordered) && length(held)==length(ordered),
+        "published finals must cover the exact selected states once")
     for (row,source) in zip(ordered,sources)
         actual=row["artifact_root"]=="." ? root : _p04_path(root,row["artifact_root"])
         _p07_root(actual)
+        if held!==nothing
+            matches=filter(h->h.root==actual && checkpoint_reference(h)==row["selected_state"],held)
+            _p04_require(length(matches)==1,"missing or duplicate owning published final")
+            handle=only(matches)
+            final=_p07_held_final!(handle,row,source,budget,ports)
+            push!(finals,(;handle,final...))
+            continue
+        end
         handle=open_exact_checkpoint(actual,row["selected_state"];maximum_metadata_bytes=_p07_port_allowance!(budget,ports))
         verify_checkpoint_inputs(handle;plan_ref=row["plan"],model_ref=row["model"],maximum_metadata_bytes=_p07_port_allowance!(budget,ports))
         if source["kind"]=="final"
@@ -665,10 +792,20 @@ function publish_native_selection!(artifact_root::AbstractString,result::Abstrac
     limit=min(256*1024,budget[]÷64);_p05_cap(limit);_p05_charge!(budget,_p05_mul(16,limit))
     selection_bytes=Vector{UInt8}(codeunits(_p05_json(selection,limit)))
     _p04_require((stat(root).device,stat(root).inode)==root_stamp,"native publication root changed")
-    result_claim=_p07_publish_control!(root,"series_result.json",result_bytes,budget)
-    selection_claim=_p07_publish_control!(root,"native-selection.json",selection_bytes,budget)
+    directories=held===nothing ? nothing : _p07_final_directories!(root,finals,budget)
+    for final in finals;_p07_final_unchanged!(final.handle,final.reference);end
+    result_claim=_p07_publish_control!(root,"series_result.json",result_bytes,budget;checked_directory_close=held!==nothing)
+    selection_claim=_p07_publish_control!(root,"native-selection.json",selection_bytes,budget;checked_directory_close=held!==nothing)
     _p07_control_bytes(root,"series_result.json",result_bytes,budget)
     _p04_require((stat(root).device,stat(root).inode)==root_stamp,"native publication root changed")
+    for final in finals;_p07_final_unchanged!(final.handle,final.reference);end
+    if directories!==nothing
+        for (directory,identity) in directories
+            st=stat(directory)
+            _p04_require(!islink(directory) && realpath(directory)==directory &&
+                identity==(UInt(st.device),UInt(st.inode)),"publication directory changed before acknowledgement")
+        end
+    end
     (result=result_claim,selection=selection_claim)
 end
 

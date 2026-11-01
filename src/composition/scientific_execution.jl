@@ -672,6 +672,9 @@ function execute_scientific_plan(
     end
     inherited_history=Dict{String,String}() # removed when final native5 persistence is joined
     native_selected_inputs=Dict{String,Any}[]
+    # Actual successful commit returns, never reconstructed from selected refs.
+    # They retain metadata/proofs only, not Core state or numerical arrays.
+    native_published_final_checkpoints=VerifiedExactCheckpoint[]
     point_order=[p.id for p in selected_points]
     for point in selected_points
         haskey(existing,point.id) && _upsert_scientific_point!(results,existing[point.id],point_order)
@@ -849,7 +852,7 @@ function execute_scientific_plan(
             build_roots=(;entry=(plan,selected_executions,selected_points,points,execution,config,source_graph),
                 resources=(resource_plan,reservation,envelope,margin_context,solver_sources,config.production),
                 construction=(),continuation=(parent_checkpoint,),
-                history=(results,history,existing,point_order,inherited_history,native_selected_inputs),
+                history=(results,history,existing,point_order,inherited_history,native_selected_inputs,native_published_final_checkpoints),
                 observers=(telemetry_sink,),inputs_publication=(plan_binding,))
             _p05_scientific_build_admission!(config,resource_plan,reservation,build_roots;
                 observer_admission=build_admission)
@@ -1017,7 +1020,7 @@ function execute_scientific_plan(
                 pre_roots=(;entry=(plan,selected_executions,selected_points,points,execution,point,config,source_graph),
                     resources=(resource_plan,reservation,envelope,margin_context,solver_sources,config.production,observer_admission),
                     construction=(configured,base_cache),continuation=(previous,previous_id,parent_checkpoint,branch_cause,initialization),
-                    history=(results,history,existing,old,latest_commit,point_order,inherited_history,native_selected_inputs),
+                    history=(results,history,existing,old,latest_commit,point_order,inherited_history,native_selected_inputs,native_published_final_checkpoints),
                     observers=(telemetry_sink,),inputs_publication=(plan_binding,phase_source,phase_identity))
                 admitted_grant=min(reservation["memory_budget_bytes"],config.production.memory_budget_bytes)
                 available=_p05_input_metadata_limit(admitted_grant,pre_roots;observer_admission)
@@ -1135,7 +1138,7 @@ function execute_scientific_plan(
                     resources=(resource_plan,reservation,envelope,margin_context,solver_sources,runtime_options,observer_admission),
                     construction=(configured,base_cache,problem,cache),
                     continuation=(previous,previous_id,parent_checkpoint,branch_cause,initialization),
-                    history=(results,history,existing,old,history_recorder,latest_commit,point_order,inherited_history,native_selected_inputs),
+                    history=(results,history,existing,old,history_recorder,latest_commit,point_order,inherited_history,native_selected_inputs,native_published_final_checkpoints),
                     observers=(phase_observer,telemetry_sender,reporter,event_sink,observe_solver_event,
                         publish,result_document,publish_unrun_descendants,remember_failure),
                     inputs_publication=(plan_binding,running_status,coverage,checkpoint_clock,phase_source,identity))
@@ -1196,6 +1199,10 @@ function execute_scientific_plan(
                 phase_source=_p30_anchor_phase_source(history_recorder,phase_source)
                 _p07_retain_input_pair!(native_selected_inputs,".",committed.checkpoint,
                     prepared_final_request.request,limits.maximum_metadata_bytes)
+                if parent_state===nothing || parent_state.boundary!==:final
+                    _p05_metadata_cost((native_published_final_checkpoints,committed.checkpoint),limits.maximum_metadata_bytes)
+                    push!(native_published_final_checkpoints,committed.checkpoint)
+                end
                 recorded=_p05_recorded_final(committed,limits.maximum_metadata_bytes)
                 observables=Dict{String,Any}("current_density_A_per_m2"=>recorded.current,
                     "sheet_density_per_m2"=>recorded.sheet_density,"wall_seconds"=>(time_ns()-started)*1e-9,
@@ -1446,12 +1453,22 @@ function execute_scientific_plan(
     ) : :failed
     publish(final_status)
     document=result_document(final_status)
-    publication_roots=(;entry=(plan,selected_executions,selected_points,points,source_graph,document,native_selected_inputs),
+    publication_roots=(;entry=(plan,selected_executions,selected_points,points,source_graph,document,native_selected_inputs,native_published_final_checkpoints),
         resources=(envelope,),construction=(),continuation=(),history=(results,history,existing,point_order),
         observers=(),inputs_publication=(plan_binding,))
     declared=minimum(e.configuration.production.memory_budget_bytes for e in selected_executions)
     publication_cap=_p05_closed_metadata_limit(declared,publication_roots;envelope)
-    publish_native_selection!(root,document;selected_inputs=native_selected_inputs,maximum_metadata_bytes=publication_cap)
+    # Current rows also occur in attempt_history. Exact duplicates are covered by
+    # the same held handle; older, restored or nonfinal rows keep the operational path.
+    current_finals=!isempty(native_published_final_checkpoints) &&
+        length(native_published_final_checkpoints)==length(native_selected_inputs) &&
+        all(Iterators.flatten((document["points"],get(document,"attempt_history",Any[])))) do point
+            source=point["data"]["native_source"]
+            source["kind"]=="final" && source["relation"]=="current_point_attempt" &&
+                any(h->checkpoint_reference(h)==source["selected_state"],native_published_final_checkpoints)
+        end
+    publish_native_selection!(root,document;selected_inputs=native_selected_inputs,maximum_metadata_bytes=publication_cap,
+        published_final_checkpoints=current_finals ? native_published_final_checkpoints : nothing)
     # Native v4 has no legacy result_commit receipt. Q1 typed transport-close
     # remains an explicit release dependency; do not manufacture its success.
     return document
