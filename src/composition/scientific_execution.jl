@@ -4,7 +4,7 @@ struct _ScientificPause <: Exception
 end
 
 import ..QCLNEGFRunner: publish_native_selection!, _p07_retain_input_pair!, _p05_closed_metadata_limit,
-    _native_origin_ids, _native_source_epoch, _p30_begin_performance_anchor,
+    _native_origin_ids, _native_source_epoch, _p05_metadata_cost, _p30_begin_performance_anchor,
     _p30_anchor_phase_source, _p30_borrowed_anchor!
 
 function _p05_prepare_scientific_request!(recorder::ScientificHistoryRecorder,
@@ -626,10 +626,29 @@ function execute_scientific_plan(
         bytes2hex(sha256(original))==source_identity["plan_sha256"] ||
             throw(ArgumentError("native5 parent original plan bytes differ"))
     end
-    # The mandatory final native5 writer is owned by the concurrent persistence
-    # integration. Refuse before output creation or compute until it is joined.
-    any(e->e.operation===:stationary,selected_executions) &&
-        throw(ArgumentError("native5_final_writer_unavailable: typed Results/AiiDA/Q1 transport qualification pending"))
+    # Only the cold single-point native production caller is qualified here.
+    # Original native IDs bind evidence; dispatch/birth authority remains with
+    # the owning transport. Legal outer capture-birth controls may already exist.
+    if any(e->e.operation===:stationary,selected_executions)
+        supported=length(plan.executions)==1 && length(plan.points)==1 &&
+            length(selected_executions)==1 && length(selected_points)==1 &&
+            native_origin!==nothing && parent_checkpoint===nothing &&
+            archive_bundle===nothing && (attempt===nothing || attempt==1) &&
+            (frozen_plan_bytes!==nothing || frozen_plan_capture!==nothing) &&
+            plan.root_definition_id!="native-publication-fixture-v1"
+        if supported
+            execution=only(selected_executions);point=only(selected_points)
+            supported=execution.operation===:stationary &&
+                execution.point_ids==[point.id] && point.execution_id==execution.id &&
+                point.initialization===:cold && point.predecessor_id===nothing &&
+                execution.policies.voltage.mode===:independent && !execution.outputs.optical &&
+                execution.configuration.execution.solver_backend===:production &&
+                execution.configuration.domain_adaptation.mode===:none &&
+                !any(name->ispath(joinpath(output_directory,name)) || islink(joinpath(output_directory,name)),
+                    ("series_result.json","executions","recovery","archive"))
+        end
+        supported || throw(ArgumentError("native5_final_writer_unavailable: stationary caller scope is not qualified"))
+    end
     root=abspath(output_directory)
     mkpath(root)
     attempt===nothing || attempt>0 || throw(ArgumentError("attempt must be positive"))
@@ -820,6 +839,8 @@ function execute_scientific_plan(
         mkpath(execution_dir)
         configured=nothing
         base_cache=nothing
+        resource_plan=nothing
+        reservation=nothing
         preparation_error=nothing
         build_admission=nothing
         build_roots=nothing
