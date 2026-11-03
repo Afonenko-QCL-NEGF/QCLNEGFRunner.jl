@@ -194,7 +194,7 @@ function _p05_closed_record(x)
         :ConfigurationProvenance,:ExecutionConfiguration,:AutomaticExecutionConfiguration,
         :ProgressOutputConfiguration,:DeviceGeometryConfiguration,:OutputConfiguration,
         :StudyConfiguration,:StudyMethodConfiguration,:ConvergenceStudyConfiguration,
-        :PhaseObservationPolicy,:_P05ObserverAdmission)
+        :PhaseObservationPolicy,:CheckpointDeadline,:_P05ObserverAdmission)
         x isa getproperty(@__MODULE__,name) && return true
     end
     for name in (:FunctionPointRunner,:RunDefinition,:RunIdentity,:NestedSweepPlan,:SweepLevel,
