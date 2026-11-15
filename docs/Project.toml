@@ -6,7 +6,7 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [sources]
 QCLNEGFRunner = {path = ".."}
-QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "f50fa9bdfc04e299f82b6260f70fd8f829d838f3"}
+QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "e171caa60cce676c6c4238dd671e7c527f2bd977"}
 
 [compat]
 Documenter = "~1.17"
