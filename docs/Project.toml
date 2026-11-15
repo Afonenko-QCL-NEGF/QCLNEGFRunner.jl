@@ -11,4 +11,4 @@ QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "v0.2.
 [compat]
 Documenter = "~1.17"
 Unitful = "~1.28"
-julia = "=1.13.0"
+julia = "~1.13.0"

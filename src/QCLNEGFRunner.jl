@@ -7,8 +7,6 @@ using Unitful
 using YAML
 import HDF5
 import QCLNEGF
-const REQUIRED_JULIA_VERSION = v"1.13.0"
-VERSION == REQUIRED_JULIA_VERSION || error("QCLNEGFRunner requires Julia 1.13.0 exactly")
 include("core_api.jl")
 include("infrastructure/persistence/atomic_files.jl")
 include("infrastructure/resources/package_paths.jl")
