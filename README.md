@@ -59,7 +59,8 @@ QCL_NEGF_PROJECT=/absolute/path/to/qcl-negf-env deno task docs
 
 Use the same `QCL_NEGF_PROJECT` value when invoking `bin/qcl-negf` from that workspace.
 The generated manifest belongs to the integration/release environment. The published
-Runner project resolves core from its `v0.2.0` source tag.
+Runner project resolves core from the accepted source commit recorded in
+`[sources]`; the immutable `v0.2.0` tag predates Julia 1.13 patch compatibility.
 
 The [configuration guide](docs/src/user/configuration.md),
 [results and restart](docs/src/user/results.md),
