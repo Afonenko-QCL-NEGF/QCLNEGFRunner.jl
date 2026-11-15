@@ -343,10 +343,20 @@ function _load_production_restart(
         kernel_identity == _checkpoint_kernel_identity(problem.kernels) ||
             _restart_mismatch("restart scattering operators differ (Khat, qK, or F_LO)")
         if algorithms !== nothing
-            get(contract, "algorithms", nothing) == _restart_contract_value(algorithms) ||
-                _restart_mismatch(
-                    "restart algorithm contract differs from requested algorithms",
-                )
+            # Core owns versioned algorithm defaults, including historical v1
+            # Hilbert contracts without elastic_retarded. Project only this
+            # optional comparison into its full contract checker; the caller's
+            # separately optional solver comparison remains below. Never
+            # rewrite the stored contract or drop unknown algorithm keys.
+            comparison_options = SolverOptions()
+            comparison = _solver_restart_contract(comparison_options, algorithms)
+            comparison["algorithms"] = get(contract, "algorithms", nothing)
+            try
+                _check_exact_restart_contract(comparison, comparison_options, algorithms)
+            catch error
+                error isa ArgumentError || rethrow()
+                _restart_mismatch("restart algorithm contract differs from requested algorithms")
+            end
         end
         if solver_options !== nothing
             get(contract, "solver", nothing) == _solver_restart_contract(
