@@ -1,5 +1,12 @@
 # [Results and restart](@id native-result-formats)
 
+Для `qcl-negf-exact-restart-v1` историческое отсутствие
+`algorithms.elastic_retarded` означает только прежний режим `hilbert`.
+Сравнение выполняет owning Core contract checker; Runner не переписывает
+сохранённый контракт и не удаляет неизвестные поля. Такой checkpoint не
+принимается для `direct_green`. Новые checkpoints сохраняют выбранный режим
+явно; остальные algorithm/mixing/quality mismatches остаются отказами.
+
 The result contract set is `qcl-negf.results.v1`; native HDF5 layout is version `4.0`.
 A commit manifest binds artifacts to SHA-256 checksums. Native physics, analysis
 frames and recovery state serve different purposes. An analysis result does not
