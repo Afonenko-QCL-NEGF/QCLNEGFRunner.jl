@@ -4,7 +4,7 @@ authors = ["QCL-NEGF contributors"]
 version = "0.2.0"
 
 [sources]
-QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "v0.2.0"}
+QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "f50fa9bdfc04e299f82b6260f70fd8f829d838f3"}
 
 [deps]
 QCLNEGF = "25d1ffa8-5cfa-41e3-b02e-8fca5bf51027"
@@ -32,4 +32,4 @@ LinearAlgebra = "1.13"
 Logging = "1.11"
 SHA = "1"
 Unitful = "~1.28"
-julia = "=1.13.0"
+julia = "~1.13.0"

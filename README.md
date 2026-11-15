@@ -1,10 +1,13 @@
 # QCLNEGFRunner.jl
 
-Julia **1.13.0** execution and storage adapters for
+Julia **1.13.x** execution and storage adapters for
 [QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl), version **0.2.0**.
 The runner validates YAML input, freezes scientific plans, executes calculations,
 checks process resource limits, writes verified results and HDF5 checkpoints,
 and analyzes saved data. CairoMakie plotting is an optional extension.
+
+Compatibility with Julia 1.13 patch releases is distinct from the exact
+Manifest recorded for an individual calculation environment.
 
 ## Run
 
@@ -56,7 +59,8 @@ QCL_NEGF_PROJECT=/absolute/path/to/qcl-negf-env deno task docs
 
 Use the same `QCL_NEGF_PROJECT` value when invoking `bin/qcl-negf` from that workspace.
 The generated manifest belongs to the integration/release environment. The published
-Runner project resolves core from its `v0.2.0` source tag.
+Runner project resolves core from the accepted source commit recorded in
+`[sources]`; the immutable `v0.2.0` tag predates Julia 1.13 patch compatibility.
 
 The [configuration guide](docs/src/user/configuration.md),
 [results and restart](docs/src/user/results.md),
