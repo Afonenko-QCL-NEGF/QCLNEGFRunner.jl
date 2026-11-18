@@ -4,7 +4,7 @@ authors = ["QCL-NEGF contributors"]
 version = "0.2.0"
 
 [sources]
-QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "e171caa60cce676c6c4238dd671e7c527f2bd977"}
+QCLNEGF = {url = "https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl", rev = "db26a0ef49673d8246ae336cbe73bafe6d7482ac"}
 
 [deps]
 QCLNEGF = "25d1ffa8-5cfa-41e3-b02e-8fca5bf51027"

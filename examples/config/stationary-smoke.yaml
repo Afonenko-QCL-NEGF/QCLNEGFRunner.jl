@@ -1,0 +1,43 @@
+schema: qcl-negf-study-v2
+kind: study
+id: stationary-smoke
+name: Bounded stationary diagnostic at 70 K and 48 mV
+purpose: diagnostic
+operation: stationary
+configuration:
+  sources:
+  - reference-2019-70k.yaml
+  overrides:
+    # Published small engineering mesh (fixed_work_production_calibration test).
+    numerical:
+      spatial_nodes: 48
+      basis_states: 3
+      basis_periods: 1
+      energy_min: -0.10 eV
+      energy_max: 0.28 eV
+      energy_nodes: 49
+      energy_trust_margin: 56 meV
+      momentum_max: 0.45 nm^-1
+      momentum_nodes: 5
+      angular_nodes: 8
+      longitudinal_momentum_max: 6 nm^-1
+      longitudinal_momentum_nodes: 25
+      seed_broadening: 2 meV
+    # Bound work for this diagnostic. Inherit scattering and tolerances.
+    solver:
+      maximum_scba_iterations: 2
+      maximum_poisson_iterations: 2
+    output:
+      snapshot_every_outer: 0
+axes:
+  temperatures:
+    values: [70]
+    unit: K
+  voltages:
+    values: [48]
+    unit: mV
+outputs:
+  full_state: true
+  projections: true
+  optical: false
+  intermediate_history: 8
