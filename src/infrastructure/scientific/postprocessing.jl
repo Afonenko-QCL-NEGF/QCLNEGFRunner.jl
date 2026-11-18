@@ -120,6 +120,23 @@ function postprocess_series(
             series["name"],
             "\n\nSaved-data analysis; no solver was executed.\n",
         )
+        println(io, "Result status: `", series["status"], "`")
+        println(io, "\nFrozen plan: `", series["plan_fingerprint"], "`\n")
+        println(io, "| Point | T (K) | Bias per period (V) | Point status | Iterative convergence | Physical gates passed | Scientific acceptance |")
+        println(io, "|---|---|---|---|---|---|---|")
+        for row in rows
+            coordinates = row["coordinates"]
+            assessment = get(row["observables"], "scientific_assessment", Dict())
+            println(
+                io,
+                "| `", row["id"], "` | ", coordinates["temperature_K"],
+                " | ", coordinates["voltage_per_period_V"], " | ", row["status"],
+                " | ", get(assessment, "iterative_converged", "not recorded"),
+                " | ", get(assessment, "physical_gates_passed", "not recorded"),
+                " | ", get(assessment, "scientific_accepted", "not recorded"), " |",
+            )
+        end
+        println(io)
         println(io, "| Operation | Status |\n|---|---|")
         for op in operations
             item=derived["operations"][op]

@@ -30,6 +30,34 @@ Exit code zero means that the process completed. Inspect result and point status
 quality and physical gates before using a result as scientific evidence. HDF5 is a required Runner dependency. Plotting additionally requires CairoMakie in
 the active Julia environment.
 
+### Проверка сквозного stationary-сценария
+
+Из checkout Runner с подготовленной штатным Pkg средой:
+
+```sh
+export JULIA_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+bin/qcl-negf plan examples/config/stationary-smoke.yaml --max-runs 1 > plan.json
+bin/qcl-negf run-plan plan.json stationary-result
+bin/qcl-negf analyze stationary-result stationary-report
+```
+
+Пример выполняет ограниченную диагностику для публичной структуры при 70 K
+и 48 мВ на период. Малая сетка и предел в две итерации SCBA на внешний шаг
+заданы явно. Диагностический режим допускает продолжение при неполном
+энергетическом покрытии. Полученные значения служат для проверки сквозной записи
+и чтения. Поля `resolved_configuration` и `effective_inputs` в
+`plan.json` показывают фактически разрешённые параметры. Сохраните исходный
+YAML, Pkg `Manifest.toml` и ревизию checkout Runner вместе с результатом.
+Секция Core в Manifest фиксирует выбранную Pkg ревизию, а
+`metadata/toolchain_json` в HDF5 связывает результат с хешем Manifest.
+
+`stationary-report/report.md` показывает состояние точки, итерационную
+сходимость, физические проверки и научную приёмку. Невязки сохраняются в
+history артефактах. Нативные файлы можно независимо прочитать командой
+`qcl-negf-results render POINT/artifacts OUTPUT`, где `POINT` — каталог из
+`points[].data.artifact_root` в `series_result.json` относительно корня
+результата.
+
 For direct Julia use, import `QCLNEGF` for scientific types and numerical functions,
 and `QCLNEGFRunner` for adapters. Core depends only on its numerical dependencies;
 Runner depends on core.

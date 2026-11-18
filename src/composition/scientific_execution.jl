@@ -264,49 +264,12 @@ function _scientific_charge_observables(solution)
         fields["density_profile_per_m3"]=values
         fields["density_profile_grid"]="64_uniform_positions_in_declared_period_including_endpoints"
     end
-    # Occupied spectral positions use the same native weights and spin factor
-    # as the sheet-density functional. They do not modify the stored Green state.
-    problem=solution.problem
-    green=solution.scba.green.Gˡ
-    occupied=zeros(length(problem.grids.ε))
-    for e in axes(green, 1), k in axes(green, 2), a in axes(green, 3)
-        occupied[e]+=real(-im*green[e, k, a, a])*problem.grids.wᵏ[k]*problem.physical.g_s/(
-            2π
-        )
-    end
-    try
-        quantiles=_occupied_energy_quantiles(
-            problem.grids.ε,
-            problem.grids.wᴱ,
-            occupied;
-            energy_scale_eV = problem.scales.E₀_eV,
-            energy_reference_eV = Float64(ustrip(u"eV", problem.physical.E_ref)),
-        )
-        for (name, value) in zip(
-            ("occupied_energy_q10_eV", "occupied_energy_q50_eV", "occupied_energy_q90_eV"),
-            quantiles.values_eV,
-        )
-            fields[name]=value
-        end
-        fields["occupied_spectral_quantiles"]=Dict{String,Any}(
-            "available"=>true,
-            "units"=>"eV",
-            "probabilities"=>quantiles.probabilities,
-            "energy_window_eV"=>quantiles.energy_window_eV,
-            "occupied_sheet_density_per_m2"=>quantiles.total_mass/problem.scales.L₀_m^2,
-            "reconstruction"=>"piecewise_constant_control_volume",
-            "formula"=>"mass(E)=wE(E)*gs/(2*pi)*sum_k wk(k)*real(-i*Tr(Gless(E,k)))",
-            "scope"=>"finite represented window; no infinite-window moment claim",
-        )
-    catch error
-        error isa ArgumentError || rethrow()
-        fields["occupied_spectral_quantiles"]=Dict(
-            "available"=>false,
-            "status"=>"not_measured",
-            "reason"=>sprint(showerror, error),
-            "units"=>"eV",
-        )
-    end
+    fields["occupied_spectral_quantiles"]=Dict(
+        "available"=>false,
+        "status"=>"not_measured",
+        "reason"=>"occupied spectral quantile estimator is unavailable",
+        "units"=>"eV",
+    )
     fields["effective_seed"]=Dict(
         String(k)=>v for (k, v) in pairs(effective_seed_parameters(solution.problem))
     )
