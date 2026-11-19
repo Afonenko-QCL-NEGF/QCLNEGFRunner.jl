@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qcl-negf.invalid/schema/run.schema.json",
-  "title": "QCL-NEGF resolved run configuration",
-  "description": "Sole declarative contract for the fully merged YAML configuration. This schema is intentionally unversioned: the installed package supports only this contract.",
+  "$id": "https://qcl-negf.invalid/schema/runner/run.schema.json",
+  "title": "QCLNEGFRunner resolved run configuration",
+  "description": "The current Runner configuration contract for fully merged YAML.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -1801,7 +1801,6 @@
         "enabled",
         "terminal",
         "significant_digits",
-        "human_every",
         "event_log_file",
         "latest_snapshot_file",
         "dashboard_file"
@@ -1817,10 +1816,6 @@
           "type": "integer",
           "minimum": 2,
           "maximum": 17
-        },
-        "human_every": {
-          "type": "integer",
-          "minimum": 1
         },
         "event_log_file": {
           "$ref": "#/$defs/nullableRelativePath"

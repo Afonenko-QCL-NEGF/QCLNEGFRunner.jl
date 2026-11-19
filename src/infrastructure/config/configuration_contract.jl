@@ -8,13 +8,6 @@ from its build directory to an installed prefix.
 default_configuration_schema() = _package_path("schema", "run.schema.json")
 
 """
-Absolute path of the installed run-configuration schema, initialized when the
-module is loaded. Retained as a String for existing callers; new code can use
-[`default_configuration_schema`](@ref) to resolve the current package resource.
-"""
-DEFAULT_CONFIGURATION_SCHEMA::String = ""
-
-"""
     ValidatedConfigurationDocument
 
 Schema-validated, deeply merged input before conversion to solver types.

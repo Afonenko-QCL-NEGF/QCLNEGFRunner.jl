@@ -120,7 +120,7 @@ function load_scientific_plan(data::AbstractDict)
     length(points)<=Int(data["maximum_solver_runs"]) ||
         throw(ArgumentError("plan computation count/limit mismatch"))
     get(data, "campaign", nothing) === nothing ||
-        throw(ArgumentError("plan campaign policy belongs to AiiDA"))
+        throw(ArgumentError("plan campaign scheduling is outside the Runner contract"))
     nodes=ScientificExecutionNode[]
     for n in _vector_input(data["nodes"], "nodes")
         push!(

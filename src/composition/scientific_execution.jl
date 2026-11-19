@@ -895,12 +895,13 @@ function execute_scientific_plan(
                     durable_state(state)
                 end
                 function checkpoint_request(context)
-                    checkpoint_due(checkpoint_clock) && return true
-                    isfile(joinpath(root, "control", "pause.json")) && return true
                     cadence =
                         context.stage === :scba ? config.production.checkpoint_every_scba :
                         config.production.checkpoint_every_outer
-                    return cadence > 0 && context.iteration % cadence == 0
+                    due = checkpoint_due(checkpoint_clock) ||
+                          isfile(joinpath(root, "control", "pause.json")) ||
+                          (cadence > 0 && context.iteration % cadence == 0)
+                    return due ? CHECKPOINT_STATE_ONLY : CHECKPOINT_NONE
                 end
                 runtime_options =
                     with_production_options(runtime_options; checkpoint_request)

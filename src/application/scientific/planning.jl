@@ -191,7 +191,7 @@ function _validate_execution_nodes(nodes, executions)
         n.stage_id == "standalone" && isempty(n.depends_on) &&
         isempty(n.required_evidence) && isempty(n.forbidden_evidence) &&
         n.priority == 0 && !n.reserve && n.comparison_reference === nothing ||
-            throw(ArgumentError("execution scheduling belongs to AiiDA; only independent nodes are accepted"))
+            throw(ArgumentError("Runner plans require independent execution nodes"))
     end
     return nothing
 end

@@ -79,7 +79,6 @@ save_production_study_plots
 
 ```@docs
 AutomaticExecutionConfiguration
-DEFAULT_CONFIGURATION_SCHEMA
 default_configuration_schema
 ValidatedConfigurationDocument
 HardwareProfile

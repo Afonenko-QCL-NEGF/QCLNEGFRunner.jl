@@ -12,7 +12,6 @@ include("../support/common.jl")
         human_io = human,
         csv_io = csv,
         significant_digits = 4,
-        human_every = 5,
         on_snapshot = snapshot -> push!(snapshots, snapshot),
         clock_ns = () -> ticks[],
     )

@@ -68,7 +68,6 @@ struct ProgressOutputConfiguration
     enabled::Bool
     terminal::Bool
     significant_digits::Int
-    human_every::Int
     event_log_file::Union{Nothing,String}
     latest_snapshot_file::Union{Nothing,String}
     dashboard_file::Union{Nothing,String}
@@ -114,10 +113,6 @@ struct OutputConfiguration
     light_max_momentum_points::Int
     light_max_snapshots::Int
 end
-
-# Source compatibility for callers constructing the previous output contract.
-OutputConfiguration(args::Vararg{Any,16}) =
-    OutputConfiguration(args..., false, 2048, 512, 64, 64)
 
 """
 Explicit grid sizes varied by a convergence study.
@@ -198,12 +193,6 @@ struct ResolvedRunConfiguration
     physical_models::PhysicalModelOptions
     domain_adaptation::DomainAdaptationPolicy
 end
-
-# Source compatibility for the 0.9 typed in-memory constructor.
-ResolvedRunConfiguration(args::Vararg{Any,16}) =
-    ResolvedRunConfiguration(args..., PhysicalModelOptions(), DomainAdaptationPolicy())
-ResolvedRunConfiguration(args::Vararg{Any,17}) =
-    ResolvedRunConfiguration(args..., DomainAdaptationPolicy())
 
 """
     configuration_source(configuration, dotted_path)

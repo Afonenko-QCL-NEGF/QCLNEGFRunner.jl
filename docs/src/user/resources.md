@@ -12,8 +12,8 @@ shared cache is not credited as memory available exclusively to this process.
 
 A stopped execution may return a paused status and checkpoint provenance. Resume
 is possible only when a compatible verified checkpoint was actually written.
-AiiDA decides whether and where to schedule subsequent work. Neither Slurm priority
-nor walltime changes the physical acceptance criteria.
+Scheduling remains outside Runner. Physical acceptance uses the scientific gates
+recorded with the result.
 
 Direct core-library callers supply their own algorithm and thread options. OS
 resource discovery belongs to Runner; the numerical library does not probe its

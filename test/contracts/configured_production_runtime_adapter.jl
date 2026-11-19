@@ -75,6 +75,8 @@ using HDF5
         study,
         base.provenance,
         raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
 
     plan = configured_nested_sweep_plan(configuration)
@@ -113,6 +115,8 @@ using HDF5
         study,
         base.provenance,
         relocated_raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
     @test configured_nested_run_definition(relocated).identity.run_id ==
           definition.identity.run_id
@@ -150,6 +154,8 @@ using HDF5
         study,
         base.provenance,
         changed_validation_raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
     @test configured_nested_run_definition(changed_validation).identity.run_id !=
           definition.identity.run_id
@@ -177,6 +183,8 @@ using HDF5
         study,
         base.provenance,
         changed_numerical_raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
     @test configured_nested_run_definition(changed_numerical).identity.run_id !=
           definition.identity.run_id
@@ -203,6 +211,8 @@ using HDF5
         study,
         base.provenance,
         mismatched_raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
     @test_throws ArgumentError configured_nested_run_definition(mismatched)
     @test_throws ArgumentError QCLProductionPointRunner(mismatched)
@@ -637,6 +647,8 @@ using HDF5
         base.study,
         base.provenance,
         base.raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
     @test_throws ArgumentError QCLProductionPointRunner(educational)
 
@@ -681,6 +693,8 @@ using HDF5
         comparison_study,
         base.provenance,
         base.raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
     @test_throws ArgumentError QCLProductionPointRunner(comparison)
 end

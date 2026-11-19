@@ -42,6 +42,19 @@ function _require_restart_equal(label::AbstractString, actual, expected)
         _restart_mismatch("restart $label mismatch: stored=$actual, expected=$expected")
 end
 
+function _matches_restart_contract_fields(stored, expected::AbstractDict)
+    stored isa AbstractDict && keys(stored) == keys(expected) || return false
+    return all(pairs(expected)) do (key, value)
+        actual = stored[key]
+        value isa AbstractDict && return _matches_restart_contract_fields(actual, value)
+        value isa AbstractString && return actual isa AbstractString
+        if value isa AbstractFloat
+            return actual isa Real && !(actual isa Bool) && isfinite(actual)
+        end
+        return actual isa typeof(value)
+    end
+end
+
 function _require_restart_close(label::AbstractString, actual::Real, expected::Real)
     a, b = Float64(actual), Float64(expected)
     isfinite(a) && isfinite(b) ||
@@ -331,9 +344,15 @@ function _load_production_restart(
             String(read(metadata["restart_contract_yaml"]));
             dicttype = Dict{String,Any},
         )
+        expected_contract = _solver_restart_contract(
+            solver_options === nothing ? SolverOptions() : solver_options,
+            algorithms === nothing ? AlgorithmOptions() : algorithms,
+        )
         contract isa Dict{String,Any} &&
-        get(contract, "schema", nothing)=="qcl-negf-exact-restart-v1" ||
+        get(contract, "schema", nothing)==expected_contract["schema"] ||
             throw(ArgumentError("invalid exact restart contract"))
+        _matches_restart_contract_fields(contract, expected_contract) ||
+            _restart_mismatch("checkpoint does not contain the complete exact restart contract")
         haskey(metadata, "kernel_identity_yaml") ||
             _restart_mismatch("checkpoint lacks the exact scattering-operator identity")
         kernel_identity = YAML.load(
@@ -342,30 +361,10 @@ function _load_production_restart(
         )
         kernel_identity == _checkpoint_kernel_identity(problem.kernels) ||
             _restart_mismatch("restart scattering operators differ (Khat, qK, or F_LO)")
-        if algorithms !== nothing
-            # Core owns versioned algorithm defaults, including historical v1
-            # Hilbert contracts without elastic_retarded. Project only this
-            # optional comparison into its full contract checker; the caller's
-            # separately optional solver comparison remains below. Never
-            # rewrite the stored contract or drop unknown algorithm keys.
-            comparison_options = SolverOptions()
-            comparison = _solver_restart_contract(comparison_options, algorithms)
-            comparison["algorithms"] = get(contract, "algorithms", nothing)
-            try
-                _check_exact_restart_contract(comparison, comparison_options, algorithms)
-            catch error
-                error isa ArgumentError || rethrow()
-                _restart_mismatch("restart algorithm contract differs from requested algorithms")
-            end
-        end
-        if solver_options !== nothing
-            get(contract, "solver", nothing) == _solver_restart_contract(
-                solver_options,
-                algorithms === nothing ? AlgorithmOptions() : algorithms,
-            )["solver"] || _restart_mismatch(
-                "restart mixing/quality policy differs from requested solver options",
-            )
-        end
+        algorithms === nothing || contract["algorithms"] == expected_contract["algorithms"] ||
+            _restart_mismatch("restart algorithm contract differs from requested algorithms")
+        solver_options === nothing || contract["solver"] == expected_contract["solver"] ||
+            _restart_mismatch("restart mixing/quality policy differs from requested solver options")
         state = file["state_dimensionless"]
         shape = (
             problem.numerical.N_E,

@@ -7,8 +7,8 @@ checksums and exact-restart requirements. Test corrupt and incompatible input as
 well as successful execution.
 
 Keep numerical equations and in-memory model types in QCLNEGF.jl. Runner may depend
-on core; core must not depend on Runner. Coordinate format changes with
-qcl-negf-contracts, qcl-negf-results and qcl-negf-aiida. A successful process exit
+on core; core must not depend on Runner. Coordinate changes to the shared results
+contract with qcl-negf-contracts and qcl-negf-results. A successful process exit
 must not be promoted into scientific acceptance. Do not embed deployment hosts,
 credentials, scheduler queues or organization-specific study definitions in code.
 

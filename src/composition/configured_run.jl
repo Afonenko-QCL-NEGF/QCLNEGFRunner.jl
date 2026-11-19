@@ -338,7 +338,6 @@ function _save_output_policy(
                 "enabled" => output.progress.enabled,
                 "terminal" => output.progress.terminal,
                 "significant_digits" => output.progress.significant_digits,
-                "human_every" => output.progress.human_every,
                 "event_log_file" => output.progress.event_log_file,
                 "latest_snapshot_file" => output.progress.latest_snapshot_file,
                 "dashboard_file" => output.progress.dashboard_file,
@@ -722,7 +721,6 @@ function run_from_configuration(
         ProgressReporter(;
             human_io = human_stream,
             significant_digits = progress_configuration.significant_digits,
-            human_every = progress_configuration.human_every,
             on_snapshot = observe,
         )
     else
@@ -731,7 +729,6 @@ function run_from_configuration(
             append = configuration.output.resume,
             human_io = human_stream,
             significant_digits = progress_configuration.significant_digits,
-            human_every = progress_configuration.human_every,
             on_snapshot = observe,
         )
     end
@@ -883,7 +880,8 @@ function _configured_storage_observers(
         cadence =
             context.stage === :scba ? configuration.production.checkpoint_every_scba :
             configuration.production.checkpoint_every_outer
-        return checkpoint_due(clock) || (cadence > 0 && context.iteration % cadence == 0)
+        due = checkpoint_due(clock) || (cadence > 0 && context.iteration % cadence == 0)
+        return due ? CHECKPOINT_STATE_ONLY : CHECKPOINT_NONE
     end
     function checkpoint_observer(solution::NEGFSolution, it::Integer, iv::Integer)
         solution.status in (:running, :running_scba) || return nothing

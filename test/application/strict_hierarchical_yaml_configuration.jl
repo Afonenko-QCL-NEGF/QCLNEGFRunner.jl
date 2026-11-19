@@ -35,7 +35,6 @@ include("../support/configuration.jl")
     @test base.study.mode == :single
     @test base.study.reference_profile === nothing
     @test base.output.progress.significant_digits == 4
-    @test base.output.progress.human_every == 5
     @test base.output.progress.event_log_file == joinpath("progress", "events.csv")
     @test base.output.progress.dashboard_file === nothing
     @test base.output.report_directory == "expert_report"
@@ -189,6 +188,8 @@ include("../support/configuration.jl")
         ignored_convergence_study,
         base.provenance,
         base.raw,
+        base.physical_models,
+        base.domain_adaptation,
     )
     @test_throws ArgumentError run_from_configuration(ignored_convergence_configuration)
 

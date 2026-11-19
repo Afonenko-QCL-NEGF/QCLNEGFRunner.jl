@@ -22,8 +22,8 @@ bin/qcl-negf analyze result analysis
 
 A study must declare configuration sources, temperature and voltage axes.
 `run-plan PLAN OUTPUT --execution-id ID` selects an ID in `plan.executions`.
-AiiDA can schedule independent executions while continuation points inside an
-execution remain sequential. One Slurm task hosts one Julia process; set
+Independent executions can start separately. Continuation points inside an
+execution remain sequential. One Slurm task hosts one Julia process. Set
 `JULIA_NUM_THREADS` to the allocated CPUs per task.
 
 Exit code zero means that the process completed. Inspect result and point statuses,
@@ -97,10 +97,10 @@ The [configuration guide](docs/src/user/configuration.md),
 The physical equations and independent numerical operators are documented in
 [QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/tree/main/docs/src).
 
-The [contracts repository](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts) owns
-schemas; [qcl-negf-results](https://github.com/Afonenko-QCL-NEGF/qcl-negf-results) reads
-published data in Python. [qcl-negf-aiida](https://github.com/Afonenko-QCL-NEGF/qcl-negf-aiida)
-owns distributed workflows; [qcl-negf-research](https://github.com/Afonenko-QCL-NEGF/qcl-negf-research)
+Runner owns its current run configuration schema. The
+[contracts repository](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts) owns the
+shared results contract. [qcl-negf-results](https://github.com/Afonenko-QCL-NEGF/qcl-negf-results)
+reads published data in Python. [qcl-negf-research](https://github.com/Afonenko-QCL-NEGF/qcl-negf-research)
 owns scientific studies.
 
 License: MIT.

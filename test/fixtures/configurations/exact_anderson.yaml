@@ -239,7 +239,6 @@ output:
     enabled: true
     terminal: true
     significant_digits: 4
-    human_every: 5
     event_log_file: progress/events.csv
     latest_snapshot_file: progress/latest.csv
     dashboard_file: null

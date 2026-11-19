@@ -78,7 +78,7 @@ const _PROGRESS_STAGE_PARENT = Dict{Symbol,Tuple{Vararg{Symbol}}}(
 
 """
     ProgressReporter(; human_io=stdout, csv_io=nothing,
-                     significant_digits=4, human_every=1,
+                     significant_digits=4,
                      on_snapshot=identity, clock_ns=time_ns,
                      strict_hierarchy=true)
 
@@ -88,9 +88,8 @@ and preserves the full `Float64` representation.  Supplying neither stream is
 valid when only `on_snapshot` is used by a dashboard.
 
 `clock_ns` is injectable so tests and replay tools need not depend on wall
-time. The human stream contains lifecycle begin/end events only. Every
-iteration remains in CSV and callbacks; `human_every` is a compatibility
-setting and does not discard scientific telemetry.
+time. The human stream contains lifecycle begin/end events. Every iteration is
+available in CSV and callbacks.
 
 See [Production observability](@ref native-result-formats).
 """
@@ -98,7 +97,6 @@ mutable struct ProgressReporter
     human_io::Union{Nothing,IO}
     csv_io::Union{Nothing,IO}
     significant_digits::Int
-    human_every::Int
     on_snapshot::Function
     clock_ns::Function
     strict_hierarchy::Bool
@@ -117,7 +115,6 @@ function ProgressReporter(;
     human_io::Union{Nothing,IO} = stdout,
     csv_io::Union{Nothing,IO} = nothing,
     significant_digits::Integer = 4,
-    human_every::Integer = 1,
     on_snapshot::Function = identity,
     clock_ns::Function = () -> Int(time_ns()),
     strict_hierarchy::Bool = true,
@@ -129,12 +126,10 @@ function ProgressReporter(;
 )
     2 ≤ significant_digits ≤ 17 ||
         throw(ArgumentError("significant_digits must lie in 2:17"))
-    human_every ≥ 1 || throw(ArgumentError("human_every must be positive"))
     reporter = ProgressReporter(
         human_io,
         csv_io,
         Int(significant_digits),
-        Int(human_every),
         on_snapshot,
         clock_ns,
         strict_hierarchy,

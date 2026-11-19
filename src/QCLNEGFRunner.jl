@@ -8,6 +8,7 @@ using YAML
 import HDF5
 import QCLNEGF
 include("core_api.jl")
+include("application/scientific/matrix_audit.jl")
 include("infrastructure/persistence/atomic_files.jl")
 include("infrastructure/resources/package_paths.jl")
 include("infrastructure/persistence/hdf5_backend.jl")
@@ -172,7 +173,6 @@ export FundamentalConstants,
     SolverOptions,
     ScatteringOptions,
     ScaleSystem,
-    ModelGrids,
     MaterialProfiles,
     BasisData,
     KernelSet,
@@ -371,8 +371,7 @@ export HardwareProfile,
     save_execution_calibration,
     save_resource_diagnostics
 
-export DEFAULT_CONFIGURATION_SCHEMA,
-    default_configuration_schema,
+export default_configuration_schema,
     ValidatedConfigurationDocument,
     validate_configuration_schema,
     validate_configuration_source,
@@ -575,7 +574,6 @@ export AbstractCheckpointCodec,
     ConvergencePolicy,
     ConvergenceReport,
     ConvergenceStudyConfiguration,
-    DEFAULT_CONFIGURATION_SCHEMA,
     DEFAULT_MAXIMUM_SOLVER_RUNS,
     DenseProductionKernel,
     DeviceGeometryConfiguration,
@@ -615,7 +613,6 @@ export AbstractCheckpointCodec,
     MethodDescriptor,
     MethodPoint,
     MethodRun,
-    ModelGrids,
     MomentumIndependentProductionKernel,
     NEGFProblem,
     NEGFSolution,
@@ -874,12 +871,6 @@ export AbstractCheckpointCodec,
     validate_solution,
     verify_result_artifacts!
 
-
-function __init__()
-    # Keep the exported String binding compatible without freezing a builder path
-    # into package images. Loaders resolve their default via the runtime accessor.
-    global DEFAULT_CONFIGURATION_SCHEMA = default_configuration_schema()
-end
 
 include("composition/scratch_execution.jl")
 include("cli.jl")

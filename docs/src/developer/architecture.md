@@ -15,19 +15,22 @@ configuration, scientific plans, filesystem persistence, checkpoints and present
 
 ## [Configuration contract](@id configuration-contract)
 
-Every study declares `configuration.sources` and operating-point axes. YAML is
-checked against `schema/run.schema.json`; vendored schema provenance is recorded
-in `schema/PROVENANCE.json`. A frozen plan preserves the effective inputs and
-fingerprints. Unknown keys, invalid dimensions and inconsistent input fail before
-solving. Resource admission never reduces a grid or relaxes an acceptance threshold.
+Every study declares `configuration.sources` and operating-point axes. Runner
+validates YAML against its `schema/run.schema.json`. The local schema hash and its
+upstream origin are recorded in `schema/PROVENANCE.json`. A frozen plan preserves
+the effective inputs and fingerprints. Unknown keys, invalid dimensions and
+inconsistent input fail before solving. Resource admission never reduces a grid or
+relaxes an acceptance threshold.
 
 ## External services
 
-AiiDA owns durable distributed process state and provenance. Slurm owns allocation
-and queue policy. Runner performs one declared execution inside that allocation,
-checks process affinity and cgroup bounds, and writes results. NixOS deployment,
-service identity and CI installation are owned by qcl-negf-platform.
+An external scheduler can provide an allocation. Runner performs one declared
+execution inside that allocation, checks process affinity and cgroup bounds, and
+writes results. NixOS deployment, service identity and CI installation are owned
+by qcl-negf-platform.
 
 The storage contract is [documented separately](@ref native-result-formats).
+The matrix audit computes spectral and phase-space diagnostics from the solution.
+The HDF5 adapter writes the measured values and their axis metadata.
 Python readers live in qcl-negf-results. No deployment controller or distributed
 queue service is embedded in this package.

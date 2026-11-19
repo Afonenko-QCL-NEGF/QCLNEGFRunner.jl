@@ -262,10 +262,11 @@ function _analysis_history!(file, solution)
         solution.scba.history;
         required_consecutive = solution.options.convergence.required_consecutive_scba_passes,
     )
-    witnesses=_write_final_matrix_audit!(diagnostic, solution)
+    audit=_measure_final_matrix_audit(solution)
+    _write_final_matrix_audit!(diagnostic, audit)
     diagnostic["validation_json"] = sprint(_light_json, _light_validation_data(solution))
     diagnostic["positivity_json"] =
-        sprint(_light_json, _light_positivity_data(solution; witnesses))
+        sprint(_light_json, _light_positivity_data(solution; witnesses = audit.witnesses))
     diagnostic["warnings_json"] =
         sprint(_light_json, get(solution.observables, :warnings, Any[]))
     return diagnostic
@@ -939,44 +940,50 @@ function _attach_native_dimensions!(file)
     )
     haskey(file, "optical/photon_energy_eV") &&
         (coordinates["photon_energy"]="optical/photon_energy_eV")
-    scale_paths=Set(values(coordinates))
-    for path in scale_paths
-        haskey(file, path) || continue
-        backend.API.h5ds_set_scale(file[path].id, basename(path))
-    end
+    # Keep dataset wrappers alive while the HDF5 API creates references.
+    scales=Dict{String,HDF5.Dataset}()
     function visit(parent, prefix = "")
         for name in keys(parent)
             object=parent[name]
             path=isempty(prefix) ? name : prefix*"/"*name
-            if object isa backend.Group
-                visit(object, path)
-            elseif object isa backend.Dataset && !(path in scale_paths) && ndims(object)>0
-                axes=split(String(read_attribute(object, "logical_axis_order")), ',')
-                length(axes)==ndims(object) || continue
-                dimensions=reverse(size(object))
-                references=Union{Nothing,String}[]
-                for (index, axis) in enumerate(axes)
-                    coordinate=get(coordinates, axis, nothing)
-                    if coordinate!==nothing &&
-                       haskey(file, coordinate) &&
-                       length(file[coordinate])==dimensions[index]
-                        backend.API.h5ds_attach_scale(
-                            object.id,
-                            file[coordinate].id,
-                            UInt32(index-1),
-                        )
-                        push!(references, "/"*coordinate)
-                    else
-                        push!(references, nothing)
+            try
+                if object isa backend.Group
+                    visit(object, path)
+                elseif object isa backend.Dataset && !haskey(scales, path) && ndims(object)>0
+                    axes=split(String(read_attribute(object, "logical_axis_order")), ',')
+                    length(axes)==ndims(object) || continue
+                    dimensions=reverse(size(object))
+                    references=Union{Nothing,String}[]
+                    for (index, axis) in enumerate(axes)
+                        coordinate=get(coordinates, axis, nothing)
+                        scale=get(scales, coordinate, nothing)
+                        if scale!==nothing && length(scale)==dimensions[index]
+                            backend.API.h5ds_attach_scale(object, scale, UInt32(index-1))
+                            push!(references, "/"*coordinate)
+                        else
+                            push!(references, nothing)
+                        end
                     end
+                    attributes(object)["axis_coordinate_paths_json"]=sprint(
+                        _light_json,
+                        references,
+                    )
                 end
-                attributes(object)["axis_coordinate_paths_json"]=sprint(
-                    _light_json,
-                    references,
-                )
+            finally
+                close(object)
             end
         end
     end
-    visit(file)
+    try
+        for path in Set(values(coordinates))
+            haskey(file, path) || continue
+            scale=file[path]
+            scales[path]=scale
+            backend.API.h5ds_set_scale(scale, basename(path))
+        end
+        visit(file)
+    finally
+        foreach(close, values(scales))
+    end
     return nothing
 end

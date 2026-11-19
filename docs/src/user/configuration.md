@@ -3,14 +3,14 @@
 A run configuration is a YAML file with dimensional physical quantities, numerical
 grids, scattering models, convergence policy and output settings. Load one or more
 ordered files with `load_run_configuration`; later files override explicit fields.
-The schema is `schema/run.schema.json`. The checked example is
+Runner's current schema is `schema/run.schema.json`. The checked example is
 `examples/config/reference-2019-70k.yaml`.
 
 ## [Scientific plans](@id scientific-plans)
 
 A `qcl-negf-study-v2` definition names configuration sources, variants and operating
 points. Temperature and voltage axes must be explicit; no device-specific operating point is assumed. `qcl-negf plan examples/config/operator-algebra.yaml` emits an immutable
-`qcl-negf-scientific-plan-v2` JSON plan. Store this plan as an AiiDA input.
+`qcl-negf-scientific-plan-v2` JSON plan. Keep this immutable plan with its results.
 `qcl-negf run-plan plan.json result --execution-id ID` runs one declared execution;
 ID must be an entry from `plan.executions`, never an unrelated process identifier.
 Continuation points within that execution remain sequential.

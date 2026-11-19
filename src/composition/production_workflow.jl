@@ -69,6 +69,10 @@ sweep and user interrupts always propagate. The optional
 `incompatible_checkpoint` policy belongs only to the direct Julia API; the
 configured runtimes always reject incompatible checkpoints.
 
+A `checkpoint_request(context, temperature_index, voltage_index)` override
+returns `:none`, `:state_only`, or `:state_and_markers` at a solver checkpoint
+boundary.
+
 See [Production sweep, warm start, and recovery](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
 the [HDF5 checkpoint schema](@ref native-result-formats).
 """

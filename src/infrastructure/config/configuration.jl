@@ -1308,7 +1308,6 @@ function _parse_output(mapping)
             "enabled",
             "terminal",
             "significant_digits",
-            "human_every",
             "event_log_file",
             "latest_snapshot_file",
             "dashboard_file",
@@ -1377,11 +1376,6 @@ function _parse_output(mapping)
             "$path.progress.significant_digits";
             minimum = 2,
             maximum = 17,
-        ),
-        _integer(
-            progress_mapping["human_every"],
-            "$path.progress.human_every";
-            minimum = 1,
         ),
         event_log,
         latest_snapshot,
