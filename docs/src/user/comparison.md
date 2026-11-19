@@ -1,17 +1,19 @@
-# [Scientific comparison](@id expert-comparison-workflow)
+# [Научное сравнение](@id expert-comparison-workflow)
 
-Compare material, geometry, operating point, physical mechanisms, boundary model,
-algorithm and strict tolerances before comparing observables. Declare the intended
-changed configuration paths in a controlled study. Preserve requested and effective
-inputs, including any seed floor imposed by the energy grid.
+Перед сравнением наблюдаемых величин сопоставьте материал, геометрию, рабочую
+точку, физические механизмы, модель границ, алгоритм и строгие допуски. В
+контролируемом исследовании явно укажите, какие поля конфигурации меняются.
+Сохраните заданные и фактически применённые входные параметры, включая нижний
+предел уширения начального приближения, если его задаёт энергетическая сетка.
 
-A process that completed is not automatically a converged or accepted physical
-result. Report iterative convergence, physical gates and discretization evidence
-separately. Unmeasured quantities need a reason; they must not be replaced with zero.
-Study-specific tolerances and comparison budgets belong in the research definition,
-not in a generic package-wide claim of device accuracy.
+Отдельно указывайте состояние процесса, итерационную сходимость, прохождение
+физических проверок и обоснование достаточности дискретизации. Для неизмеренных
+величин укажите причину отсутствия значения. Ноль означает измеренное или
+расчётное значение и не подходит для замены отсутствующих данных. Допуски и
+бюджеты сравнения задавайте в определении исследования с учётом его постановки.
 
-Performance comparisons require identical scientific work and acceptance criteria,
-recorded thread budgets, warm-up policy and completed calculations. Measure the
-number of nonlinear iterations separately from time per iteration. More CPU usage
-alone does not demonstrate less time to an accepted result.
+Чтобы сопоставить производительность, выполните одинаковую научную работу
+при одних критериях приёмки. Зафиксируйте число потоков, условия прогрева и
+завершение расчётов. Измеряйте число нелинейных итераций и время одной итерации
+по отдельности. Для принятого решения сравнивайте фактическое время его
+получения.

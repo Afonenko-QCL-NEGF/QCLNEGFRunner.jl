@@ -1308,7 +1308,6 @@ function _parse_output(mapping)
             "enabled",
             "terminal",
             "significant_digits",
-            "human_every",
             "event_log_file",
             "latest_snapshot_file",
             "dashboard_file",
@@ -1377,11 +1376,6 @@ function _parse_output(mapping)
             "$path.progress.significant_digits";
             minimum = 2,
             maximum = 17,
-        ),
-        _integer(
-            progress_mapping["human_every"],
-            "$path.progress.human_every";
-            minimum = 1,
         ),
         event_log,
         latest_snapshot,
@@ -1841,17 +1835,18 @@ end
 """
     load_run_configuration(source_or_sources)
 
-Load one or more ordered configuration sources. A source is an individual canonical YAML file. Ordered individual
-files are then merged exactly at their position in the source list. Mapping
-nodes are merged recursively, while arrays and scalars replace their
-predecessor. Unknown keys, missing keys, inheritance cycles, escaping file
-paths, invalid units, and inconsistent cross-field choices are errors.
+Загружает один или несколько источников конфигурации в заданном порядке.
+Каждый источник представляет собой отдельный канонический файл YAML.
+Отображения объединяются рекурсивно, а массивы и скаляры заменяют
+предшествующие значения. Неизвестные или отсутствующие ключи, циклическое
+наследование, выход пути за разрешённые границы, неверные единицы и
+несогласованные параметры приводят к ошибке.
 
-This function does not read environment variables and does not mutate global
-threading, BLAS, logging, or output state.
+Функция не читает переменные окружения и не изменяет глобальные настройки
+потоков, BLAS, журналирования и вывода.
 
-See [YAML run configurations](@ref yaml-run-configurations) and the
-[configuration contract](@ref configuration-contract).
+См. [Конфигурации запуска в YAML](@ref yaml-run-configurations) и
+[контракт конфигурации](@ref configuration-contract).
 """
 function load_run_configuration(sources_input::AbstractVector{<:AbstractString})
     return load_configuration_source(sources_input)
@@ -1859,7 +1854,7 @@ end
 
 load_run_configuration(source::AbstractString) = load_run_configuration([String(source)])
 
-"""Strict boundary decoder for opt-in physical closures; baseline remains explicit."""
+"""Строго проверяет явно выбранные физические замыкания при разборе входных данных."""
 function _parse_physical_models(value)
     mapping=_mapping(value, "physical_models")
     fields=(

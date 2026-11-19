@@ -1,12 +1,11 @@
 """
-One scalar attached to a [`ProgressSnapshot`](@ref).
+Одно скалярное значение в [`ProgressSnapshot`](@ref).
 
-The numerical `value` must already be expressed in the explicitly supplied
-`unit`.  Keeping units separate makes the event CSV both language-neutral and
-round-trip safe: the human stream may round the value, while the CSV always
-stores the full `Float64` representation.
+Число `value` должно быть выражено в указанных единицах `unit`. Единицы
+хранятся отдельно от числа, а CSV сохраняет полное представление `Float64`.
+При выводе в терминал число может округляться.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 struct ProgressMetric
     name::Symbol
@@ -38,13 +37,13 @@ ProgressMetric(name::Symbol, value::AbstractString, unit::AbstractString = "") =
     ProgressMetric(name, String(value), String(unit))
 
 """
-Immutable description of one emitted progress event.
+Неизменяемое описание одного события о ходе расчёта.
 
-`stage_path` and `labels` run from the study root to the current stage.
-`iteration`, `total`, and `fraction` are `nothing` when a stage is not an
-iterative one.  The event kind is one of `:begin`, `:progress`, or `:end`.
+`stage_path` и `labels` задают путь от корня исследования до текущей стадии.
+Для неитерационной стадии `iteration`, `total` и `fraction` равны `nothing`.
+Тип события принимает одно из значений `:begin`, `:progress` или `:end`.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 struct ProgressSnapshot
     sequence::Int
@@ -78,27 +77,25 @@ const _PROGRESS_STAGE_PARENT = Dict{Symbol,Tuple{Vararg{Symbol}}}(
 
 """
     ProgressReporter(; human_io=stdout, csv_io=nothing,
-                     significant_digits=4, human_every=1,
+                     significant_digits=4,
                      on_snapshot=identity, clock_ns=time_ns,
                      strict_hierarchy=true)
 
-Create an explicit, deterministic progress sink.  The compact human stream is
-intended for a terminal.  The normalized CSV stream writes one row per metric
-and preserves the full `Float64` representation.  Supplying neither stream is
-valid when only `on_snapshot` is used by a dashboard.
+Создаёт явно настроенный приёмник событий о ходе расчёта. Компактный поток
+предназначен для терминала. Нормализованный CSV содержит по строке на каждую
+метрику и сохраняет полное представление `Float64`. Для панели наблюдения
+можно опустить оба потока и использовать только `on_snapshot`.
 
-`clock_ns` is injectable so tests and replay tools need not depend on wall
-time. The human stream contains lifecycle begin/end events only. Every
-iteration remains in CSV and callbacks; `human_every` is a compatibility
-setting and does not discard scientific telemetry.
+Параметр `clock_ns` позволяет подменить источник времени в тестах и при
+воспроизведении событий. Терминальный поток показывает начало и конец стадий.
+Все итерации доступны в CSV и через обратные вызовы.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 mutable struct ProgressReporter
     human_io::Union{Nothing,IO}
     csv_io::Union{Nothing,IO}
     significant_digits::Int
-    human_every::Int
     on_snapshot::Function
     clock_ns::Function
     strict_hierarchy::Bool
@@ -117,7 +114,6 @@ function ProgressReporter(;
     human_io::Union{Nothing,IO} = stdout,
     csv_io::Union{Nothing,IO} = nothing,
     significant_digits::Integer = 4,
-    human_every::Integer = 1,
     on_snapshot::Function = identity,
     clock_ns::Function = () -> Int(time_ns()),
     strict_hierarchy::Bool = true,
@@ -129,12 +125,10 @@ function ProgressReporter(;
 )
     2 ≤ significant_digits ≤ 17 ||
         throw(ArgumentError("significant_digits must lie in 2:17"))
-    human_every ≥ 1 || throw(ArgumentError("human_every must be positive"))
     reporter = ProgressReporter(
         human_io,
         csv_io,
         Int(significant_digits),
-        Int(human_every),
         on_snapshot,
         clock_ns,
         strict_hierarchy,
@@ -206,10 +200,11 @@ end
 """
     ProgressReporter(csv_path; append=false, kwargs...)
 
-Open an owned machine-readable event log.  Call `close(reporter)` after the
-study, preferably from a `try`/`finally` block.  In append mode the header is
-written only for a new or empty file, and sequence numbering continues after
-the largest retained event number so a resumed production run is unambiguous.
+Открывает машинный журнал событий, которым управляет объект `reporter`.
+После завершения исследования вызовите `close(reporter)`, желательно в блоке
+`try`/`finally`. В режиме добавления заголовок записывается только в новый
+или пустой файл. Нумерация продолжается со следующего номера после последнего
+сохранённого события, поэтому события возобновлённого расчёта различимы.
 """
 function ProgressReporter(csv_path::AbstractString; append::Bool = false, kwargs...)
     path = abspath(csv_path)
@@ -270,8 +265,10 @@ function Base.close(reporter::ProgressReporter)
     return nothing
 end
 
-"""Return the most recently emitted immutable snapshot described in
-[Production observability](@ref native-result-formats)."""
+"""
+Возвращает последний неизменяемый снимок события.
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
+"""
 latest_progress(reporter::ProgressReporter) = reporter.last_snapshot
 
 function _normalise_progress_metrics(metrics)
@@ -341,8 +338,10 @@ _progress_full(value::Int64) = string(value)
 _progress_full(value::Bool) = string(value)
 _progress_full(value::String) = value
 
-"""Format one terminal-only number according to
-[Production observability](@ref native-result-formats)."""
+"""
+Форматирует одно числовое значение для терминала.
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
+"""
 function compact_number(value::Real; significant_digits::Integer = 4)
     2 ≤ significant_digits ≤ 17 ||
         throw(ArgumentError("significant_digits must lie in 2:17"))
@@ -484,9 +483,9 @@ end
     begin_progress_stage!(reporter, stage; label="", iteration=nothing,
                           total=nothing, metrics=nothing, message="")
 
-Push one validated stage onto the hierarchy and emit a `:begin` snapshot.
+Проверяет стадию, добавляет её в иерархию и публикует снимок `:begin`.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 function begin_progress_stage!(
     reporter::ProgressReporter,
@@ -521,10 +520,10 @@ end
     update_progress!(reporter; iteration=nothing, total=nothing,
                      metrics=nothing, message="")
 
-Update the current stage.  If `total` is omitted, the total declared when the
-stage began is retained.  The machine event is never rate-limited.
+Обновляет текущую стадию. Без `total` используется общее число итераций,
+заданное в начале стадии. Частота записи машинных событий не ограничивается.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 function update_progress!(
     reporter::ProgressReporter;
@@ -558,11 +557,11 @@ end
 """
     end_progress_stage!(reporter, stage; status=:completed, ...)
 
-Emit the final snapshot and pop exactly the named current stage.  This strict
-LIFO contract prevents a failed SCBA point from being reported as a completed
-sweep.
+Публикует итоговый снимок и закрывает указанную текущую стадию. Стадии
+закрываются в порядке, обратном открытию. Этот порядок защищает сводку серии
+от ошибочной регистрации сбойной точки SCBA как успешного завершения серии.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 function end_progress_stage!(
     reporter::ProgressReporter,
@@ -619,10 +618,11 @@ _observability_atomic_text(writer::Function, path::AbstractString) =
 """
     save_progress_snapshot(path, snapshot)
 
-Atomically replace a one-event, long-form CSV snapshot suitable for a file
-watcher or lightweight dashboard.  Numerical values retain full precision.
+Атомарно заменяет CSV со снимком одного события в длинном формате. Файл
+пригоден для наблюдения за обновлениями или простой панели. Числа сохраняют
+полную точность.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 function save_progress_snapshot(path::AbstractString, snapshot::ProgressSnapshot)
     return _observability_atomic_text(path) do stream
@@ -690,12 +690,12 @@ end
 """
     save_progress_dashboard(path, snapshots)
 
-Atomically update a dependency-free HTML dashboard from progress events.  It
-contains the current hierarchy, completion fraction, compact metric cards,
-and logarithmic SCBA-residual traces.  The browser refreshes the file every
-two seconds; the companion event CSV remains the full-precision audit record.
+Атомарно обновляет автономную панель HTML по событиям о ходе расчёта.
+Она показывает иерархию стадий, долю выполненной работы, компактные карточки
+метрик и логарифмические графики невязок SCBA. Браузер обновляет страницу
+каждые две секунды. Сопутствующий CSV хранит события с полной точностью.
 
-See [Production observability](@ref native-result-formats).
+См. [Наблюдаемость производственного расчёта](@ref native-result-formats).
 """
 function save_progress_dashboard(
     path::AbstractString,

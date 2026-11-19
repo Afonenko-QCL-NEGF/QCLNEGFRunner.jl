@@ -17,15 +17,16 @@ mutable struct _SpanFrame
     child_wall_seconds::Float64
 end
 
-"""Opaque handle enforcing properly nested physical/software spans."""
+"""Непрозрачный идентификатор для проверки вложенности физических и программных этапов."""
 struct SpanToken
     span_id::String
 end
 
 """
-Application event tracer. `span_class=:physical` is reserved for operations
-that express the model (Poisson, Dyson, scattering, observables), whereas
-`:software` describes orchestration, storage, rendering, and transport.
+Трассировка событий приложения. Класс `span_class=:physical` обозначает
+операции физической модели, включая уравнения Пуассона и Дайсона, рассеяние
+и вычисление наблюдаемых. Класс `:software` обозначает управление запуском,
+хранение, визуализацию и передачу данных.
 """
 mutable struct RuntimeTracer
     repository::AbstractRunRepository
@@ -75,7 +76,7 @@ function _runtime_path(tracer::RuntimeTracer)
     return isempty(tracer.stack) ? String[] : copy(last(tracer.stack).path)
 end
 
-"""Emit one structured, append-only runtime event."""
+"""Добавить одно структурированное событие выполнения в конец журнала."""
 function emit_runtime_event!(
     tracer::RuntimeTracer,
     event::Symbol;
@@ -277,7 +278,7 @@ function core_timing_summary(tracer::RuntimeTracer)
     )
 end
 
-"""Persist an immutable per-session timing file and rebuild its aggregate."""
+"""Сохранить неизменяемый файл замеров времени сессии и обновить сводку по сессиям."""
 function flush_timing_summary!(tracer::RuntimeTracer)
     isempty(tracer.stack) ||
         throw(ArgumentError("cannot flush timing summary with open spans"))

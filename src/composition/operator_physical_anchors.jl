@@ -1,7 +1,7 @@
-"""Independent truths exercised through production kernels, with saved receipts.
-
-These small manufactured fixtures establish operator correctness. They do not
-certify a self-consistent physical QCL point or fit experimental material data.
+"""Независимые контрольные задачи, выполняемые через расчётные ядра. Свидетельства
+проверки сохраняются. Эти небольшие искусственные задачи проверяют операторы.
+Самосогласованность рабочей точки ККЛ и соответствие экспериментальным данным
+материалов по ним не оцениваются.
 """
 const _DIAGNOSTIC_CORE=parentmodule(@__MODULE__)
 
@@ -497,7 +497,7 @@ function _structure_spectrum_checks(configuration, point)
 end
 
 
-"""Actual LO tensor and collision-map quadrature on one manufactured equilibrium G."""
+"""Тензор LO-рассеяния и квадратура интеграла столкновений для заданной равновесной функции Грина."""
 function _operator_lo_quadrature_checks()
     counts = (81, 161, 321, 641)
     samples =

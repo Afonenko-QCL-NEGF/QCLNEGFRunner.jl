@@ -1,4 +1,4 @@
-"""Result of the single application-level computation entry point."""
+"""Результат расчёта, запущенного через единую точку входа приложения."""
 struct ConfiguredExecutionResult{T,R}
     mode::Symbol
     computation::T
@@ -6,17 +6,17 @@ struct ConfiguredExecutionResult{T,R}
     output_directory::String
 end
 
-"""Default safety ceiling for solver invocations in one configured study."""
+"""Ограничение по умолчанию на число вызовов решателя в одном исследовании по конфигурации."""
 const DEFAULT_MAXIMUM_SOLVER_RUNS = 16
 
 """
     planned_solver_runs(configuration)
 
-Return the number of independent solver invocations implied by a resolved
-configuration.  The count is deliberately computed before any grid, basis,
-kernel, checkpoint, or output directory is created.  A comparison includes
-its method repetitions and every physically unique convergence grid; one base
-grid requested as the reference for several axes is solved only once.
+Вернуть число независимых вызовов решателя для данной конфигурации.
+Оно вычисляется до создания сетки, базиса, ядер, контрольных точек или
+выходного каталога. При сравнении учитываются повторы методов и все
+физически различные сетки. Общая опорная сетка для нескольких осей
+исследования рассчитывается один раз.
 """
 function planned_solver_runs(configuration::ResolvedRunConfiguration)
     study = configuration.study
@@ -93,10 +93,10 @@ end
 """
     execute_configured_run(source; output_root, run_id, report_template)
 
-The sole application orchestration port used by CLI, queue jobs, systemd and
-acceptance. It resolves the scientific configuration once and dispatches only
-on `study.mode`. Display and deployment layers may select an output root, but
-no such concern enters the physical or numerical solver.
+Общая точка входа для командной строки, очереди заданий, systemd и приёмки.
+Один раз собирает итоговую научную конфигурацию и выбирает действие
+по `study.mode`. Внешний слой может выбрать каталог вывода. Этот выбор
+не влияет на физическую постановку и численные параметры решателя.
 """
 function execute_configured_run(
     source;
@@ -284,7 +284,8 @@ function _configured_execution_resource_plan(
     return (plan = plans[worst], calibration = calibrations[worst], campaign = campaign)
 end
 
-"""Public legacy resource inspection; boundary resolution remains in composition."""
+"""Получить план использования ресурсов для конфигурации. Расположение
+файлов определяется на уровне сборки приложения."""
 function configured_resource_plan(
     configuration::ResolvedRunConfiguration,
     source::AbstractString;

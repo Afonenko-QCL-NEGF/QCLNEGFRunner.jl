@@ -4,7 +4,7 @@ function _scientific_identity(value::String, label::String)
     return value
 end
 
-"""Named voltage continuation is independent of the inner SCBA→Poisson policy."""
+"""Именованное продолжение по напряжению, независимое от настройки внутреннего цикла SCBA и внешнего цикла Пуассона."""
 struct VoltageContinuation
     mode::Symbol
     invalid_predecessor::Symbol
@@ -53,7 +53,7 @@ struct ScientificOutputs
     end
 end
 
-"""A typed operating point; branch/order distinguish repeated visits to the same bias."""
+"""Типизированная рабочая точка. Ветвь и порядок отличают повторные расчёты при одном напряжении."""
 struct ScientificPoint
     id::String
     execution_id::String
@@ -154,7 +154,7 @@ function read_scientific_definition end
 function resolve_scientific_configuration end
 function scientific_memory_estimate end
 
-"""Structured result preserves technical status separately from the scientific verdict."""
+"""Структурированный результат с отдельными полями технического статуса и научной оценки."""
 struct ScientificPointResult
     id::String
     execution_id::String

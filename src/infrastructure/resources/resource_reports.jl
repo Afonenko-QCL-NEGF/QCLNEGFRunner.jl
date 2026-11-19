@@ -1,7 +1,7 @@
 _resource_limit_value(value::Int) = value == typemax(Int) ? "unlimited" : value
 _resource_measurement_value(value::Float64) = isfinite(value) ? value : "not_measured"
 
-"""Return the serialization-safe dictionary for a hardware observation."""
+"""Возвращает данные об обнаруженных ресурсах в словаре, пригодном для сериализации."""
 function hardware_profile_dict(hardware::HardwareProfile)
     return Dict{String,Any}(
         "julia_threads" => hardware.julia_threads,
@@ -24,7 +24,7 @@ function hardware_profile_dict(hardware::HardwareProfile)
     )
 end
 
-"""Return the serialization-safe dictionary for an E1 execution plan."""
+"""Возвращает план исполнения E1 в словаре, пригодном для сериализации."""
 function execution_plan_dict(plan::ExecutionPlan)
     return Dict{String,Any}(
         "requested_strategy" => String(plan.requested_strategy),
@@ -46,7 +46,7 @@ function execution_plan_dict(plan::ExecutionPlan)
     )
 end
 
-"""Return the serialization-safe dictionary for bounded calibration evidence."""
+"""Возвращает результаты ограниченного калибровочного опыта в словаре, пригодном для сериализации."""
 function execution_calibration_dict(report::ExecutionCalibrationReport)
     samples = Dict{String,Any}[]
     for sample in report.samples
@@ -102,19 +102,19 @@ function _save_resource_yaml(path::AbstractString, value)
     return destination
 end
 
-"""Write the resolved hardware/execution decision as auditable YAML."""
+"""Записывает выбранные аппаратные ресурсы и план исполнения в YAML для проверки."""
 save_execution_plan(path::AbstractString, plan::ExecutionPlan) =
     _save_resource_yaml(path, execution_plan_dict(plan))
 
-"""Write the detected process resource envelope independently of the plan."""
+"""Записывает обнаруженные ограничения ресурсов процесса отдельно от плана."""
 save_hardware_profile(path::AbstractString, hardware::HardwareProfile) =
     _save_resource_yaml(path, hardware_profile_dict(hardware))
 
-"""Write the bounded E1 calibration measurements as auditable YAML."""
+"""Записывает измерения ограниченной калибровки E1 в YAML для проверки."""
 save_execution_calibration(path::AbstractString, report::ExecutionCalibrationReport) =
     _save_resource_yaml(path, execution_calibration_dict(report))
 
-"""Write one self-contained hardware, plan, and optional calibration report."""
+"""Записывает единый отчёт об аппаратных ресурсах, плане и, при наличии, калибровке."""
 function save_resource_diagnostics(
     path::AbstractString,
     plan::ExecutionPlan;

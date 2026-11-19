@@ -57,11 +57,14 @@ include("../support/native_physics_fixture.jl")
                 "logical_axis_order",
             )=="z,state"
             @test read_attribute(file["basis/effective_wavefunctions/real"], "units")=="nm^-1/2"
-            @test HDF5.API.h5ds_is_attached(
-                file["observables/spatial_energy_density"].id,
-                file["axes/energy_eV"].id,
-                UInt32(0),
-            )>0
+            density = file["observables/spatial_energy_density"]
+            energy = file["axes/energy_eV"]
+            try
+                @test HDF5.API.h5ds_is_attached(density, energy, UInt32(0)) > 0
+            finally
+                close(energy)
+                close(density)
+            end
             @test HDF5.API.h5ds_is_attached(
                 file["observables/spatial_energy_density"].id,
                 file["axes/z_nm"].id,

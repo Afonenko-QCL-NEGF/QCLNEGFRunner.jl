@@ -37,6 +37,8 @@ using HDF5
             [33, 65],
             [4.0e-4, 1.5e-4],
             true,
+            false,
+            nothing,
         )
         diagnostics = ProductionKernelDiagnostics(Dict(:LO => interpolation), 1.5e-4, true)
         diagnostic_path = joinpath(directory, "kernels.csv")

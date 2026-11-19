@@ -1,4 +1,4 @@
-"""Producer phase boundaries; the observer's ingestion time never replaces these."""
+"""Границы этапов по часам процесса расчёта. Сохраняется время события, а не его получения наблюдателем."""
 mutable struct _NativePhaseJournal
     session::String
     sequence::Int
@@ -129,11 +129,12 @@ function _record_native_phase!(directory::Union{Nothing,String}, event::SolverEv
     return nothing
 end
 
-"""Bound task width by Julia's fixed pool and observe cgroup v2 memory headroom.
+"""Ограничить число параллельных задач фиксированным пулом потоков Julia и
+учитывать запас памяти по cgroup v2.
 
-Slurm owns allocations. This callback neither reallocates CPUs nor exchanges
-resource leases with another process. A denied allocation preserves the most
-recent committed scientific state through the normal exception boundary.
+Распределением ресурсов управляет Slurm. При отказе выделения ресурсов
+последнее зафиксированное научное состояние сохраняется через штатный
+механизм обработки исключений.
 """
 function _native_phase_request(
     directory::Union{Nothing,String};

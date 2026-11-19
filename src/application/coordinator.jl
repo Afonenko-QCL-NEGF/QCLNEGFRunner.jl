@@ -1,7 +1,7 @@
-"""Solver adapter port invoked once for each content-addressed sweep point."""
+"""Интерфейс решателя, который вызывается один раз для каждой точки с идентификатором содержимого."""
 abstract type AbstractPointRunner end
 
-"""Adapter that turns a callable `context -> PointExecutionResult` into a port."""
+"""Адаптер, реализующий интерфейс через функцию `context -> PointExecutionResult`."""
 struct FunctionPointRunner <: AbstractPointRunner
     callback::Function
 end
@@ -12,7 +12,7 @@ function execute_point!(runner::AbstractPointRunner, context)
     throw(MethodError(execute_point!, (runner, context)))
 end
 
-"""Result returned by the point-runner port."""
+"""Результат, возвращаемый через интерфейс расчёта точки."""
 struct PointExecutionResult
     status::Symbol
     metadata::Dict{String,Any}
@@ -28,7 +28,7 @@ struct PointExecutionResult
     end
 end
 
-"""Explicit cooperative interruption used by batch schedulers and tests."""
+"""Согласованное прерывание запуска со стороны системы заданий или теста."""
 struct SweepInterrupted <: Exception
     message::String
 end
@@ -36,7 +36,7 @@ end
 SweepInterrupted() = SweepInterrupted("sweep interrupted")
 Base.showerror(io::IO, error::SweepInterrupted) = print(io, error.message)
 
-"""Capabilities and resume state supplied to one point-runner invocation."""
+"""Возможности и состояние для возобновления, передаваемые при расчёте одной точки."""
 mutable struct PointExecutionContext
     definition::RunDefinition
     point::SweepPoint
@@ -48,7 +48,7 @@ mutable struct PointExecutionContext
     resume_checkpoint::Union{Nothing,LoadedCheckpoint}
 end
 
-"""Commit a solver checkpoint through the application checkpoint port."""
+"""Зафиксировать состояние решателя через интерфейс контрольных точек приложения."""
 function checkpoint!(
     context::PointExecutionContext,
     state;
@@ -70,8 +70,8 @@ function checkpoint!(
 end
 
 """
-Persist every scalar iteration event. If `state` is supplied, only the
-expensive state payload follows the configured snapshot retention policy.
+Сохранить каждое скалярное событие итерации. При передаче `state` политика
+хранения снимков применяется только к объёмному состоянию.
 """
 function record_iteration!(
     context::PointExecutionContext,
@@ -117,7 +117,7 @@ function record_iteration!(
     return nothing
 end
 
-"""Terminal counts and result location of one coordinated sweep session."""
+"""Итоговые счётчики и расположение результатов одной сессии перебора."""
 struct SweepRunSummary
     run_id::String
     status::Symbol
@@ -305,11 +305,11 @@ end
 """
     run_sweep!(repository, definition, runner; ...)
 
-Execute a nested content-addressed sweep. Completed point YAML results are
-certificates and are skipped on resume. A point left `running` is first marked
-`interrupted`; its latest checksum-verified checkpoint is supplied to the
-runner context. Result YAML is committed before the terminal point status, so
-`completed` never refers to a missing result.
+Выполнить вложенный перебор с идентификацией точек по содержимому.
+При возобновлении завершённые точки пропускаются по зафиксированному YAML.
+Точка, оставшаяся в состоянии `running`, получает статус `interrupted`.
+Контекст расчёта получает её последнюю контрольную точку с проверенной
+контрольной суммой. Статус `completed` фиксируется после записи YAML.
 """
 function run_sweep!(
     repository::AbstractRunRepository,

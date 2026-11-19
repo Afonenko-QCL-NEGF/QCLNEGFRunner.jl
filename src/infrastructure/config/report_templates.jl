@@ -18,9 +18,9 @@ end
 """
     load_configured_report_template(path)
 
-Load and strictly validate a versionless report-template YAML file.  Unknown
-or duplicate sections fail closed; rendering and section ordering are driven
-only by this object.
+Загружает шаблон отчёта из YAML и строго проверяет его. Неизвестные и
+повторяющиеся разделы приводят к ошибке. Шаблон задаёт состав и порядок
+разделов при формировании отчёта.
 """
 function load_configured_report_template(path::AbstractString)
     absolute = abspath(path)

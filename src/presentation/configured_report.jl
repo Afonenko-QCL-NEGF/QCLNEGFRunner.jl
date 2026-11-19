@@ -1,4 +1,4 @@
-"""Markdown adapter for the configured-report application port."""
+"""Адаптер Markdown для формирования отчётов по конфигурации."""
 struct MarkdownConfiguredReportRenderer <: AbstractConfiguredReportRenderer end
 
 const _CONFIGURED_REPORT_SECTION_METADATA = Dict{Symbol,NamedTuple}(

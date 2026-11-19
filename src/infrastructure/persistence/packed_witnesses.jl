@@ -1,4 +1,4 @@
-"""Lossless packed PSD evidence. Indices/offsets are zero based; values are external C order."""
+"""Упакованное представление свидетельств проверки PSD без потерь. Индексы и смещения отсчитываются от нуля, значения упорядочены по правилам C."""
 const _PACKED_PSD_SCHEMA="qcl-negf-psd-selected-packed-v2"
 const _PACKED_PSD_COLUMNS=(
     "record_sequence",

@@ -1,4 +1,4 @@
-"""Run the public `qcl-negf` command and return its process exit status."""
+"""Выполнить команду `qcl-negf` и вернуть код выхода процесса."""
 function main(arguments::AbstractVector{<:AbstractString}=ARGS)
     try
         isempty(arguments) && throw(ArgumentError(

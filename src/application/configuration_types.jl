@@ -1,9 +1,8 @@
 """
     ConfigurationError
 
-Error raised when a YAML manifest, merge, schema, unit, or cross-field
-constraint is invalid.  Configuration errors are deliberately fail-closed:
-an unknown key is never ignored.
+Ошибка манифеста YAML, объединения, схемы, единиц или условия, связывающего
+несколько полей. Неизвестный ключ вызывает ошибку.
 """
 struct ConfigurationError <: Exception
     path::String
@@ -18,9 +17,9 @@ _configuration_error(path, message) =
     throw(ConfigurationError(String(path), String(message)))
 
 """
-Ordered manifests/files and the complete override history for every leaf in
-the resolved YAML tree.  `sources[path]` is ordered from the first definition
-to the winning definition.
+Манифесты и файлы по порядку загрузки и полная история переопределений каждого
+конечного поля итогового дерева YAML. Список `sources[path]` идёт от первого
+определения к тому, которое вошло в итоговую конфигурацию.
 """
 struct ConfigurationProvenance
     manifests::Vector{String}
@@ -28,7 +27,7 @@ struct ConfigurationProvenance
     sources::Dict{String,Vector{String}}
 end
 
-"""Policy knobs used by the `auto_exact` E1 execution planner."""
+"""Настройки планировщика расчёта уровня E1 в режиме `auto_exact`."""
 struct AutomaticExecutionConfiguration
     memory_reserve_fraction::Float64
     minimum_memory_reserve_bytes::Int
@@ -44,11 +43,10 @@ struct AutomaticExecutionConfiguration
 end
 
 """
-Execution resources and the top-level solver implementation selection.
-Production reductions are deterministic by contract and therefore are not a
-configurable execution mode.
+Ресурсы запуска и выбор реализации решателя. Агрегирование данных в основном
+решателе детерминировано по контракту и не задаётся отдельным режимом.
 
-See [YAML run configurations](@ref yaml-run-configurations).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations).
 """
 struct ExecutionConfiguration
     strategy::Symbol
@@ -60,24 +58,23 @@ struct ExecutionConfiguration
 end
 
 """
-Human and machine-readable progress stream configuration.
+Настройки отображения хода расчёта и записи данных в машиночитаемом формате.
 
-See [Production observability](@ref native-result-formats).
+См. [результаты и возобновление](@ref native-result-formats).
 """
 struct ProgressOutputConfiguration
     enabled::Bool
     terminal::Bool
     significant_digits::Int
-    human_every::Int
     event_log_file::Union{Nothing,String}
     latest_snapshot_file::Union{Nothing,String}
     dashboard_file::Union{Nothing,String}
 end
 
 """
-Device geometry used only for report-level current conversion.
+Геометрия устройства, используемая для пересчёта тока в отчёте.
 
-See [YAML run configurations](@ref yaml-run-configurations).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations).
 """
 struct DeviceGeometryConfiguration
     periods::Int
@@ -86,10 +83,10 @@ struct DeviceGeometryConfiguration
 end
 
 """
-Output, restart, and live-visualization policy.
+Настройки вывода, возобновления и визуализации хода расчёта.
 
-See [YAML run configurations](@ref yaml-run-configurations) and
-[Production observability](@ref native-result-formats).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations)
+и [результаты и возобновление](@ref native-result-formats).
 """
 struct OutputConfiguration
     directory::String
@@ -115,14 +112,10 @@ struct OutputConfiguration
     light_max_snapshots::Int
 end
 
-# Source compatibility for callers constructing the previous output contract.
-OutputConfiguration(args::Vararg{Any,16}) =
-    OutputConfiguration(args..., false, 2048, 512, 64, 64)
-
 """
-Explicit grid sizes varied by a convergence study.
+Явные размеры сеток, которые меняются при исследовании сходимости.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 struct ConvergenceStudyConfiguration
     spatial_nodes::Vector{Int}
@@ -132,9 +125,9 @@ struct ConvergenceStudyConfiguration
 end
 
 """
-Report-facing metadata for one compared configuration profile.
+Сведения для отчёта по одному из сравниваемых вариантов конфигурации.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 struct StudyMethodConfiguration
     profile::String
@@ -146,9 +139,9 @@ struct StudyMethodConfiguration
 end
 
 """
-Operating points and comparison/report controls for one reproducible run.
+Рабочие точки и настройки сравнения и отчёта для одного воспроизводимого запуска.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 struct StudyConfiguration
     mode::Symbol
@@ -169,14 +162,14 @@ end
 """
     ResolvedRunConfiguration
 
-Fully resolved, unit-checked run description.  Physical and numerical values
-are converted to the same strongly typed objects accepted by the educational
-and production APIs.  `algorithms` is a validated [`AlgorithmOptions`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md)
-object and is also embedded in `production.algorithms`.
-`raw` is retained only for reporting and reproducibility, never as a source of
-unchecked solver inputs.
+Итоговое описание запуска с проверенными единицами. Физические и численные
+параметры преобразованы в типизированные объекты учебного и основного решателей.
+`algorithms` содержит проверенный объект
+[`AlgorithmOptions`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md),
+который также доступен через `production.algorithms`.
+Поле `raw` предназначено для отчёта и воспроизведения конфигурации.
 
-See [YAML run configurations](@ref yaml-run-configurations).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations).
 """
 struct ResolvedRunConfiguration
     name::String
@@ -199,19 +192,13 @@ struct ResolvedRunConfiguration
     domain_adaptation::DomainAdaptationPolicy
 end
 
-# Source compatibility for the 0.9 typed in-memory constructor.
-ResolvedRunConfiguration(args::Vararg{Any,16}) =
-    ResolvedRunConfiguration(args..., PhysicalModelOptions(), DomainAdaptationPolicy())
-ResolvedRunConfiguration(args::Vararg{Any,17}) =
-    ResolvedRunConfiguration(args..., DomainAdaptationPolicy())
-
 """
     configuration_source(configuration, dotted_path)
 
-Return the winning YAML file for `dotted_path`, or `nothing` when the path is
-not a leaf in the resolved tree.
+Вернуть файл YAML, из которого взято итоговое значение `dotted_path`.
+Если путь не указывает на конечное поле, вернуть `nothing`.
 
-See [YAML run configurations](@ref yaml-run-configurations).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations).
 """
 function configuration_source(
     configuration::ResolvedRunConfiguration,
@@ -221,26 +208,21 @@ function configuration_source(
     return history === nothing || isempty(history) ? nothing : last(history)
 end
 
-"""Return a defensive copy of the validated, deeply merged
-[YAML configuration](@ref yaml-run-configurations)."""
+"""Вернуть независимую копию проверенной [конфигурации YAML](@ref yaml-run-configurations)
+после объединения всех вложенных полей."""
 resolved_configuration_dict(configuration::ResolvedRunConfiguration) =
     deepcopy(configuration.raw)
 
-"""Return physical input selected by a
-[YAML run configuration](@ref yaml-run-configurations)."""
+"""Вернуть физические параметры из [конфигурации запуска YAML](@ref yaml-run-configurations)."""
 physical_parameters(configuration::ResolvedRunConfiguration) = configuration.physical
-"""Return the grid selected by a
-[YAML run configuration](@ref yaml-run-configurations)."""
+"""Вернуть параметры сетки из [конфигурации запуска YAML](@ref yaml-run-configurations)."""
 numerical_parameters(configuration::ResolvedRunConfiguration) = configuration.numerical
-"""Return scattering channels selected by a
-[YAML run configuration](@ref yaml-run-configurations)."""
+"""Вернуть каналы рассеяния из [конфигурации запуска YAML](@ref yaml-run-configurations)."""
 scattering_options(configuration::ResolvedRunConfiguration) = configuration.scattering
-"""Return SCBA/Poisson controls from a
-[YAML run configuration](@ref yaml-run-configurations)."""
+"""Вернуть настройки SCBA и Пуассона из [конфигурации запуска YAML](@ref yaml-run-configurations)."""
 solver_options(configuration::ResolvedRunConfiguration) = configuration.solver
-"""Return production controls from a
-[YAML run configuration](@ref yaml-run-configurations)."""
+"""Вернуть настройки основного решателя из [конфигурации запуска YAML](@ref yaml-run-configurations)."""
 production_options(configuration::ResolvedRunConfiguration) = configuration.production
-"""Return the selection described by the
-[Optimization decision tree](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md)."""
+"""Вернуть выбранные параметры алгоритма. См.
+[схему выбора оптимизаций](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md)."""
 algorithm_options(configuration::ResolvedRunConfiguration) = configuration.algorithms

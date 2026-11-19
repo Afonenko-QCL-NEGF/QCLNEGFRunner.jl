@@ -1,25 +1,17 @@
 """
     default_configuration_schema()
 
-Return the absolute path of the run-configuration schema in the currently loaded
-package. Resolve this resource when called so a precompiled package can be moved
-from its build directory to an installed prefix.
+Возвращает абсолютный путь к схеме конфигурации запуска в загруженном пакете.
+Путь вычисляется при вызове и соответствует текущему месту установки пакета.
 """
 default_configuration_schema() = _package_path("schema", "run.schema.json")
 
 """
-Absolute path of the installed run-configuration schema, initialized when the
-module is loaded. Retained as a String for existing callers; new code can use
-[`default_configuration_schema`](@ref) to resolve the current package resource.
-"""
-DEFAULT_CONFIGURATION_SCHEMA::String = ""
-
-"""
     ValidatedConfigurationDocument
 
-Schema-validated, deeply merged input before conversion to solver types.
-Keeping this boundary object separate allows a web configurator to inspect
-the exact declarative document without reaching into numerical code.
+Входные данные после рекурсивного объединения и проверки по схеме.
+Отдельный объект позволяет приложению конфигурации читать декларативный
+документ до преобразования данных в типы решателя.
 """
 struct ValidatedConfigurationDocument
     data::Dict{String,Any}
@@ -79,11 +71,10 @@ end
 """
     validate_configuration_schema(mapping; schema_path=default_configuration_schema())
 
-Validate a fully merged YAML mapping against the sole language-independent
-configuration contract. Unknown keys are rejected by
-`additionalProperties: false`; no `version` or `schema_version` field exists.
-Semantic checks that depend on Unitful conversion or on several physical
-quantities are intentionally performed later by `_resolve_configuration`.
+Проверяет полностью объединённое отображение YAML по схеме конфигурации.
+Правило `additionalProperties: false` отклоняет неизвестные ключи.
+Проверки, требующие преобразования единиц через Unitful или сопоставления
+нескольких физических величин, выполняются в `_resolve_configuration`.
 """
 function validate_configuration_schema(
     mapping::Dict{String,Any};

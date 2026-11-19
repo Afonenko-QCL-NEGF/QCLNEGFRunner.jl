@@ -1,7 +1,7 @@
 const _OUTPUT_REPORT_SCHEMA = "qcl-negf-report-v1"
 
-"""Static problem, diagnostics, and the resolved
-[YAML input](@ref yaml-run-configurations)."""
+"""Статическая задача, диагностика и итоговые
+[входные данные YAML](@ref yaml-run-configurations)."""
 struct ConfiguredProblem
     configuration::ResolvedRunConfiguration
     problem::NEGFProblem
@@ -9,8 +9,7 @@ struct ConfiguredProblem
     memory_estimate::ProductionMemoryEstimate
 end
 
-"""Result and artifact paths of the
-[YAML run workflow](@ref yaml-run-configurations)."""
+"""Результат и пути к файлам [запуска по YAML](@ref yaml-run-configurations)."""
 struct ConfiguredRunResult
     configured_problem::ConfiguredProblem
     sweep::ProductionSweepResult
@@ -133,10 +132,11 @@ end
 """
     configuration_output_directory(configuration)
 
-Resolve a relative YAML output directory against the caller working directory.
-A read-only installed package never receives generated artifacts.
+Преобразовать указанный в YAML относительный каталог вывода в абсолютный
+путь относительно рабочего каталога вызывающей программы. Результаты
+не записываются в установленный пакет с доступом только для чтения.
 
-See [YAML run configurations](@ref yaml-run-configurations).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations).
 """
 function configuration_output_directory(configuration::ResolvedRunConfiguration)
     requested = configuration.output.directory
@@ -146,12 +146,12 @@ end
 """
     configure_execution!(configuration)
 
-Apply the explicitly configured BLAS thread count and verify the immutable
-Julia thread count.  `julia_threads: 0` accepts the thread count used to start
-Julia; a positive value is a fail-closed expectation when
-`fail_on_thread_mismatch: true`.
+Установить явно заданное число потоков BLAS и проверить число потоков
+запущенного процесса Julia. Значение `julia_threads: 0` принимает число,
+выбранное при запуске Julia. При положительном значении и
+`fail_on_thread_mismatch: true` несоответствие вызывает ошибку.
 
-See [YAML run configurations](@ref yaml-run-configurations).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations).
 """
 function configure_execution!(configuration::ResolvedRunConfiguration)
     expected = configuration.execution.julia_threads
@@ -170,12 +170,13 @@ end
 """
     build_configured_problem(configuration)
 
-Build the reference design problem selected by YAML.  `kernel_build: direct` calls the
-literal microscopic tensor construction; `tabulated` calls the measured-error
-production construction.  The later SCBA backend choice is independent.
+Собрать задачу для опорной структуры по YAML. При `kernel_build: direct`
+микроскопический тензор вычисляется напрямую, при `tabulated` применяется
+реализация по таблице с измеряемой погрешностью. Реализация последующего
+цикла SCBA выбирается отдельно.
 
-See [Optimization decision tree](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md) and
-[Microscopic kernels](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md).
+См. [схему выбора оптимизаций](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/20_optimization_decision_tree.md)
+и [микроскопические ядра](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md).
 """
 function build_configured_problem(configuration::ResolvedRunConfiguration)
     algorithms = configuration.algorithms
@@ -338,7 +339,6 @@ function _save_output_policy(
                 "enabled" => output.progress.enabled,
                 "terminal" => output.progress.terminal,
                 "significant_digits" => output.progress.significant_digits,
-                "human_every" => output.progress.human_every,
                 "event_log_file" => output.progress.event_log_file,
                 "latest_snapshot_file" => output.progress.latest_snapshot_file,
                 "dashboard_file" => output.progress.dashboard_file,
@@ -623,18 +623,20 @@ end
 """
     run_from_configuration(configuration_directory)
 
-One-command entry point for a canonical YAML configuration file. Physical
-values, algorithms, resources, restart policy and study points come from its
-resolved content. It writes the resolved YAML and `output_policy.yaml`.
-Native HDF5 records retain physics, recovery and the complete scalar history;
-JSONL carries lifecycle events, while scalar timing rows feed typed performance
-storage. Latest progress and optional dashboards are derived views. This entry
-point accepts `single` and `sweep`; public study/meta definitions use the frozen
-scientific-plan workflow. Explicit CSV reporter exports remain opt-in views.
+Запустить расчёт по конфигурации YAML. Из неё берутся физические параметры,
+алгоритмы, ресурсы, правила возобновления и рабочие точки. Функция пишет
+итоговую конфигурацию YAML и `output_policy.yaml`.
+HDF5 хранит физические данные, состояние для возобновления и полную
+скалярную историю. События выполнения пишутся в JSONL, а скалярные замеры
+времени передаются в типизированное хранилище производительности.
+Текущее состояние расчёта и дополнительные панели отображения формируются
+из сохранённых данных. Допустимы режимы `single` и `sweep`. Для публичных
+определений исследований используется неизменяемый научный план.
+Экспорт хода расчёта в CSV включается явно.
 
-See [YAML run configurations](@ref yaml-run-configurations),
-[Production observability](@ref native-result-formats), and
-[Expert comparison workflow](@ref expert-comparison-workflow).
+См. [конфигурации запуска YAML](@ref yaml-run-configurations),
+[результаты и возобновление](@ref native-result-formats)
+и [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function run_from_configuration(
     configuration_directory::AbstractString;
@@ -722,7 +724,6 @@ function run_from_configuration(
         ProgressReporter(;
             human_io = human_stream,
             significant_digits = progress_configuration.significant_digits,
-            human_every = progress_configuration.human_every,
             on_snapshot = observe,
         )
     else
@@ -731,7 +732,6 @@ function run_from_configuration(
             append = configuration.output.resume,
             human_io = human_stream,
             significant_digits = progress_configuration.significant_digits,
-            human_every = progress_configuration.human_every,
             on_snapshot = observe,
         )
     end
@@ -804,7 +804,7 @@ function run_from_configuration(
 end
 
 
-"""Outer composition binds numerical snapshots to a bounded file adapter."""
+"""Подключает сохранение численных снимков с заданными ограничениями на объём записи."""
 function _configured_storage_observers(
     configuration::ResolvedRunConfiguration,
     output_directory::AbstractString,
@@ -883,7 +883,8 @@ function _configured_storage_observers(
         cadence =
             context.stage === :scba ? configuration.production.checkpoint_every_scba :
             configuration.production.checkpoint_every_outer
-        return checkpoint_due(clock) || (cadence > 0 && context.iteration % cadence == 0)
+        due = checkpoint_due(clock) || (cadence > 0 && context.iteration % cadence == 0)
+        return due ? CHECKPOINT_STATE_ONLY : CHECKPOINT_NONE
     end
     function checkpoint_observer(solution::NEGFSolution, it::Integer, iv::Integer)
         solution.status in (:running, :running_scba) || return nothing

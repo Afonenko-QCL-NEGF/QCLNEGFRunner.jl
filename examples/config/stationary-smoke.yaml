@@ -1,14 +1,14 @@
 schema: qcl-negf-study-v2
 kind: study
 id: stationary-smoke
-name: Bounded stationary diagnostic at 70 K and 48 mV
+name: Ограниченный стационарный расчёт при 70 K и 48 мВ
 purpose: diagnostic
 operation: stationary
 configuration:
   sources:
   - reference-2019-70k.yaml
   overrides:
-    # Published small engineering mesh (fixed_work_production_calibration test).
+    # Малая инженерная сетка из теста fixed_work_production_calibration.
     numerical:
       spatial_nodes: 48
       basis_states: 3
@@ -23,7 +23,7 @@ configuration:
       longitudinal_momentum_max: 6 nm^-1
       longitudinal_momentum_nodes: 25
       seed_broadening: 2 meV
-    # Bound work for this diagnostic. Inherit scattering and tolerances.
+    # Ограничение числа итераций. Настройки рассеяния и допуски наследуются.
     solver:
       maximum_scba_iterations: 2
       maximum_poisson_iterations: 2

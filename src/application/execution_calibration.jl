@@ -1,4 +1,4 @@
-"""One bounded E1 scheduling measurement on a synthetic production kernel."""
+"""Один ограниченный замер организации вычислений уровня E1 на синтетическом ядре."""
 struct ExecutionCalibrationSample
     parallel_backend::Symbol
     worker_count::Int
@@ -17,7 +17,7 @@ struct ExecutionCalibrationSample
     note::String
 end
 
-"""Auditable outcome of analytical or bounded execution-plan calibration."""
+"""Проверяемый результат аналитической или экспериментальной калибровки плана запуска."""
 struct ExecutionCalibrationReport
     mode::Symbol
     maximum_seconds::Float64
@@ -162,10 +162,10 @@ end
 """
     calibrate_execution_plan(configuration; ...)
 
-Optionally compare the feasible E1 scheduling candidates with a bounded,
-deterministic dense-contraction microbenchmark. The benchmark never constructs
-a physical model, changes an algorithm option, or executes the educational
-solver. A noisy or incomplete measurement falls back to the analytical plan.
+При необходимости сравнить допустимые варианты организации расчёта уровня E1
+ограниченным детерминированным тестом плотной свёртки. Тест выполняется без
+построения физической модели, смены алгоритма или запуска учебного решателя.
+Если замер неполон или шумен, используется аналитический план.
 """
 function calibrate_execution_plan(
     configuration::ResolvedRunConfiguration;

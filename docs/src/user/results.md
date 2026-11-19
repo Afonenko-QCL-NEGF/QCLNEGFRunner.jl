@@ -1,39 +1,55 @@
-# [Results and restart](@id native-result-formats)
+# [Результаты и возобновление](@id native-result-formats)
 
-Для `qcl-negf-exact-restart-v1` историческое отсутствие
-`algorithms.elastic_retarded` означает только прежний режим `hilbert`.
-Сравнение выполняет owning Core contract checker; Runner не переписывает
-сохранённый контракт и не удаляет неизвестные поля. Такой checkpoint не
-принимается для `direct_green`. Новые checkpoints сохраняют выбранный режим
-явно; остальные algorithm/mixing/quality mismatches остаются отказами.
+Набор контрактов результатов обозначается `qcl-negf.results.v1`. Версия
+структуры HDF5 — `4.0`. Манифест фиксирует файлы результата и их контрольные
+суммы SHA-256. Файл физического состояния, снимок для анализа и состояние для
+восстановления выполняют разные задачи. Для точного продолжения нелинейных
+итераций используйте полную контрольную точку.
 
-The result contract set is `qcl-negf.results.v1`; native HDF5 layout is version `4.0`.
-A commit manifest binds artifacts to SHA-256 checksums. Native physics, analysis
-frames and recovery state serve different purposes. An analysis result does not
-necessarily contain enough state to continue a nonlinear iteration exactly.
+HDF5 — обязательная зависимость Runner. В полной контрольной точке сохраняются
+численное состояние, история алгоритма и число уже выполненных итераций.
+При точном возобновлении Runner сверяет модель, сетки, алгоритмы и сохранённые
+идентификаторы. Повреждённое или несовместимое состояние приводит к ошибке.
+Для точного восстановления необходимы все поля актуального численного
+контракта, включая явное значение `algorithms.elastic_retarded`.
 
-HDF5 is a required Runner dependency.
-A full checkpoint contains the compatible numerical state, algorithm history and
-consumed iteration budget. Exact restart checks model, grids, algorithms and stored
-identity before accepting that state. Corrupt or incompatible state is an error;
-it must not silently become a fresh calculation.
+## [Качество и продолжение расчёта](@id solver-quality-contract)
 
-## [Quality and continuation](@id solver-quality-contract)
+Завершение процесса, итерационная сходимость, прохождение физических проверок,
+достаточность дискретизации и экспериментальная валидация оцениваются отдельно.
+Проверяйте статус и качество точки, невязки и причины отсутствия метрик. Если
+допускается приближённое решение внутренней задачи, результат должен сохранять
+соответствующую отметку. При возобновлении ранее выполненная работа учитывается,
+а логические счётчики итераций продолжаются с сохранённого значения.
 
-Process completion, iterative convergence, physical gates, discretization evidence
-and experimental validation are separate claims. Check the point's status, quality,
-residuals and reasons for missing metrics. An explicitly permitted approximate inner
-solution must remain marked approximate. Restart preserves consumed work and
-logical iteration counters rather than resetting a budget.
+Для периодической записи явно задайте параметры контрольных точек и вывода.
+При аварийном завершении точное возобновление возможно, если до сбоя записана
+проверенная контрольная точка. Используйте отдельный каталог вывода для каждого
+независимого расчёта.
 
-Periodic checkpoints require explicit checkpoint/output settings. A process killed
-before a verified checkpoint is committed cannot promise exact recovery. Use a
-separate output directory for each independent execution.
+При запуске по конфигурации или научному плану Runner сохраняет состояния,
+принятые решателем на границе итераций SCBA или внешнего цикла. Периодичность
+записи, предельное время до контрольной точки и запросы на согласованную паузу
+сохраняют штатное расписание вычисления физических маркеров. Для неизмеренного
+необязательного маркера в результате записывается
+`physical_markers/available = 0`. При чтении он восстанавливается как
+`nothing`.
 
-## Postprocessing
+При первой фиксации стационарной точки в каталоге результатов всегда записывается
+`analysis.h5`. Научный план возобновляется в новом каталоге попытки, поэтому
+первая контрольная точка попытки также содержит файл анализа. Последующие
+записи, предназначенные для восстановления, ссылаются на последний манифест
+с файлом анализа в том же каталоге. Ссылка включает относительный путь
+и контрольную сумму SHA-256. `restart_coordinates` описывает новое сохранённое
+состояние. `analysis_coordinates` в манифесте файла анализа описывает
+соответствующий снимок. Снимок может содержать отметки о неизмеренных
+необязательных маркерах.
 
-`qcl-negf analyze RESULT_DIRECTORY ANALYSIS_DIRECTORY` reads saved results without
-rerunning transport. Reports preserve the input identity and scientific statuses.
-The separate [qcl-negf-results](https://github.com/Afonenko-QCL-NEGF/qcl-negf-results) project
-provides Python readers and exports. Schema changes are coordinated with
+## Обработка результатов
+
+Команда `qcl-negf analyze RESULT_DIRECTORY ANALYSIS_DIRECTORY` читает сохранённые
+данные без повторного транспортного расчёта. В отчёте сохраняются идентификаторы
+входных данных и научные статусы. Для чтения и выгрузки данных в Python
+используйте [qcl-negf-results](https://github.com/Afonenko-QCL-NEGF/qcl-negf-results).
+Изменения схемы результатов согласуются с
 [qcl-negf-contracts](https://github.com/Afonenko-QCL-NEGF/qcl-negf-contracts).

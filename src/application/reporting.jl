@@ -1,7 +1,7 @@
 """
-Declarative report template selected by an outer run template.  Report
-selection is an application/presentation concern and deliberately does not
-enter the scientific `ResolvedRunConfiguration` or the content identity.
+Шаблон отчёта, выбранный внешним шаблоном запуска. Он определяет представление
+результатов. Научная конфигурация `ResolvedRunConfiguration` и идентификатор
+содержимого от него не зависят.
 """
 struct ConfiguredReportTemplate
     id::String
@@ -13,22 +13,22 @@ struct ConfiguredReportTemplate
     source_sha256::String
 end
 
-"""One existing artifact that a configured report may link to."""
+"""Готовый файл, на который может ссылаться отчёт по шаблону."""
 struct ConfiguredReportArtifact
     label::String
     path::String
     media_type::String
 end
 
-"""Material supplied by an application result for one report section."""
+"""Материал из результата расчёта для одного раздела отчёта."""
 struct ConfiguredReportSection
     notes::Vector{String}
     artifacts::Vector{ConfiguredReportArtifact}
 end
 
 """
-Renderer-neutral result projection.  Numerical arrays remain in YAML/HDF5/CSV;
-the report carries human-readable facts and links rather than copying them.
+Данные для отчёта, независимые от способа его представления. Массивы хранятся
+в YAML, HDF5 или CSV. Отчёт содержит текстовые сведения и ссылки на файлы.
 """
 struct ConfiguredReportContext
     title::String
@@ -39,16 +39,16 @@ struct ConfiguredReportContext
     sections::Dict{Symbol,ConfiguredReportSection}
 end
 
-"""Application output port implemented by presentation adapters."""
+"""Интерфейс вывода приложения, который реализуют средства представления результатов."""
 abstract type AbstractConfiguredReportRenderer end
 
-"""Build the renderer-neutral report projection for a completed use case."""
+"""Подготовить данные о завершённой операции в формате, независимом от средства представления."""
 function configured_report_context end
 
-"""Render a configured report through an `AbstractConfiguredReportRenderer`."""
+"""Сформировать отчёт по заданному шаблону с помощью `AbstractConfiguredReportRenderer`."""
 function render_configured_report end
 
-"""Closed vocabulary accepted by versionless configured report templates."""
+"""Закрытый перечень названий разделов, которые принимает шаблон отчёта."""
 const CONFIGURED_REPORT_SECTIONS = (
     :configuration,
     :provenance,
@@ -68,9 +68,9 @@ const CONFIGURED_REPORT_SECTIONS = (
 """
     configured_report_arguments(arguments)
 
-Separate ordered configuration sources from the optional orchestration-only
-`--report-template PATH` pair.  The marker may occur only once and must be the
-last option pair, so configuration overrides remain unambiguous.
+Отделить упорядоченные источники конфигурации от необязательной пары
+`--report-template PATH`, которая задаёт только отчёт. Пара допускается один
+раз в конце списка аргументов. Это сохраняет однозначный порядок переопределений.
 """
 function configured_report_arguments(arguments)
     values = String[String(value) for value in arguments]

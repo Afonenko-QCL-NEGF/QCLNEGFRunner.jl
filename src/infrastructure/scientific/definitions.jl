@@ -449,7 +449,7 @@ end
 resolve_scientific_plan(source::AbstractString; kwargs...) =
     resolve_scientific_plan(FilesystemScientificDefinitions(), source; kwargs...)
 
-"""Identify an executable scientific definition without treating fragments as jobs."""
+"""Определяет, какую научную постановку можно выполнить. Отдельные фрагменты конфигурации не считаются заданиями."""
 function is_scientific_definition(path::AbstractString)
     isfile(path) || return false
     document=YAML.load_file(path; dicttype = Dict{String,Any})

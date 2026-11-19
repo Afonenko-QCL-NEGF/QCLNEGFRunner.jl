@@ -8,6 +8,7 @@ using YAML
 import HDF5
 import QCLNEGF
 include("core_api.jl")
+include("application/scientific/matrix_audit.jl")
 include("infrastructure/persistence/atomic_files.jl")
 include("infrastructure/resources/package_paths.jl")
 include("infrastructure/persistence/hdf5_backend.jl")
@@ -172,7 +173,6 @@ export FundamentalConstants,
     SolverOptions,
     ScatteringOptions,
     ScaleSystem,
-    ModelGrids,
     MaterialProfiles,
     BasisData,
     KernelSet,
@@ -371,8 +371,7 @@ export HardwareProfile,
     save_execution_calibration,
     save_resource_diagnostics
 
-export DEFAULT_CONFIGURATION_SCHEMA,
-    default_configuration_schema,
+export default_configuration_schema,
     ValidatedConfigurationDocument,
     validate_configuration_schema,
     validate_configuration_source,
@@ -466,67 +465,67 @@ export ConfiguredReportTemplate,
     render_configured_report
 
 """
-Plot the band/Hartree profile, density, and localized basis envelopes.
+Построить график края зоны, потенциала Хартри, плотности и огибающих локализованных функций базиса.
 
-See [Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md),
-[the reference design profile](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md), and
-[the localized basis](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/05_basis.md).
+См. [визуализацию промежуточных и итоговых данных](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md),
+[паспорт опорной структуры](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md)
+и [локализованный базис](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/05_basis.md).
 """
 function plot_band_profile end
 """
-Plot the local spectral or occupied spectral map of a solution.
+Построить пространственно-энергетическую карту спектра или занятого спектра решения.
 
-See [Green functions and density](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md) and
-[Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
+См. [функции Грина и плотность](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md)
+и [визуализацию промежуточных и итоговых данных](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
 """
 function plot_spectral_map end
 """
-Plot all stored inner and outer fixed-point residual histories.
+Построить графики всех сохранённых невязок внутренних и внешних итераций.
 
-See [the inner SCBA loop](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/09_scba.md),
-[the outer Poisson loop](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md), and
-[Verification](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
+См. [внутренний цикл SCBA](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/09_scba.md),
+[внешний цикл Пуассона](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md)
+и [проверку решения](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
 """
 function plot_convergence end
 """
-Plot the energy-resolved outgoing electron-flow current.
+Построить энергетический спектр выходящего электронного тока.
 
-See [Observables and balances](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md) and
-[Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
+См. [наблюдаемые и балансы](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md)
+и [визуализацию промежуточных и итоговых данных](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
 """
 function plot_current_spectrum end
 """
-Plot `log10(cond(Dᴿ(E,k)))` to expose loss of Float64 digits.
+Построить график `log10(cond(Dᴿ(E,k)))`, показывающий потерю значащих цифр при вычислениях в формате `Float64`.
 
-See [the retarded Dyson equation](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md) and
-[Debug and final visualization](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
+См. [ретарди́рованное уравнение Дайсона](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/07_greens.md)
+и [визуализацию промежуточных и итоговых данных](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/13_visualization.md).
 """
 function plot_conditioning end
 """
-Plot a field-periodic analogue of QCL Fig. 3(a) from a final solution.
+Построить по итоговому решению аналог рис. 3(a) для лазера с учётом периодичности в поле.
 
-See [Production plotting](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
-[the reference design structure passport](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md).
+См. [графики расчётных результатов](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md)
+и [паспорт опорной структуры](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/02_reference2019.md).
 """
 function plot_reference_figure3a end
 """
-Plot current-density and derived active-region I--V sweep curves.
+Построить по серии расчётов графики плотности тока и вычисленной вольт-амперной характеристики активной области.
 
-See [Production plotting](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
-[Observables and balances](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md).
+См. [графики расчётных результатов](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md)
+и [наблюдаемые и балансы](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/11_observables.md).
 """
 function plot_reference_iv end
 """
-Plot the trusted and edge-contaminated optical-response points.
+Построить график оптического отклика с раздельным обозначением доверенных точек и точек под влиянием края окна.
 
-See [Optical response](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md) and
-[Production plotting](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+См. [оптический отклик](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md)
+и [графики расчётных результатов](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function plot_reference_gain end
 """
-Save the optional CairoMakie figures for a completed configured study.
+Сохранить дополнительные графики CairoMakie для завершённого исследования.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function save_production_study_plots end
 
@@ -575,7 +574,6 @@ export AbstractCheckpointCodec,
     ConvergencePolicy,
     ConvergenceReport,
     ConvergenceStudyConfiguration,
-    DEFAULT_CONFIGURATION_SCHEMA,
     DEFAULT_MAXIMUM_SOLVER_RUNS,
     DenseProductionKernel,
     DeviceGeometryConfiguration,
@@ -615,7 +613,6 @@ export AbstractCheckpointCodec,
     MethodDescriptor,
     MethodPoint,
     MethodRun,
-    ModelGrids,
     MomentumIndependentProductionKernel,
     NEGFProblem,
     NEGFSolution,
@@ -874,12 +871,6 @@ export AbstractCheckpointCodec,
     validate_solution,
     verify_result_artifacts!
 
-
-function __init__()
-    # Keep the exported String binding compatible without freezing a builder path
-    # into package images. Loaders resolve their default via the runtime accessor.
-    global DEFAULT_CONFIGURATION_SCHEMA = default_configuration_schema()
-end
 
 include("composition/scratch_execution.jl")
 include("cli.jl")

@@ -1,4 +1,4 @@
-"""Closed, typed scalar history segments. Each accepted iteration is recorded once."""
+"""Хранит скалярную историю в закрытых типизированных сегментах. Каждая принятая итерация записывается один раз."""
 mutable struct ScientificHistoryRecorder
     directory::String
     identity::Dict{String,Any}
@@ -239,7 +239,7 @@ function scientific_history_sources(point_directory)
     return paths
 end
 
-"""Materialize one lossless history table for export; local segments remain recovery inputs."""
+"""Собирает единую таблицу истории для экспорта без потерь. Локальные сегменты служат входом при возобновлении."""
 function consolidate_scientific_history(destination, paths)
     isempty(paths) && throw(
         ArgumentError(

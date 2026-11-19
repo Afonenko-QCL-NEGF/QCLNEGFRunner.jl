@@ -1,10 +1,9 @@
 """
-Resolve an installed package resource when it is used.
+Определяет путь к ресурсу установленного пакета при обращении к нему.
 
-Julia package images can move from the build tree to another installation
-prefix. Source-location macros embedded in those images still describe the
-build tree, so resource and provenance paths must use the currently loaded
-package location instead. The caller's working directory is not a fallback.
+Путь вычисляется относительно загруженного пакета, чтобы учитывать место
+установки даже при переносе скомпилированного образа Julia. Макросы исходного
+кода в таком образе могут указывать на каталог сборки.
 """
 function _package_path(parts::AbstractString...)
     root = pkgdir(@__MODULE__)
@@ -12,7 +11,7 @@ function _package_path(parts::AbstractString...)
     return joinpath(root, parts...)
 end
 
-"""Direct runtime provenance for each standalone scientific artifact."""
+"""Фиксирует происхождение окружения выполнения для каждого самостоятельного научного артефакта."""
 function _runtime_toolchain_provenance()
     digest(path) = isfile(path) ? bytes2hex(SHA.sha256(read(path))) : nothing
     root = _package_path()

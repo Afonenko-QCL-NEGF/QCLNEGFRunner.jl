@@ -1,15 +1,21 @@
-# Contributing
+# Как внести изменения
 
-Run `deno task check`, `deno task test` and `deno task docs` before proposing a change.
-Test adapters through supported public entry points. Configuration must reject
-unknown fields and invalid units; persisted state must preserve scientific identity,
-checksums and exact-restart requirements. Test corrupt and incompatible input as
-well as successful execution.
+Перед предложением изменений запустите `deno task check`, `deno task test`
+и `deno task docs`. Проверяйте средства запуска и записи через публичные
+интерфейсы. Конфигурация должна отклонять неизвестные поля и недопустимые
+единицы. Сохранённое состояние должно содержать идентификаторы научного
+расчёта, контрольные суммы и данные для точного возобновления. Проверяйте как
+успешное выполнение, так и обработку повреждённых или несовместимых входных
+данных.
 
-Keep numerical equations and in-memory model types in QCLNEGF.jl. Runner may depend
-on core; core must not depend on Runner. Coordinate format changes with
-qcl-negf-contracts, qcl-negf-results and qcl-negf-aiida. A successful process exit
-must not be promoted into scientific acceptance. Do not embed deployment hosts,
-credentials, scheduler queues or organization-specific study definitions in code.
+Уравнения и типы модели в памяти размещайте в QCLNEGF.jl. Допустимое направление
+зависимости — от Runner к Core. Изменения общего контракта результатов
+согласуйте с qcl-negf-contracts и qcl-negf-results. Научная приёмка требует
+проверок, предусмотренных постановкой задачи. Код выхода процесса этого статуса
+не определяет. Хосты развёртывания, учётные данные, очереди планировщика и
+определения исследований конкретной организации храните вне исходного кода.
 
-Integration CI is defined in the [qcl-negf superproject](https://github.com/Afonenko-QCL-NEGF/qcl-negf) and uses its local runner. Update the component gitlink there to check a change with the complete selected source graph.
+Интеграционные проверки описаны в
+[суперпроекте qcl-negf](https://github.com/Afonenko-QCL-NEGF/qcl-negf) и
+выполняются его локальным исполнителем. Для проверки с полным набором
+зависимостей обновите там ссылку Git на коммит компонента.

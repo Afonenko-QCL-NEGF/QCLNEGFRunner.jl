@@ -1,4 +1,4 @@
-"""Collect one canonical source file; paired directory profiles are not executable."""
+"""Собирает один канонический файл конфигурации запуска."""
 function _collect_contract_source!(
     source::AbstractString,
     manifests::Vector{String},
@@ -24,9 +24,10 @@ end
     validate_configuration_source(sources...;
         schema_path=default_configuration_schema())
 
-Resolve one or more configuration sources in the supplied order. A source is
-an individual YAML/JSON document. The model passport precedes numerical policy
-and explicit overrides; later leaves override earlier leaves.
+Объединяет источники конфигурации в указанном порядке. Каждый источник
+представляет собой отдельный документ YAML или JSON. Паспорт модели
+предшествует численным настройкам и явным переопределениям. Более поздние
+значения заменяют более ранние в тех же конечных узлах.
 """
 function validate_configuration_source(
     source::AbstractString,
@@ -70,9 +71,9 @@ end
 """
     load_configuration_source(sources...; schema_path=...)
 
-Strict public loader for the versionless schema contract. It validates the
-merged document first and then converts it to existing strongly typed solver
-objects, preserving the current `ResolvedRunConfiguration` API.
+Загружает конфигурацию и возвращает `ResolvedRunConfiguration`. Сначала
+проверяет объединённый документ по схеме, затем преобразует данные в
+строго типизированные объекты решателя.
 """
 function load_configuration_source(
     source::AbstractString,

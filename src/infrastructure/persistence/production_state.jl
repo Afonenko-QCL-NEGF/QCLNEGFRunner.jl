@@ -42,6 +42,19 @@ function _require_restart_equal(label::AbstractString, actual, expected)
         _restart_mismatch("restart $label mismatch: stored=$actual, expected=$expected")
 end
 
+function _matches_restart_contract_fields(stored, expected::AbstractDict)
+    stored isa AbstractDict && keys(stored) == keys(expected) || return false
+    return all(pairs(expected)) do (key, value)
+        actual = stored[key]
+        value isa AbstractDict && return _matches_restart_contract_fields(actual, value)
+        value isa AbstractString && return actual isa AbstractString
+        if value isa AbstractFloat
+            return actual isa Real && !(actual isa Bool) && isfinite(actual)
+        end
+        return actual isa typeof(value)
+    end
+end
+
 function _require_restart_close(label::AbstractString, actual::Real, expected::Real)
     a, b = Float64(actual), Float64(expected)
     isfinite(a) && isfinite(b) ||
@@ -331,9 +344,15 @@ function _load_production_restart(
             String(read(metadata["restart_contract_yaml"]));
             dicttype = Dict{String,Any},
         )
+        expected_contract = _solver_restart_contract(
+            solver_options === nothing ? SolverOptions() : solver_options,
+            algorithms === nothing ? AlgorithmOptions() : algorithms,
+        )
         contract isa Dict{String,Any} &&
-        get(contract, "schema", nothing)=="qcl-negf-exact-restart-v1" ||
+        get(contract, "schema", nothing)==expected_contract["schema"] ||
             throw(ArgumentError("invalid exact restart contract"))
+        _matches_restart_contract_fields(contract, expected_contract) ||
+            _restart_mismatch("checkpoint does not contain the complete exact restart contract")
         haskey(metadata, "kernel_identity_yaml") ||
             _restart_mismatch("checkpoint lacks the exact scattering-operator identity")
         kernel_identity = YAML.load(
@@ -342,30 +361,10 @@ function _load_production_restart(
         )
         kernel_identity == _checkpoint_kernel_identity(problem.kernels) ||
             _restart_mismatch("restart scattering operators differ (Khat, qK, or F_LO)")
-        if algorithms !== nothing
-            # Core owns versioned algorithm defaults, including historical v1
-            # Hilbert contracts without elastic_retarded. Project only this
-            # optional comparison into its full contract checker; the caller's
-            # separately optional solver comparison remains below. Never
-            # rewrite the stored contract or drop unknown algorithm keys.
-            comparison_options = SolverOptions()
-            comparison = _solver_restart_contract(comparison_options, algorithms)
-            comparison["algorithms"] = get(contract, "algorithms", nothing)
-            try
-                _check_exact_restart_contract(comparison, comparison_options, algorithms)
-            catch error
-                error isa ArgumentError || rethrow()
-                _restart_mismatch("restart algorithm contract differs from requested algorithms")
-            end
-        end
-        if solver_options !== nothing
-            get(contract, "solver", nothing) == _solver_restart_contract(
-                solver_options,
-                algorithms === nothing ? AlgorithmOptions() : algorithms,
-            )["solver"] || _restart_mismatch(
-                "restart mixing/quality policy differs from requested solver options",
-            )
-        end
+        algorithms === nothing || contract["algorithms"] == expected_contract["algorithms"] ||
+            _restart_mismatch("restart algorithm contract differs from requested algorithms")
+        solver_options === nothing || contract["solver"] == expected_contract["solver"] ||
+            _restart_mismatch("restart mixing/quality policy differs from requested solver options")
         state = file["state_dimensionless"]
         shape = (
             problem.numerical.N_E,
@@ -542,25 +541,27 @@ function _quarantine_production_restart(path::AbstractString)
 end
 
 """
-    load_production_restart(path, problem; incompatible=:error)
+    load_production_restart(path, problem; incompatible=:error,
+                            algorithms=nothing, solver_options=nothing)
 
-Load the full Green/self-energy state needed for a warm restart.  The caller
-must provide the already rebuilt problem; exact array shapes and mechanism
-names and saved histories are checked. Same-stage linear restart restores
-logical iteration counts and consumes only the remaining budget. Anderson state and residual histories are serialized at the accepted boundary;
-restart replays the next mixing step with the restored history.
+Загружает полное состояние функций Грина и самоэнергий для точного возобновления.
+Передайте заново собранную задачу `problem`. Загрузка проверяет размеры массивов,
+имена механизмов, полноту численного контракта и сохранённую историю. Если заданы
+`algorithms` или `solver_options`, сохранённые значения должны совпасть с ними.
+Возобновление на той же стадии линейного смешивания сохраняет логический счётчик
+итераций и продолжает расчёт в пределах оставшегося лимита. Для смешивания
+Андерсона сохраняются состояние и история невязок на принятой границе итерации.
+Следующий шаг использует восстановленную историю.
 
-`incompatible=:error` (the default) preserves strict loading and throws an
-`ArgumentError` for a metadata-incompatible checkpoint.  `:ignore` emits a
-warning and returns `nothing`.  `:quarantine` moves the incompatible file
-beside the original under a collision-safe `.incompatible.*` name, emits
-a warning containing both paths, and returns `nothing`.  Malformed HDF5,
-missing datasets, non-finite state arrays, and all other errors remain fatal in
-every mode; these indicate corruption or an implementation error rather than
-a reusable checkpoint from a different discretization.
+При несовместимости метаданных `incompatible=:error` (значение по умолчанию)
+вызывает `ArgumentError`. Режим `:ignore` сообщает о несовместимости и возвращает
+`nothing`. Режим `:quarantine` перемещает файл в том же каталоге под свободным
+именем `.incompatible.*`, указывает оба пути в предупреждении и возвращает
+`nothing`. Повреждённый HDF5, отсутствующие наборы данных, нечисловые или
+бесконечные значения состояния и другие ошибки прерывают загрузку во всех режимах.
 
-See [Production sweep and recovery](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and the
-[HDF5 checkpoint schema](@ref native-result-formats).
+См. [Серию производственных расчётов и возобновление](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md)
+и [схему контрольной точки HDF5](@ref native-result-formats).
 """
 function load_production_restart(
     path::AbstractString,
@@ -597,9 +598,9 @@ function _csv_field(value)
 end
 
 """
-Atomically write a language-neutral CSV sweep summary.
+Атомарно записывает переносимую сводку серии расчётов в CSV.
 
-See [Production plots and saved data](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+См. [Графики производственного расчёта и сохранённые данные](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function save_production_summary(path::AbstractString, result::ProductionSweepResult)
     directory = dirname(abspath(path))

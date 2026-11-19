@@ -1,14 +1,14 @@
 """
     QCLProductionPointRunner(configuration)
 
-Adapter between the solver-independent [`QCLApplicationRuntime`](@ref) and
-the existing configured production workflow. Each runtime point is translated
-to a one-temperature/one-voltage [`ResolvedRunConfiguration`](@ref), whose
-artifacts are confined to that content-addressed point directory.
+Адаптер между независимой от решателя средой [`QCLApplicationRuntime`](@ref)
+и запуском по конфигурации. Для каждой точки создаётся
+[`ResolvedRunConfiguration`](@ref) с одной температурой и одним напряжением.
+Файлы этой точки пишутся в её каталог с идентификатором содержимого.
 
-The generic runtime remains unaware of `NEGFProblem`, `ConfiguredRunResult`,
-HDF5, and the production solver. The adapter deliberately reuses
-[`run_from_configuration`](@ref) as the certified solver entry point.
+Среда вызывает проверенную точку входа [`run_from_configuration`](@ref)
+через адаптер. Ей не требуются `NEGFProblem`, `ConfiguredRunResult`, HDF5
+или реализация основного решателя.
 """
 struct QCLProductionPointRunner <: AbstractPointRunner
     configuration::ResolvedRunConfiguration
@@ -34,7 +34,7 @@ end
 _production_runtime_adapter_source() =
     _package_path("src", "composition", "production_runtime_adapter.jl")
 
-"""Build the configured temperature -> voltage application sweep tree."""
+"""Построить дерево запуска с внешним перебором по температуре и внутренним по напряжению."""
 function configured_nested_sweep_plan(configuration::ResolvedRunConfiguration)
     temperatures = Any[_kelvin(value) for value in configuration.study.temperatures]
     voltages = Any[
@@ -122,10 +122,10 @@ function _runtime_complete_configuration_identity(configuration::ResolvedRunConf
 end
 
 """
-Reparse the retained YAML tree and prove that it describes the same typed
-configuration that will reach the solver. This prevents a programmatically
-constructed `ResolvedRunConfiguration` from deriving a content ID from one
-model while emitting `resolved_configuration.yaml` for another model.
+Повторно разобрать сохранённое дерево YAML и сверить его с типизированной
+конфигурацией, которую получит решатель. Это исключает расхождение между
+моделью, определившей идентификатор `ResolvedRunConfiguration`, и моделью,
+записанной в `resolved_configuration.yaml`.
 """
 function _assert_runtime_configuration_consistency(configuration::ResolvedRunConfiguration)
     reparsed = try
@@ -247,11 +247,11 @@ end
 """
     configured_nested_run_definition(configuration)
 
-Bind the resolved physical/numerical model, solver source tree, requested
-artifact/completion policy, and nested operating-point set to a SHA-256 run
-identity. The relocatable output directory and display labels are excluded;
-changing an artifact policy produces a new run so a completed point cannot be
-silently reused without newly requested outputs.
+Связать итоговую физическую и численную модель, исходники решателя, правила
+сохранения и завершения и вложенный набор рабочих точек с идентификатором
+запуска SHA-256. Каталог вывода и подписи не влияют на идентификатор.
+Изменение состава сохраняемых файлов создаёт новый запуск, чтобы готовая
+точка без вновь запрошенных выходов не могла быть повторно использована.
 """
 function configured_nested_run_definition(configuration::ResolvedRunConfiguration)
     _assert_runtime_configuration_consistency(configuration)
@@ -601,8 +601,7 @@ const _RUNTIME_OPTICAL_ROW_ESTIMATE_BYTES = 256
 const _RUNTIME_PRODUCTION_CHECKPOINT_KIND = "production_state"
 const _RUNTIME_PRODUCTION_CHECKPOINT_FORMAT = "QCLNEGF/HDF5"
 
-"""Path-bearing state used only while a current HDF5 payload crosses the
-generic checkpoint-codec port."""
+"""Состояние с путём к файлу, используемое при передаче HDF5 через общий интерфейс контрольной точки."""
 struct _RuntimeProductionCheckpointPayload
     path::String
 end
@@ -646,11 +645,10 @@ function _runtime_read_production_checkpoint(path::AbstractString)
     )
 end
 
-"""Current checkpoint codec for content-addressed production points.
+"""Кодек контрольных точек для рабочих точек с идентификатором содержимого.
 
-The `reference2019-runtime-checkpoint-v1` envelope owns integrity and generation
-metadata; its payload is the current QCLNEGFRunner HDF5 schema itself. No reference
-file or compatibility translation participates in recovery.
+Оболочка `reference2019-runtime-checkpoint-v1` хранит сведения целостности
+и поколения. Данные контрольной точки записаны по схеме HDF5 Runner.
 """
 function _runtime_production_checkpoint_codec()
     return CallbackCheckpointCodec(
@@ -745,10 +743,9 @@ function _runtime_checkpoint_payload_metadata(loaded::LoadedCheckpoint)
     return metadata
 end
 
-"""Install only an envelope-verified current checkpoint into solver staging.
-
-An HDF5 file left in `artifacts/` without a committed runtime envelope is
-removed and never considered for restart.
+"""Передать решателю для возобновления только контрольную точку с проверенной
+служебной записью. HDF5 в `artifacts/` без зафиксированной записи
+удаляется из рабочего каталога.
 """
 function _runtime_prepare_checkpoint!(
     context::PointExecutionContext,
@@ -1129,12 +1126,13 @@ end
 """
     run_configured_nested_sweep(configuration; ...)
 
-Execute the configured temperature -> voltage set through the
-content-addressed application coordinator. Completed `result.yaml` points are
-checksum-verified and skipped on resume. An unfinished point re-enters the
-same one-point `run_from_configuration` workflow and can reuse its current,
-problem-validated HDF5 checkpoint when `output.resume` and
-`output.save_full_state` are enabled.
+Выполнить заданный перебор температур и напряжений через координатор,
+который идентифицирует точки по содержимому. При возобновлении контрольные
+суммы завершённых `result.yaml` проверяются, после чего такие точки
+пропускаются. Незавершённая точка повторно входит в расчёт одной точки
+`run_from_configuration`. Когда включены `output.resume` и
+`output.save_full_state`, она может загрузить проверенную на совместимость
+с задачей контрольную точку HDF5.
 """
 function run_configured_nested_sweep(
     configuration::ResolvedRunConfiguration;

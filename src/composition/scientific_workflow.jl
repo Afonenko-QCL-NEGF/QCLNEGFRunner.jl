@@ -1,4 +1,4 @@
-"""Scientific plan and saved-result workflow with explicit domain/adapter boundaries."""
+"""Подготовка научных планов и обработка сохранённых результатов с явным разделением предметной логики и адаптеров."""
 module QCLScientificWorkflow
 using LinearAlgebra
 using SHA
@@ -76,7 +76,8 @@ import ..QCLNEGFRunner:
     _configured_optical_response!,
     psd_error_budget,
     representation_coverage
-import ..QCLNumerics: effective_seed_parameters, solution_scientific_assessment
+import ..QCLNumerics:
+    CHECKPOINT_NONE, CHECKPOINT_STATE_ONLY, effective_seed_parameters, solution_scientific_assessment
 import ..QCLApplicationRuntime: canonical_bytes
 include("../application/scientific/contracts.jl")
 include("../application/scientific/planning.jl")

@@ -1,10 +1,12 @@
-"""Declared manufactured inputs; never defaults or fitted parameters of a QCL.
+"""Явно заданные параметры искусственной задачи. Они не задают значения
+по умолчанию для ККЛ и не получены подгонкой к нему.
 
-Energies are numerical eV coordinates. Γ is the full broadening, so the
-retarded self-energy is -iΓ/2. The H and Γ matrices do not commute.
-Every report stores the inputs, phase, mesh and the finite-window analytic
-truth. Coarse-grid rejection is an expected observation, not acceptance of
-an unresolved spectral integral. No SCBA or material adequacy is certified.
+Энергии заданы численными координатами в эВ. Γ обозначает полное уширение,
+так что ретарди́рованная собственная энергия равна −iΓ/2. Матрицы H и Γ
+не коммутируют. Отчёт сохраняет входы, фазу, сетку и аналитический интеграл
+в конечном окне. Недостаточная точность грубой сетки служит ожидаемым
+результатом проверки. По этой задаче нельзя судить о сходимости SCBA
+или адекватности параметров материала.
 """
 const SPECTRAL_RESOLUTION_FIXTURE = (
     levels_eV = [-0.0225, 0.005, 0.0275],
@@ -36,12 +38,13 @@ function _spectral_resolution_hamiltonian()
     return transform*Diagonal(SPECTRAL_RESOLUTION_FIXTURE.levels_eV)*transform'
 end
 
-"""Independent finite-window integral of the constant-self-energy resolvent.
+"""Независимый интеграл резольвенты с постоянной собственной энергией
+по конечному окну.
 
-For B=H-iΓ/2=V diag(z) V⁻¹, L=V diag(log(b-z)-log(a-z)) V⁻¹.
-The exact integral of A/(2π) is i(L-L†)/(2π). All poles are strictly in
-the lower half-plane, fixing a continuous principal-log branch on real E.
-Unlike sampled quadrature this expression resolves arbitrarily narrow poles.
+Для B=H−iΓ/2=V diag(z) V⁻¹ положим L=V diag(log(b−z)−log(a−z)) V⁻¹.
+Точный интеграл A/(2π) равен i(L−L†)/(2π). Все полюса лежат строго в
+нижней полуплоскости, поэтому на вещественной оси E главная ветвь
+логарифма непрерывна. Формула учитывает полюса сколь угодно малой ширины.
 """
 function _constant_selfenergy_spectral_integral(H, gamma, lower, upper)
     lower < upper || throw(ArgumentError("invalid spectral oracle window"))
@@ -167,7 +170,7 @@ function _spectral_integral_checks()
     return checks
 end
 
-"""Independent full block assembly; never call finite_chain_green(return_full=true)."""
+"""Независимая сборка полной блочной матрицы без вызова `finite_chain_green(return_full=true)`."""
 function _full_matrix_chain_oracle(energy, onsite, coupling, sr, sl, sg)
     blocks = length(onsite)
     count = size(first(onsite), 1)
@@ -263,7 +266,7 @@ function _operator_spectral_resolution_checks()
 end
 
 
-"""Bounded Hilbert controls: distinguish algebraic FFT equivalence from quadrature."""
+"""Ограниченные проверки преобразования Гильберта. Они различают алгебраическую эквивалентность БПФ и точность квадратуры."""
 function _bounded_hilbert_checks()
     bn = _DIAGNOSTIC_CORE
     energy = collect(range(-1.0, 1.0; length = 129))

@@ -1,6 +1,6 @@
 const RUNTIME_CHECKPOINT_SCHEMA = "reference2019-runtime-checkpoint-v1"
 
-"""Persistence port implemented by infrastructure run repositories."""
+"""Интерфейс сохранения данных, который реализуют хранилища запусков."""
 abstract type AbstractRunRepository end
 
 # Repository operations belong to the application boundary. Infrastructure
@@ -26,18 +26,19 @@ function aggregate_timing_sessions! end
 """
     verify_result_artifacts!(repository, run_id, artifacts)
 
-Verify every artifact marked as integrity-required before a completed point
-may be reused. Infrastructure adapters must reject missing, escaped, symlinked,
-size-mismatched, or checksum-mismatched payloads.
+Перед повторным использованием завершённой точки проверить все файлы,
+для которых обязательна проверка целостности. Хранилище отклоняет отсутствующие
+файлы, символические ссылки, пути за пределами каталога запуска и файлы
+с несовпадающими размером или контрольной суммой.
 """
 function verify_result_artifacts! end
 
-"""Serialization port for solver-state checkpoints."""
+"""Интерфейс сериализации контрольных точек решателя."""
 abstract type AbstractCheckpointCodec end
 
 """
-Format-neutral adapter around an existing checkpoint writer/reader pair.
-Infrastructure repositories decide how payloads and envelopes are committed.
+Адаптер для пары функций записи и чтения контрольной точки. Хранилище
+определяет формат фиксации данных и служебной записи.
 """
 struct CallbackCheckpointCodec <: AbstractCheckpointCodec
     extension::String
@@ -58,10 +59,9 @@ struct CallbackCheckpointCodec <: AbstractCheckpointCodec
 end
 
 """
-Immutable reference to one committed checkpoint generation.
+Неизменяемая ссылка на одно зафиксированное поколение контрольной точки.
 
-The path fields are opaque adapter locators: application coordination must
-not join, normalize, or expose them as filesystem paths.
+Поля путей интерпретирует адаптер. Координатор передаёт их без преобразований.
 """
 struct CheckpointReference
     run_id::String
@@ -75,20 +75,20 @@ struct CheckpointReference
     iteration::Union{Nothing,Int}
 end
 
-"""Checksum-verified state returned through the checkpoint port."""
+"""Состояние с проверенной контрольной суммой, полученное через интерфейс контрольных точек."""
 struct LoadedCheckpoint
     reference::CheckpointReference
     state::Any
     metadata::Dict{String,Any}
 end
 
-"""Fail-closed error raised for a missing or corrupt checkpoint generation."""
+"""Ошибка при отсутствии или повреждении поколения контрольной точки."""
 struct CheckpointIntegrityError <: Exception
     path::String
     message::String
 end
 
-"""Fail-closed error raised when a published result artifact is not intact."""
+"""Ошибка нарушения целостности опубликованного файла результатов."""
 struct ArtifactIntegrityError <: Exception
     path::String
     message::String
@@ -115,7 +115,7 @@ function _portable_name(value::AbstractString, what::AbstractString)
     return text
 end
 
-"""Validate a lowercase SHA-256 digest returned through an application port."""
+"""Проверить, что интерфейс приложения вернул SHA-256 в нижнем регистре."""
 function validate_sha256_digest(digest, kind::AbstractString)
     digest isa AbstractString || throw(
         ArgumentError("$kind must be a lowercase SHA-256 string, got $(typeof(digest))"),
@@ -126,7 +126,7 @@ function validate_sha256_digest(digest, kind::AbstractString)
     return value
 end
 
-"""Validate a full content-addressed identifier at the application boundary."""
+"""Проверить полный идентификатор содержимого на границе приложения."""
 function validate_content_identifier(identifier::AbstractString, kind::AbstractString)
     value = String(identifier)
     occursin(_CONTENT_ID, value) ||
@@ -137,10 +137,9 @@ end
 """
     portable_metadata(value)
 
-Convert application metadata to the language-neutral scalar/vector/mapping
-tree accepted by repository ports.  Serialization adapters may encode this
-tree as YAML, JSON, or another format without application code depending on a
-particular encoder.
+Преобразовать служебные сведения приложения в независимое от языка
+дерево скаляров, векторов и отображений, которое принимает хранилище.
+Адаптер может записать дерево в YAML, JSON или другом формате.
 """
 function portable_metadata(value)
     if value isa AbstractDict || value isa NamedTuple
@@ -177,10 +176,11 @@ end
 """
     canonical_bytes(value)
 
-Return the language-neutral byte representation used for content identities.
-Mappings are ordered by their UTF-8 string keys, integer widths are ignored,
-and finite real numbers are represented by the IEEE-754 binary64 bit pattern.
-Unsupported objects fail closed instead of falling back to `show`.
+Вернуть независимое от языка представление в байтах для вычисления
+идентификаторов содержимого. Ключи отображений сортируются как строки UTF-8.
+Разрядность целых чисел не учитывается. Конечные вещественные числа
+представляются битами в формате IEEE-754 binary64. Неподдерживаемый объект
+вызывает ошибку.
 """
 function canonical_bytes(value)
     io = IOBuffer()
@@ -249,14 +249,14 @@ function _write_canonical(io::IO, value)
     )
 end
 
-"""Return a full SHA-256 content identifier with a portable prefix."""
+"""Вернуть полный идентификатор содержимого на основе SHA-256 с переносимым префиксом."""
 function content_id(prefix::AbstractString, value)
     name = lowercase(_portable_name(prefix, "content-id prefix"))
     digest = bytes2hex(SHA.sha256(canonical_bytes(value)))
     return "$name-$digest"
 end
 
-"""Stream a file through SHA-256 without loading a checkpoint into RAM."""
+"""Вычислить SHA-256 файла потоковым чтением, сохраняя ограниченный объём занятой памяти."""
 function file_sha256 end
 
 function _normalised_relative_path(path::AbstractString, root::AbstractString)
@@ -269,9 +269,8 @@ end
 """
     fingerprint_sources(paths; root)
 
-Build a deterministic source manifest containing only relative paths, byte
-sizes, and SHA-256 digests.  The file bytes themselves are never copied into
-run metadata.
+Составить детерминированный манифест источников из относительных путей,
+размеров в байтах и контрольных сумм SHA-256. Содержимое файлов в манифест не входит.
 """
 function fingerprint_sources(paths; root::AbstractString = pwd())
     records = Dict{String,Any}[]
@@ -293,7 +292,7 @@ function fingerprint_sources(paths; root::AbstractString = pwd())
     return records
 end
 
-"""One declarative axis at a particular nested sweep level."""
+"""Одна явно заданная ось на определённом уровне вложенного перебора."""
 struct SweepAxis
     name::String
     values::Vector{Any}
@@ -309,19 +308,19 @@ struct SweepAxis
     end
 end
 
-"""Recursive application-level specification implemented by leaves/levels."""
+"""Рекурсивное описание перебора на уровне приложения, состоящее из уровней и листьев."""
 abstract type AbstractSweepSpec end
 
-"""Terminal task name below the final sweep level."""
+"""Имя задачи в листе на последнем уровне перебора."""
 struct SweepLeaf <: AbstractSweepSpec
     name::String
     SweepLeaf(name::AbstractString = "solve") = new(_portable_name(name, "sweep leaf name"))
 end
 
 """
-One nesting level. Axes at the same level form a Cartesian product; `child`
-is evaluated for every product member. This represents arbitrary nested
-sweeps without solver-specific loops.
+Один уровень вложенного перебора. Оси на этом уровне образуют декартово
+произведение. Элемент `child` обрабатывается для каждой комбинации. Так
+задаётся вложенный перебор без привязки к циклам конкретного решателя.
 """
 struct SweepLevel <: AbstractSweepSpec
     name::String
@@ -338,7 +337,7 @@ struct SweepLevel <: AbstractSweepSpec
     end
 end
 
-"""A named, recursively nested sweep tree."""
+"""Именованное дерево вложенного перебора."""
 struct NestedSweepPlan
     name::String
     root::AbstractSweepSpec
@@ -404,7 +403,7 @@ _sweep_plan_dict(plan::NestedSweepPlan) =
 _sweep_plan_identity_dict(plan::NestedSweepPlan) =
     Dict{String,Any}("name" => plan.name, "root" => _sweep_spec_identity_dict(plan.root))
 
-"""Return the checked number of terminal points in a nested sweep."""
+"""Вернуть проверенное число конечных точек вложенного перебора."""
 function point_count(spec::SweepLeaf)
     return 1
 end
@@ -419,7 +418,7 @@ end
 
 point_count(plan::NestedSweepPlan) = point_count(plan.root)
 
-"""Stable leaf descriptor. Identity depends on coordinates, not loop index."""
+"""Устойчивое описание листа. Идентификатор определяется координатами точки."""
 struct SweepPoint
     point_id::String
     ordinal::Int
@@ -478,7 +477,7 @@ function _visit_sweep_leaves!(
     return nothing
 end
 
-"""Visit nested points without materialising the whole Cartesian product."""
+"""Последовательно обойти точки, не размещая в памяти полное декартово произведение."""
 function foreach_sweep_point(
     callback::Function,
     plan::NestedSweepPlan,
@@ -501,7 +500,7 @@ function foreach_sweep_point(
     return nothing
 end
 
-"""Materialize a bounded sweep plan; stream large plans with `foreach_sweep_point`."""
+"""Разместить в памяти план ограниченного размера. Большие планы обходятся через `foreach_sweep_point`."""
 function planned_points(
     plan::NestedSweepPlan,
     run_id::AbstractString;
@@ -519,7 +518,7 @@ function planned_points(
     return result
 end
 
-"""Full content identity retained alongside its printable run id."""
+"""Полный идентификатор содержимого вместе с кратким идентификатором запуска."""
 struct RunIdentity
     run_id::String
     digest::String
@@ -527,7 +526,7 @@ struct RunIdentity
     canonical_bytes_count::Int
 end
 
-"""Derive a stable SHA-256 identity from science, software, and sweep set."""
+"""Вычислить устойчивый идентификатор SHA-256 по научной постановке, программному окружению и набору точек."""
 function derive_run_identity(
     scientific_identity,
     software_identity,
@@ -549,9 +548,9 @@ function derive_run_identity(
 end
 
 """
-Immutable application request. Labels are deliberately excluded from the
-content identity; physics, numerical choices, algorithms, source fingerprints,
-and the sweep tree belong in `scientific_identity`/`software_identity`.
+Неизменяемый запрос приложения. В `scientific_identity` и `software_identity`
+входят физика, численные настройки, алгоритмы, контрольные данные источников
+и дерево перебора. Названия и подписи в идентификатор содержимого не входят.
 """
 struct RunDefinition
     plan::NestedSweepPlan
@@ -601,8 +600,9 @@ function run_definition_dict(definition::RunDefinition)
 end
 
 """
-Policy for durable iteration data. Scalar iteration events are always kept;
-this policy controls only expensive state snapshots and the presentation budget.
+Политика долговременного хранения данных итераций. Скалярные события
+сохраняются всегда. Политика задаёт отбор объёмных снимков состояния
+и ограничивает объём данных для отображения.
 """
 struct IterationRetentionPolicy
     snapshot_mode::Symbol
@@ -667,7 +667,7 @@ function retained_snapshot_count(policy::IterationRetentionPolicy, total::Intege
     )
 end
 
-"""Declarative byte-cost model used before a run allocates result storage."""
+"""Модель затрат дискового пространства в байтах до начала записи результатов."""
 struct DiskBudgetModel
     fixed_run_bytes::Int
     result_metadata_bytes_per_point::Int
@@ -713,7 +713,7 @@ struct DiskBudgetModel
     end
 end
 
-"""Auditable component-wise estimate returned by [`estimate_disk`](@ref)."""
+"""Проверяемая оценка по составляющим, которую возвращает [`estimate_disk`](@ref)."""
 struct DiskEstimate
     point_count::Int
     iterations_per_point::Int
@@ -724,7 +724,7 @@ struct DiskEstimate
     safety_factor::Float64
 end
 
-"""Estimate retained run storage before a sweep creates result payloads."""
+"""Оценить требуемый объём хранения до записи результатов перебора."""
 function estimate_disk(
     plan::NestedSweepPlan,
     model::DiskBudgetModel,

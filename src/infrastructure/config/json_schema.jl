@@ -1,7 +1,7 @@
 """
-One fail-closed JSON-Schema violation.  The public configuration API converts
-this internal representation to `ConfigurationError` only after combinators
-(`oneOf`, `anyOf`, `if`/`then`) have been evaluated.
+Представляет одно нарушение JSON Schema. Интерфейс конфигурации формирует
+`ConfigurationError` после вычисления комбинирующих правил `oneOf`, `anyOf`
+и `if`/`then`.
 """
 struct _SchemaViolation
     instance_path::String
@@ -74,10 +74,9 @@ function _push_schema_violation!(violations, instance_path, schema_path, message
 end
 
 """
-Minimal, deterministic Draft 2020-12 evaluator for the keywords used by the
-QCLNEGFRunner configuration contract.  It deliberately rejects unsupported
-schema keywords in `_check_supported_schema_keywords!`, instead of silently
-pretending that a partial validator is complete.
+Детерминированно проверяет ключевые слова Draft 2020-12, используемые схемой
+конфигурации QCLNEGFRunner. Неподдерживаемые ключевые слова отклоняются в
+`_check_supported_schema_keywords!`.
 """
 function _validate_json_schema!(
     violations::Vector{_SchemaViolation},

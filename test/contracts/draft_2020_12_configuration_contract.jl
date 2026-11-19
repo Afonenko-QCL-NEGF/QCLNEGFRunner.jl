@@ -1,12 +1,15 @@
 module Suite_T026
 include("../support/common.jl")
-using HDF5
+using HDF5, SHA
 include("../support/configuration_schema_scattering_domain.jl")
 
 @testset "Draft 2020-12 configuration contract" begin
     base = load_run_configuration(joinpath(_SCHEMA_CONFIG_ROOT, "base.yaml"))
     base_mapping = resolved_configuration_dict(base)
     @test QCLNEGFRunner.validate_configuration_schema(base_mapping) === base_mapping
+    obsolete_progress = resolved_configuration_dict(base)
+    obsolete_progress["output"]["progress"]["human_every"] = 5
+    @test_throws ConfigurationError QCLNEGFRunner.validate_configuration_schema(obsolete_progress)
 
     unexpected = resolved_configuration_dict(base)
     unexpected["version"] = 1
@@ -193,6 +196,13 @@ include("../support/configuration_schema_scattering_domain.jl")
     base_file=joinpath(_SCHEMA_CONFIG_ROOT, "base.yaml")
     document=QCLNEGFRunner.validate_configuration_source(base_file)
     @test document isa QCLNEGFRunner.ValidatedConfigurationDocument
+    @test document.schema_id == "https://qcl-negf.invalid/schema/runner/run.schema.json"
+    @test document.schema_path == default_configuration_schema()
+    schema_root = dirname(document.schema_path)
+    provenance = QCLNEGFRunner.YAML.load_file(joinpath(schema_root, "PROVENANCE.json"))
+    for (name, digest) in provenance["sha256"]
+        @test bytes2hex(open(sha256, joinpath(schema_root, name))) == digest
+    end
     @test isempty(document.provenance.manifests)
     @test length(document.provenance.files)==1
     @test document.data["numerical"]["energy_nodes"]==2401

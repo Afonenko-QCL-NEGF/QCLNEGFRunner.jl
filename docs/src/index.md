@@ -1,10 +1,11 @@
 # QCLNEGFRunner
 
-QCLNEGFRunner 0.2.0 supplies execution, storage and presentation for
-[QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl) on Julia 1.13.x.
+QCLNEGFRunner 0.2.0 запускает расчёты [QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl)
+на Julia 1.13.x и отвечает за хранение и представление результатов.
 
-Start with [configuration](@ref yaml-run-configurations), then
-[results and restart](@ref native-result-formats) and [resource limits](@ref resource-planning).
-The [architecture](@ref developer-architecture) describes ownership and the
-[API](api/public.md) lists supported adapters. Physical equations and in-memory
-solver behavior are documented by the core package.
+Начните с [конфигурации](@ref yaml-run-configurations), затем прочитайте разделы
+о [результатах и возобновлении](@ref native-result-formats) и
+[ограничениях ресурсов](@ref resource-planning). В разделе
+[«Архитектура»](@ref developer-architecture) описаны обязанности компонентов,
+а в [справочнике API](api/public.md) перечислены поддерживаемые интерфейсы.
+Уравнения физической модели и работа решателя в памяти описаны в документации Core.

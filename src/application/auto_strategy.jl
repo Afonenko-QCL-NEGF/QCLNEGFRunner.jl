@@ -1,7 +1,7 @@
-"""Port supplying machine resources at the composition boundary."""
+"""Интерфейс получения данных о ресурсах на уровне сборки приложения."""
 function default_hardware_profile end
 
-"""Immutable description of the resources visible to one Julia process."""
+"""Неизменяемое описание ресурсов, доступных одному процессу Julia."""
 struct HardwareProfile
     julia_threads::Int
     logical_cpus::Int
@@ -19,7 +19,7 @@ struct HardwareProfile
     memory_source::String
 end
 
-"""Resolved E1-only execution decision recorded beside every configured run."""
+"""Решение об организации расчёта уровня E1, которое сохраняется вместе с каждым запуском по конфигурации."""
 struct ExecutionPlan
     requested_strategy::Symbol
     parallel_backend::Symbol
@@ -304,9 +304,9 @@ end
 """
     execution_plan_candidates(configuration; hardware=default_hardware_profile())
 
-Return feasible E1 scheduling candidates. The list changes only scheduling,
-temporary-buffer sizes, and BLAS/JULIA worker allocation; scientific inputs
-are never modified.
+Вернуть допустимые варианты организации расчёта уровня E1. Варианты различаются
+расписанием, размерами временных буферов и распределением потоков BLAS и Julia.
+Научные входные данные остаются одинаковыми.
 """
 function execution_plan_candidates(
     configuration::ResolvedRunConfiguration;
@@ -427,11 +427,11 @@ end
 """
     select_execution_plan(configuration; hardware=default_hardware_profile())
 
-Resolve only computational scheduling. `:auto_exact` cannot change
-`AlgorithmOptions`, scattering models, tolerances, grids, or basis. The
-decision is therefore E1 even when the requested scientific run is E2/E3.
-The default decision is deterministic; optional bounded calibration can choose
-among the same candidates before a run starts.
+Определить порядок и ресурсы вычислений. Режим `:auto_exact` оставляет
+`AlgorithmOptions`, модели рассеяния, допуски, сетки и базис неизменными.
+Решение относится к уровню E1 и для научных расчётов уровней E2 и E3.
+По умолчанию выбор детерминирован. Перед запуском по желанию можно провести
+ограниченную калибровку на тех же вариантах.
 """
 function select_execution_plan(
     configuration::ResolvedRunConfiguration;
@@ -508,7 +508,7 @@ function _configuration_with_execution_plan(
     )
 end
 
-"""Apply the selected E1 execution plan without changing scientific inputs."""
+"""Применить выбранный план запуска уровня E1, сохранив научные входные данные."""
 function resolve_execution_strategy(
     configuration::ResolvedRunConfiguration;
     hardware::HardwareProfile = default_hardware_profile(),

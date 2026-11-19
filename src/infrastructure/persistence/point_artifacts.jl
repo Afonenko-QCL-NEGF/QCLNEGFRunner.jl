@@ -63,7 +63,7 @@ function _physics_axes(path, rank)
     return join(["dimension_$(i)" for i = 1:rank], ",")
 end
 
-"""Native scientific storage and immutable publication. No display sampling occurs here."""
+"""Хранит научные данные на расчётной сетке и публикует неизменяемые артефакты."""
 const POINT_COMMIT_SCHEMA = "qcl-negf.artifact-commit.v2"
 
 function _resolved_configuration_envelope(configuration)
@@ -76,7 +76,7 @@ function _resolved_configuration_envelope(configuration)
     )
 end
 
-"""Read the versioned resolved-input envelope."""
+"""Читает запись разрешённых входных данных и проверяет идентификатор её схемы."""
 function load_resolved_configuration_envelope(path)
     envelope=YAML.load_file(path; dicttype = Dict{String,Any})
     get(envelope, "schema", nothing)=="qcl-negf-resolved-configuration-v3" &&
@@ -262,16 +262,17 @@ function _analysis_history!(file, solution)
         solution.scba.history;
         required_consecutive = solution.options.convergence.required_consecutive_scba_passes,
     )
-    witnesses=_write_final_matrix_audit!(diagnostic, solution)
+    audit=_measure_final_matrix_audit(solution)
+    _write_final_matrix_audit!(diagnostic, audit)
     diagnostic["validation_json"] = sprint(_light_json, _light_validation_data(solution))
     diagnostic["positivity_json"] =
-        sprint(_light_json, _light_positivity_data(solution; witnesses))
+        sprint(_light_json, _light_positivity_data(solution; witnesses = audit.witnesses))
     diagnostic["warnings_json"] =
         sprint(_light_json, get(solution.observables, :warnings, Any[]))
     return diagnostic
 end
 
-"""Store native-grid observables sufficient for the declared analysis profile, without Green matrices."""
+"""Сохраняет на расчётной сетке наблюдаемые, необходимые для заявленного профиля анализа, без матриц Грина."""
 function save_analysis_physics(
     path::AbstractString,
     solution::NEGFSolution;
@@ -506,7 +507,7 @@ function _artifact_record(path, role, schema, identity; profile = "science")
     )
 end
 
-"""Commit a closed generation, then atomically replace a small pointer. Payloads are immutable."""
+"""Фиксирует полное неизменяемое поколение артефактов и атомарно заменяет указатель на него."""
 function commit_point_artifacts(
     directory::AbstractString,
     solution::NEGFSolution;
@@ -731,7 +732,7 @@ function commit_point_artifacts(
     end
 end
 
-"""Verify immutable artifact identities and format metadata without interpreting scientific acceptance."""
+"""Проверяет идентификаторы неизменяемых артефактов и метаданные формата. Научная приёмка оценивается отдельно."""
 function verify_point_artifacts(commit_path::AbstractString)
     commit=YAML.load_file(commit_path; dicttype = Dict{String,Any})
     get(commit, "schema", nothing)==POINT_COMMIT_SCHEMA ||
@@ -910,7 +911,7 @@ function save_optical_physics(path, response; source_sha256 = "")
     return path
 end
 
-"""Attach HDF5 dimension scales in external C/logical axis order, without a transpose heuristic."""
+"""Привязывает шкалы измерений HDF5 во внешнем логическом порядке осей C."""
 function _attach_native_dimensions!(file)
     backend=HDF5
     native=haskey(file, "axes")
@@ -939,44 +940,50 @@ function _attach_native_dimensions!(file)
     )
     haskey(file, "optical/photon_energy_eV") &&
         (coordinates["photon_energy"]="optical/photon_energy_eV")
-    scale_paths=Set(values(coordinates))
-    for path in scale_paths
-        haskey(file, path) || continue
-        backend.API.h5ds_set_scale(file[path].id, basename(path))
-    end
+    # Keep dataset wrappers alive while the HDF5 API creates references.
+    scales=Dict{String,HDF5.Dataset}()
     function visit(parent, prefix = "")
         for name in keys(parent)
             object=parent[name]
             path=isempty(prefix) ? name : prefix*"/"*name
-            if object isa backend.Group
-                visit(object, path)
-            elseif object isa backend.Dataset && !(path in scale_paths) && ndims(object)>0
-                axes=split(String(read_attribute(object, "logical_axis_order")), ',')
-                length(axes)==ndims(object) || continue
-                dimensions=reverse(size(object))
-                references=Union{Nothing,String}[]
-                for (index, axis) in enumerate(axes)
-                    coordinate=get(coordinates, axis, nothing)
-                    if coordinate!==nothing &&
-                       haskey(file, coordinate) &&
-                       length(file[coordinate])==dimensions[index]
-                        backend.API.h5ds_attach_scale(
-                            object.id,
-                            file[coordinate].id,
-                            UInt32(index-1),
-                        )
-                        push!(references, "/"*coordinate)
-                    else
-                        push!(references, nothing)
+            try
+                if object isa backend.Group
+                    visit(object, path)
+                elseif object isa backend.Dataset && !haskey(scales, path) && ndims(object)>0
+                    axes=split(String(read_attribute(object, "logical_axis_order")), ',')
+                    length(axes)==ndims(object) || continue
+                    dimensions=reverse(size(object))
+                    references=Union{Nothing,String}[]
+                    for (index, axis) in enumerate(axes)
+                        coordinate=get(coordinates, axis, nothing)
+                        scale=get(scales, coordinate, nothing)
+                        if scale!==nothing && length(scale)==dimensions[index]
+                            backend.API.h5ds_attach_scale(object, scale, UInt32(index-1))
+                            push!(references, "/"*coordinate)
+                        else
+                            push!(references, nothing)
+                        end
                     end
+                    attributes(object)["axis_coordinate_paths_json"]=sprint(
+                        _light_json,
+                        references,
+                    )
                 end
-                attributes(object)["axis_coordinate_paths_json"]=sprint(
-                    _light_json,
-                    references,
-                )
+            finally
+                close(object)
             end
         end
     end
-    visit(file)
+    try
+        for path in Set(values(coordinates))
+            haskey(file, path) || continue
+            scale=file[path]
+            scales[path]=scale
+            backend.API.h5ds_set_scale(scale, basename(path))
+        end
+        visit(file)
+    finally
+        foreach(close, values(scales))
+    end
     return nothing
 end

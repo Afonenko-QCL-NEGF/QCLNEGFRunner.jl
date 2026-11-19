@@ -31,6 +31,8 @@ function _study_replace_configuration(
         configuration.study,
         configuration.provenance,
         configuration.raw,
+        configuration.physical_models,
+        configuration.domain_adaptation,
     )
 end
 

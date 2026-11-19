@@ -1,9 +1,9 @@
 """
     _atomic_replace_file(source, destination)
 
-Replace a regular file with one same-directory rename operation. Julia 1.12.7
-`mv(...; force=true)` removes an existing destination first, so it is not a
-valid commit primitive for status, result, progress, or checkpoint files.
+Атомарно заменяет обычный файл одной операцией переименования в том же
+каталоге. Используется для публикации файлов статусов, результатов,
+хода расчёта и контрольных точек.
 """
 function _atomic_replace_file(source::AbstractString, destination::AbstractString)
     source_absolute = abspath(source)
