@@ -1,7 +1,8 @@
-# Plotting and reports
+# Графики и отчёты
 
-Load CairoMakie in the same Julia environment to activate the optional plotting
-extension. The core numerical package has no plotting dependency.
+Чтобы активировать необязательное расширение для графиков, загрузите CairoMakie
+в том же окружении Julia, что и Runner. Численное ядро работает независимо от
+библиотеки построения графиков.
 
 ```julia
 using QCLNEGF
@@ -9,12 +10,14 @@ using QCLNEGFRunner
 using CairoMakie
 ```
 
-Band profiles, spectral maps, current spectra and convergence plots help diagnose a
-solution. Plot labels and units refer to the saved or supplied scientific state.
-Keep unconverged and unavailable quantities visibly distinguished. A plot cannot
-replace conservation checks, eigenvalue tests for positive semidefiniteness, or
-comparison across independently refined grids.
+Профили зон, спектральные карты, спектры тока и графики сходимости помогают
+диагностировать решение. Подписи и единицы соответствуют переданному или
+сохранённому научному состоянию. Отмечайте величины, для которых не достигнута
+сходимость или отсутствуют данные. Дополняйте графики проверками законов
+сохранения, проверкой положительной полуопределённости по собственным значениям
+и сравнением независимо уточнённых сеток.
 
-The [physical atlas](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/tutorials/physical-atlas.md)
-explains the physical functions using labelled analytic and coordinate-model
-illustrations. Those illustrations do not establish device-level experimental agreement.
+В [атласе физических моделей](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/tutorials/physical-atlas.md)
+физические функции показаны на аналитических и координатных примерах.
+Иллюстрации раскрывают свойства моделей. Согласие с экспериментом для
+конкретного прибора требует отдельной проверки.

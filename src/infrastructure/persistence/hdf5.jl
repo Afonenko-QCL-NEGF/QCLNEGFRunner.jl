@@ -12,7 +12,7 @@ function _checkpoint_array_identity(array::Array{ComplexF64})
     )
 end
 
-"""Identity of the actual discrete scattering operators, independent of builder options."""
+"""Идентификатор фактических дискретных операторов рассеяния, независимый от настроек сборки."""
 function _checkpoint_kernel_identity(kernels::KernelSet)
     names = sort!(collect(keys(kernels.K)); by = String)
     return Dict{String,Any}(
@@ -27,7 +27,7 @@ function _checkpoint_kernel_identity(kernels::KernelSet)
     )
 end
 
-"""Lossless native arrays: bounded chunks and low-cost deflate; no precision conversion."""
+"""Хранит исходные массивы без потерь, с ограниченным размером блоков и быстрым сжатием deflate."""
 function _write_native_dataset(parent, name, values)
     if values isa AbstractArray &&
        isbitstype(eltype(values)) &&
@@ -64,7 +64,7 @@ end
 
 const _SERIALIZATION_SLAB_BYTES = 1024*1024
 
-"""Tile all dimensions; neither wide rows nor the full complex field are copied."""
+"""Делит массив по всем измерениям и ограничивает объём данных, копируемых за один раз."""
 function _serialization_block(shape, element_bytes)
     remaining=max(1, div(_SERIALIZATION_SLAB_BYTES, element_bytes))
     return ntuple(length(shape)) do axis
@@ -255,14 +255,11 @@ end
 """
     save_checkpoint(path, solution; include_kernels=true)
 
-Write an interoperable HDF5 checkpoint.  Complex arrays are deliberately
-stored as separate `real` and `imag` datasets so Wolfram Language does not
-depend on an HDF5 compound-complex convention.  Global metadata records the
-axis conventions and scale system; SI units are encoded explicitly in input
-dataset names, while dimensionless groups are named accordingly and described
-by the versioned [checkpoint schema](@ref native-result-formats).
-
-See [Checkpoint schema](@ref native-result-formats).
+Записывает переносимую контрольную точку HDF5. Действительная и мнимая части
+комплексных массивов хранятся раздельно в наборах `real` и `imag`, пригодных
+для чтения в Wolfram Language. Общие метаданные задают порядок осей и систему
+масштабов. Единицы СИ обозначены в именах входных наборов. Безразмерные группы
+имеют собственные имена и описаны в [схеме контрольной точки](@ref native-result-formats).
 """
 function _write_checkpoint(
     path::AbstractString,
@@ -636,12 +633,12 @@ end
 """
     load_checkpoint(path)
 
-Read the language-neutral core of a current HDF5 checkpoint into a nested
-named tuple.  The package and schema identity are validated before any state
-is read.  The function intentionally does not deserialize Julia types; the
-same datasets can therefore be imported by Wolfram Language.
+Читает переносимую часть контрольной точки HDF5 и возвращает вложенный
+именованный кортеж. Перед чтением состояния проверяет идентификаторы пакета
+и схемы. Для чтения наборов данных не требуется десериализация типов Julia.
+Те же наборы данных можно импортировать в Wolfram Language.
 
-See the versioned [HDF5 checkpoint schema](@ref native-result-formats).
+См. [Схему контрольной точки HDF5](@ref native-result-formats).
 """
 function load_checkpoint(path::AbstractString)
     return h5open(path, "r") do file
@@ -667,7 +664,7 @@ function load_checkpoint(path::AbstractString)
     end
 end
 
-"""Publish a complete [checkpoint](@ref native-result-formats) atomically; failed writes never replace a previous state."""
+"""Атомарно публикует полную [контрольную точку](@ref native-result-formats), сохраняя записанное состояние при ошибке записи."""
 function save_checkpoint(path::AbstractString, solution::NEGFSolution; kwargs...)
     directory = dirname(abspath(path))
     mkpath(directory)

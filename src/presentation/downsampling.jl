@@ -1,4 +1,4 @@
-"""Presentation-only downsampling; it never changes the durable iteration log."""
+"""Прореживание данных только для отображения. Оно не меняет сохранённый журнал итераций."""
 struct DisplayDownsamplingPolicy
     max_points::Int
     strategy::Symbol

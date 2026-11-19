@@ -1,8 +1,12 @@
-"""Offline scientific projections from saved data; never launches NEGF.
+"""
+Строит научные проекции по сохранённым данным без повторного решения NEGF.
 
-Supported operations: iv, differential_conductance, gain_voltage, populations,
-density_map, potential_map, optical_map. Missing required fields are explicit
-errors; display projections retain their sampling declaration.
+Доступны операции `iv`, `differential_conductance`, `gain_voltage`,
+`populations`, `density_map`, `potential_map`, `energy_density_map`,
+`optical_map` и `optical_recompute`. Для `optical_recompute` требуются
+сохранённое полное состояние и значения `photon_energies` с единицами Unitful.
+Нехватка обязательных данных отражается в статусе операции. Проекции для
+отображения сохраняют описание использованной выборки.
 """
 function postprocess_series(
     directory::AbstractString;
@@ -283,7 +287,7 @@ function _optical_series(rows, root)
     return result
 end
 
-"""Render immutable annotated HDF5 into materialized SVG; no solver or JSON arrays."""
+"""Строит SVG по неизменяемым наборам HDF5 с метаданными осей."""
 function render_saved_snapshot(path::AbstractString, output_directory::AbstractString)
     mkpath(output_directory)
     paths=String[]

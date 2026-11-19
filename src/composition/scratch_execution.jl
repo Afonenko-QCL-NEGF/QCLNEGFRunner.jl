@@ -14,7 +14,7 @@ function _tree_digests(root::AbstractString)
     return result
 end
 
-"""Copy a closed result tree, verify its bytes and native commits, then publish one directory."""
+"""Скопировать закрытое дерево результатов, проверить данные и записи фиксации, затем атомарно опубликовать каталог."""
 function stage_result_tree(source::AbstractString, destination::AbstractString)
     source = abspath(source)
     destination = abspath(destination)
@@ -56,10 +56,11 @@ end
 """
     execute_scientific_plan_staged(plan, output; execution_id=nothing, scratch_root=nothing)
 
-Run in a unique local workspace when `scratch_root` is supplied, then verify and
-atomically publish the complete result tree to a fresh output directory. A failed
-compute or transfer retains its local workspace and reports its path on stderr.
-Without scratch, normal execution and explicit resume semantics apply.
+Если задан `scratch_root`, выполнить план в отдельном локальном каталоге.
+Проверить полное дерево результатов и атомарно перенести его в новый
+выходной каталог. При отказе расчёта или копирования локальный каталог
+сохраняется, его путь выводится в stderr. Без `scratch_root` действуют
+обычные правила запуска и явного возобновления.
 """
 function execute_scientific_plan_staged(
     plan::ScientificPlan,

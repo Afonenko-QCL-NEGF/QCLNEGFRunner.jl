@@ -2,9 +2,9 @@
 CurrentModule = QCLNEGFRunner
 ```
 
-# Public API
+# Публичный API
 
-## Types and operations
+## Типы и операции
 
 ```@docs
 ExecutionConfiguration
@@ -75,104 +75,7 @@ plot_method_comparison
 save_production_study_plots
 ```
 
-## Extension contracts
-
-```@docs
-AutomaticExecutionConfiguration
-default_configuration_schema
-ValidatedConfigurationDocument
-HardwareProfile
-ExecutionPlan
-ExecutionCalibrationSample
-ExecutionCalibrationReport
-validate_configuration_schema
-validate_configuration_source
-load_configuration_source
-probe_hardware
-execution_plan_candidates
-select_execution_plan
-calibrate_execution_plan
-resolve_execution_strategy
-hardware_profile_dict
-execution_plan_dict
-execution_calibration_dict
-save_execution_plan
-save_hardware_profile
-save_execution_calibration
-save_resource_diagnostics
-DEFAULT_MAXIMUM_SOLVER_RUNS
-planned_solver_runs
-execute_configured_run
-QCLApplicationRuntime
-SweepAxis
-AbstractSweepSpec
-SweepLeaf
-SweepLevel
-NestedSweepPlan
-SweepPoint
-point_count
-planned_points
-foreach_sweep_point
-RunIdentity
-RunDefinition
-derive_run_identity
-IterationRetentionPolicy
-DisplayDownsamplingPolicy
-DiskBudgetModel
-DiskEstimate
-estimate_disk
-AbstractRunRepository
-FilesystemRunRepository
-AbstractCheckpointCodec
-YamlCheckpointCodec
-CallbackCheckpointCodec
-CheckpointIntegrityError
-ArtifactIntegrityError
-verify_result_artifacts!
-RuntimeTracer
-AbstractPointRunner
-FunctionPointRunner
-PointExecutionContext
-PointExecutionResult
-SweepRunSummary
-checkpoint!
-record_iteration!
-run_sweep!
-QCLProductionPointRunner
-configured_nested_sweep_plan
-configured_nested_run_definition
-run_configured_nested_sweep
-QCLApplicationRuntime.CheckpointReference
-QCLApplicationRuntime.LoadedCheckpoint
-QCLApplicationRuntime.SpanToken
-QCLApplicationRuntime.SweepInterrupted
-QCLApplicationRuntime.append_event!
-QCLApplicationRuntime.canonical_bytes
-QCLApplicationRuntime.content_id
-QCLApplicationRuntime.emit_runtime_event!
-QCLApplicationRuntime.file_sha256
-QCLApplicationRuntime.fingerprint_sources
-QCLApplicationRuntime.flush_timing_summary!
-QCLApplicationRuntime.initialize_run!
-QCLApplicationRuntime.load_latest_checkpoint
-QCLApplicationRuntime.save_runtime_checkpoint!
-ConfiguredReportTemplate
-ConfiguredReportArtifact
-ConfiguredReportSection
-ConfiguredReportContext
-AbstractConfiguredReportRenderer
-MarkdownConfiguredReportRenderer
-CONFIGURED_REPORT_SECTIONS
-configured_report_arguments
-load_configured_report_template
-configured_report_context
-render_configured_report
-QCLNEGFRunner.QCLExecutionPolicy.ExecutionEnvelope
-QCLNEGFRunner.QCLExecutionPolicy.default_execution_envelope
-QCLNEGFRunner.QCLExecutionPolicy.default_hardware_profile
-```
-
-## Models and scientific workflows
+## Модели и научные расчёты
 
 ```@docs
 QCLNEGFRunner.QCLScientificWorkflow.ScientificPointResult
@@ -191,16 +94,17 @@ QCLNEGFRunner.QCLScientificWorkflow.is_scientific_definition
 QCLNEGFRunner.configured_resource_plan
 ```
 
-## Numerical solve adapter
+## Адаптер численного решателя
 
-`QCLNEGF.solve_production` accepts an in-memory checkpoint callback. Runner
-adds durable checkpoint paths and compatible restart handling.
+`QCLNEGF.solve_production` принимает функцию обратного вызова для передачи
+контрольной точки в памяти. Runner записывает состояние на диск и
+проверяет совместимость данных при возобновлении.
 
 ```@docs
 QCLNEGFRunner.solve_production
 ```
 
-## Command-line execution and scratch staging
+## Запуск из командной строки и перенос файлов с узла
 
 ```@docs
 QCLNEGFRunner.main

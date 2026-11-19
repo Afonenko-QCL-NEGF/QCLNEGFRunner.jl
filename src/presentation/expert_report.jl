@@ -11,16 +11,16 @@ const _METHOD_FAMILIES = (
                      modifies_physics, algorithm_family, description="",
                      literature="")
 
-Machine-readable identity of one solver mode in an expert comparison.
-`modifies_physics=false` declares an unchanged physical model (either a
-purely computational implementation or an explicitly controlled numerical
-approximation) and therefore requires the same `physics_signature` as the
-reference run.
-`modifies_physics=true` marks a change to the equations, discretized
-interaction, basis truncation, or another physical approximation; the report
-never presents such a run as a speed-only optimization.
+Машиночитаемое описание режима решателя для сравнения методов.
+`modifies_physics=false` означает, что физическая модель сохраняется.
+Так отмечаются вычислительные реализации или явно контролируемые
+численные приближения. Их `physics_signature` обязана совпадать
+с опорным запуском.
+`modifies_physics=true` обозначает изменение уравнений, дискретизации
+взаимодействия, усечения базиса или другого физического приближения.
+При сравнении такие изменения учитываются отдельно от ускорения вычислений.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 struct MethodDescriptor
     id::Symbol
@@ -64,9 +64,8 @@ function MethodDescriptor(;
     )
 end
 
-"""One operating point retained by the
-[expert comparison workflow](@ref expert-comparison-workflow), including its
-independent `scba_quality` classification."""
+"""Рабочая точка, сохранённая для [сравнения методов](@ref expert-comparison-workflow),
+с отдельной оценкой качества `scba_quality`."""
 struct MethodPoint
     temperature_K::Float64
     voltage_per_period_V::Float64
@@ -122,16 +121,14 @@ struct MethodPoint
     end
 end
 
-"""Descriptor, points, and provenance for the
-[expert comparison workflow](@ref expert-comparison-workflow)."""
+"""Описание метода, точки и происхождение данных для [сравнения методов](@ref expert-comparison-workflow)."""
 struct MethodRun
     descriptor::MethodDescriptor
     points::Vector{MethodPoint}
     summary_path::String
 end
 
-"""Long-form metric row from the
-[expert comparison workflow](@ref expert-comparison-workflow)."""
+"""Одна строка одной метрики в длинном формате [сравнения методов](@ref expert-comparison-workflow)."""
 struct MethodComparisonRow
     reference_id::Symbol
     candidate_id::Symbol
@@ -152,12 +149,14 @@ struct MethodComparisonRow
 end
 
 """
-Comparison of several stored runs on one declared physical structure.
+Сравнение нескольких сохранённых запусков для одной заданной физической
+структуры.
 
-Rows are long-form so current density, conservation residuals, gain, or any
-future `metric_*` column can be assessed without changing the report schema.
+Длинный формат хранит каждую величину в отдельной строке. Он позволяет
+оценить плотность тока, невязки законов сохранения, усиление и любой
+дополнительный столбец `metric_*` без изменения схемы отчёта.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 struct ExpertComparison
     structure_id::String
@@ -300,15 +299,14 @@ end
 """
     load_method_run(descriptor, summary_path)
 
-Load an existing `qcl-negf-report-v1` `sweep_summary.csv`. The required
-`scba_quality` column
-keeps strict convergence, a diagnostic approximate fixed point, and an
-unresolved state distinct. Optional columns `wall_seconds`,
-`measured_peak_bytes`, and any number of `metric_<name>` columns enrich the
-comparison. If only `estimated_peak_bytes` exists, the report labels memory as
-estimated rather than measured.
+Прочитать `sweep_summary.csv` в формате `qcl-negf-report-v1`. Обязательный
+столбец `scba_quality` различает строгую сходимость, диагностическую
+приближённую неподвижную точку и нерешённое состояние. Сравнение может
+учитывать необязательные столбцы `wall_seconds`, `measured_peak_bytes`
+и произвольное число столбцов `metric_<name>`. Если есть только
+`estimated_peak_bytes`, объём памяти в отчёте помечается как оценка.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function load_method_run(descriptor::MethodDescriptor, summary_path::AbstractString)
     path = abspath(summary_path)
@@ -414,13 +412,13 @@ end
 """
     load_method_catalog(path)
 
-Read a catalog with one row per method. Required columns are `method_id`,
-`label`, `structure_id`, `physics_signature`, `modifies_physics`,
-`algorithm_family`, and `summary_path`. Relative summary paths are resolved
-against the catalog directory. Optional `description` and `literature`
-columns are propagated into the expert report.
+Прочитать каталог с одной строкой на метод. Обязательны столбцы
+`method_id`, `label`, `structure_id`, `physics_signature`, `modifies_physics`,
+`algorithm_family` и `summary_path`. Относительные пути сводок раскрываются
+относительно каталога. Необязательные `description` и `literature`
+переносятся в отчёт.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function load_method_catalog(path::AbstractString)
     catalog = abspath(path)
@@ -485,14 +483,14 @@ end
     compare_method_runs(runs; reference_id, temperature_atol=1e-9,
                         voltage_atol=1e-12)
 
-Match stored methods at identical operating points and calculate long-form
-metric errors, speedup, and peak-memory ratio. Methods declaring unchanged
-physics are rejected if their `physics_signature` differs from the reference. This is
-an important fail-closed guard: a physical approximation cannot be relabelled
-as an implementation optimization by mistake.
+Сопоставить сохранённые методы по одинаковым рабочим точкам. Вычислить
+погрешности метрик, ускорение и отношение пиковых объёмов памяти.
+Метод с заявленной неизменной физикой принимается, если его
+`physics_signature` совпадает с опорным. Это предотвращает регистрацию
+физического приближения как чисто вычислительной оптимизации.
 
-See [Physics-first tests](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md) and
-[Expert comparison workflow](@ref expert-comparison-workflow).
+См. [физические проверки](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md)
+и [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function compare_method_runs(
     runs::AbstractVector{<:MethodRun};
@@ -1045,11 +1043,11 @@ end
 """
     save_expert_report(output_directory, comparison; title=...)
 
-Write an auditable Markdown report plus full-precision long-form comparison
-and point CSV files. Existing targets are atomically replaced only after each
-new file is complete.
+Записать проверяемый отчёт Markdown и файлы CSV с полным числом цифр
+для показателей сравнения и точек. Каждый существующий файл
+атомарно заменяется по завершении записи нового.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function save_expert_report(
     output_directory::AbstractString,
@@ -1069,9 +1067,9 @@ end
 """
     generate_expert_report(catalog_path, output_directory; reference_id, ...)
 
-One-call loader, comparator, and report writer used by the production wrapper.
+Одним вызовом загрузить каталог, сравнить методы и записать отчёт.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function generate_expert_report(
     catalog_path::AbstractString,
@@ -1085,6 +1083,6 @@ function generate_expert_report(
     return (comparison = comparison, paths = paths)
 end
 
-"""Optional CairoMakie extension point described by the
-[expert comparison workflow](@ref expert-comparison-workflow)."""
+"""Точка подключения необязательного расширения CairoMakie для
+[сравнения методов](@ref expert-comparison-workflow)."""
 function plot_method_comparison end

@@ -1,6 +1,6 @@
 const _SEED_MARKER_FIELDS =
     (:seed_mu_eV, :seed_number_ratio, :fdt_raw_seed_mu, :fdt_normalized_seed_mu)
-"""Required typed physical diagnostics; unmeasured rows remain explicitly absent."""
+"""Хранит обязательную типизированную физическую диагностику и явно отмечает строки без измерений."""
 const _PHYSICAL_MARKER_DEFINITIONS = merge(
     Dict(
         :seed_mu_eV => (
@@ -424,7 +424,7 @@ function _consolidate_physical_markers!(parent, paths)
     )
 end
 
-"""Bounded derived summary of one complete inner history; parent owns its identity."""
+"""Строит сводку ограниченного размера по полной истории внутренней итерации. Идентификатор задаётся родительским артефактом."""
 function _write_scba_threshold_crossings!(parent, history; required_consecutive::Int = 3)
     rows = QCLNumerics._scba_threshold_crossings(history; required_consecutive)
     table = create_group(parent, "scba_threshold_crossings")

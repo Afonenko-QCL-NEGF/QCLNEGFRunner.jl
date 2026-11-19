@@ -1,4 +1,4 @@
-"""Matrix spectral sum and negative phase-space weights on the actual final grid."""
+"""Матричная спектральная сумма и отрицательные фазовые веса на фактической итоговой сетке."""
 function _measure_final_matrix_audit(solution::NEGFSolution)
     problem=solution.problem
     green=solution.scba.green

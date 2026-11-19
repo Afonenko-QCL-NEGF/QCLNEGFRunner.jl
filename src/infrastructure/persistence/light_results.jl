@@ -1,7 +1,7 @@
-"""Small metadata serialization, scientific diagnostic records, and SVG line output.
+"""
+Записывает небольшие метаданные, результаты научной диагностики и графики SVG.
 
-Native physical arrays are written exclusively by point_artifacts.jl; the
-retired JSON/CSV snapshot writer is deliberately absent.
+Физические массивы на расчётной сетке записывает `point_artifacts.jl`.
 """
 _light_yaml(io::IO, data) = print(io, YAML.write(data))
 _light_quality(solution::NEGFSolution) = String(solution_quality(solution))
@@ -211,7 +211,7 @@ function _light_positivity_data(solution::NEGFSolution; witnesses = nothing)
     )
 end
 
-"""All final gates are retained, including failures omitted by summary metrics."""
+"""Сохраняет результаты всех итоговых проверок, включая отказы, не попавшие в сводные метрики."""
 function _light_validation_data(solution::NEGFSolution)
     metrics = solution.report.metrics
     strict_limits = _solution_validation_limits(solution.options.tolerances, metrics)

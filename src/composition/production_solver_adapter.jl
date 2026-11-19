@@ -1,13 +1,13 @@
 """
     solve_production(problem; checkpoint_path=nothing, kwargs...)
 
-Public composition adapter around the in-memory production solver. Checkpoint
-paths and atomic file replacement remain outside numerical equations. With no
-checkpoint path this entry point requires neither HDF5 nor a writable install.
+Вызвать основной решатель, работающий в памяти. Обработка пути контрольной
+точки и атомарная замена файла выполняются в адаптере. При
+`checkpoint_path=nothing` контрольная точка HDF5 не записывается.
 
-See [the closed Poisson–SCBA loop](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md),
-[Production backend](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md), and the
-[state persistence contract](@ref native-result-formats).
+См. [совместный цикл Пуассона и SCBA](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/10_poisson.md),
+[основной решатель](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md)
+и [сохранение состояния](@ref native-result-formats).
 """
 function solve_production(
     problem::NEGFProblem;

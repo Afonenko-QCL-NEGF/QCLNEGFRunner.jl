@@ -1,9 +1,8 @@
 """
-Composition root for the solver-independent, content-addressed sweep runtime.
-
-Application ports and coordination live under `application/`.  This outer
-module is deliberately the only place that wires those ports to the default
-YAML/filesystem persistence adapters.
+Модуль сборки среды для перебора по идентификаторам содержимого.
+Среда не зависит от решателя. Интерфейсы приложения и координация размещены
+в `application/`. Этот модуль подключает к ним стандартные адаптеры записи
+в YAML и файловую систему.
 """
 module QCLApplicationRuntime
 

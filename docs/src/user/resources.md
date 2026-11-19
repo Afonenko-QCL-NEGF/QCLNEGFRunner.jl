@@ -1,20 +1,24 @@
-# [Resource limits](@id resource-planning)
+# [Ограничения ресурсов](@id resource-planning)
 
-Run one Julia process per Slurm task and set `JULIA_NUM_THREADS` to allocated CPUs
-per task before process launch. Julia's task pool is fixed at startup. Scheduled
-scientific execution uses one BLAS thread to avoid nested oversubscription.
+Запускайте один процесс Julia на задачу Slurm. До запуска процесса задайте
+`JULIA_NUM_THREADS` равным числу процессоров, выделенных задаче. Julia фиксирует
+число потоков при старте. При выполнении научного плана через планировщик
+используется один поток BLAS, чтобы вложенный параллелизм не превышал лимит
+процессоров.
 
-Runner reads process affinity and cgroup v2 bounds, including finite ancestor
-memory limits. Estimated peak numerical storage is checked before allocation.
-The estimate is not an RSS guarantee: the runtime, native libraries and allocator
-can retain additional memory. Phase admission checks observed memory pressure;
-shared cache is not credited as memory available exclusively to this process.
+Runner определяет привязку процесса к процессорам и ограничения cgroup v2,
+включая конечные лимиты памяти родительских групп. Перед выделением массивов
+проверяется оценка пикового объёма численных данных. Фактический объём резидентной
+памяти процесса (RSS) дополнительно зависит от среды Julia, системных библиотек
+и распределителя памяти. Перед ресурсоёмкой фазой Runner учитывает наблюдаемое
+давление на память. Общий кэш не засчитывается как память в исключительном
+распоряжении процесса.
 
-A stopped execution may return a paused status and checkpoint provenance. Resume
-is possible only when a compatible verified checkpoint was actually written.
-Scheduling remains outside Runner. Physical acceptance uses the scientific gates
-recorded with the result.
+Остановленный процесс может вернуть статус паузы и сведения о происхождении
+контрольной точки. Возобновление возможно после записи и проверки совместимой
+точки восстановления. Расписание задач определяет внешний планировщик.
+Физическая приёмка опирается на критерии, сохранённые вместе с результатом.
 
-Direct core-library callers supply their own algorithm and thread options. OS
-resource discovery belongs to Runner; the numerical library does not probe its
-hosting machine or choose a scheduler policy.
+При прямом вызове Core пользователь задаёт алгоритм и настройки потоков.
+Ограничения ОС определяет Runner. Численное ядро решает задачу в переданных
+параметрах.

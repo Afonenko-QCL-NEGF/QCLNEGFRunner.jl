@@ -10,7 +10,7 @@ function _figure_edges(values)
     )
 end
 
-"""Render declared FigureData coordinates and values without scientific transformations."""
+"""Показать заданные в `FigureData` координаты и значения без численного преобразования данных."""
 function _scientific_heatmap_svg(path, spec)
     data=spec["heatmap"]
     x=_figure_edges(data["x"])

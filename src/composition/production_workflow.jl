@@ -47,34 +47,35 @@ end
 """
     run_production_sweep(base_problem, voltages, temperatures; ...)
 
-reference design-oriented overload that reuses one expensive static problem and one set
-of flattened kernels across a sequential bias/temperature sweep.  `voltages`
-must contain Unitful voltage drops per period and `temperatures` Unitful
-temperatures.  Full states are checkpointed one at a time; only scalar
-[`ProductionSweepRecord`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md)s are retained in the result.
-`checkpoint_prefix` names point HDF5 files, `save_full_state=false` passes no
-checkpoint path into the solver, and `save_csv=false` keeps the summary and
-optical diagnostics in memory without creating CSV files.
+Последовательно рассчитать серии напряжений и температур для опорной
+структуры. Во всей серии переиспользуются статическая задача и развёрнутые
+ядра. `voltages` принимает падения напряжения на период, `temperatures`
+принимает температуры. Обе величины задаются через Unitful. Полные
+состояния записываются по одному, в результате остаются скалярные записи
+[`ProductionSweepRecord`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md).
+`checkpoint_prefix` задаёт имена файлов HDF5 точек. При
+`save_full_state=false` решатель не получает путь контрольной точки.
+При `save_csv=false` сводка и оптическая диагностика остаются в памяти.
 
-When `resume_from_checkpoints=true`, an existing, metadata-compatible point
-checkpoint has priority over the preceding-bias warm start.  A completed
-checkpoint is deliberately re-evaluated from its fixed point so convergence
-and validation are certified by the current package version.
-An incompatible or corrupt checkpoint fails its operating point by default;
-it is never silently loaded or replaced. With `fail_fast=false`, that failure
-is recorded as `:execution_failed` and independent points continue without
-inheriting its state. With `fail_fast=true`, the original exception propagates
-and no subsequent point is started. Configuration errors detected before the
-sweep and user interrupts always propagate. The optional
-`incompatible_checkpoint` policy belongs only to the direct Julia API; the
-configured runtimes always reject incompatible checkpoints.
+При `resume_from_checkpoints=true` совместимая контрольная точка имеет
+приоритет над начальным приближением из решения на предыдущем напряжении.
+Завершённая точка проверяется повторным вычислением на сохранённом
+состоянии, включая сходимость и физические критерии.
+По умолчанию повреждённая или несовместимая контрольная точка завершает
+рабочую точку ошибкой. При `fail_fast=false` ошибка фиксируется как
+`:execution_failed`, и независимые точки продолжают расчёт без её состояния.
+При `fail_fast=true` исключение передаётся вызывающему коду и последующие
+точки не запускаются. Ошибки конфигурации до начала перебора и прерывание
+пользователем всегда передаются вызывающему коду. Выбор политики
+`incompatible_checkpoint` доступен в прямом интерфейсе Julia.
+Выполнение по конфигурации всегда отклоняет несовместимые контрольные точки.
 
-A `checkpoint_request(context, temperature_index, voltage_index)` override
-returns `:none`, `:state_only`, or `:state_and_markers` at a solver checkpoint
-boundary.
+В границе сохранения состояния решатель может вызвать переданную функцию
+`checkpoint_request(context, temperature_index, voltage_index)`.
+Она возвращает `:none`, `:state_only` или `:state_and_markers`.
 
-See [Production sweep, warm start, and recovery](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and
-the [HDF5 checkpoint schema](@ref native-result-formats).
+См. [серийные расчёты и возобновление](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md)
+и [схему контрольных точек HDF5](@ref native-result-formats).
 """
 function run_production_sweep(
     base_problem::NEGFProblem,
@@ -443,12 +444,13 @@ end
 """
     save_optical_response(path, response)
 
-Atomically save one optical-response curve as CSV with explicit SI/eV column
-names.  The file records `trusted` and `edge_loss` so plotting software cannot
-silently treat an energy-window-contaminated point as final data.
+Атомарно записать одну кривую оптического отклика в CSV с явными
+единицами СИ и эВ в названиях столбцов. Поля `trusted` и `edge_loss`
+помогают исключить из итогового анализа точки под влиянием края
+энергетического окна.
 
-See [Optical response](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md) and
-[production plots and saved data](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+См. [оптический отклик](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/18_optical_response.md)
+и [графики и сохранённые данные](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function save_optical_response(path::AbstractString, response::OpticalResponse)
     directory = dirname(abspath(path))
@@ -497,14 +499,15 @@ end
 """
     save_kernel_diagnostics(path, diagnostics)
 
-Atomically save the measured construction diagnostics returned by
-[`build_kernels_production`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md).  One CSV row is written per enabled
-mechanism.  Refinement histories are semicolon-separated inside their CSV
-fields; residuals are dimensionless and `direct_q_evaluations` is an exact
-counter for the adaptive construction and validation work.
+Атомарно записать измеренную диагностику построения ядер, которую вернул
+[`build_kernels_production`](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/api/public.md).
+Для каждого включённого механизма создаётся одна строка CSV. Значения
+внутри полей истории уточнения разделяются точкой с запятой. Невязки
+безразмерны. `direct_q_evaluations` точно считает прямые вычисления при
+адаптивном построении и проверке.
 
-See [Microscopic kernels](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md) and
-[production kernel diagnostics](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+См. [микроскопические ядра](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/08_kernels.md)
+и [диагностику расчётных ядер](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function save_kernel_diagnostics(
     path::AbstractString,

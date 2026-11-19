@@ -1,4 +1,4 @@
-"""Scientific plan and saved-result workflow with explicit domain/adapter boundaries."""
+"""Подготовка научных планов и обработка сохранённых результатов с явным разделением предметной логики и адаптеров."""
 module QCLScientificWorkflow
 using LinearAlgebra
 using SHA

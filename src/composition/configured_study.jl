@@ -1,5 +1,4 @@
-"""Artifacts produced by the
-[configured expert comparison workflow](@ref expert-comparison-workflow)."""
+"""Файлы, создаваемые при [сравнении методов по конфигурации](@ref expert-comparison-workflow)."""
 struct ProductionStudyResult
     configuration::ResolvedRunConfiguration
     method_catalog::String
@@ -689,14 +688,15 @@ end
 """
     run_comparison_study(configuration_directory)
 
-Run every `study.methods` profile on the same physical structure, grid,
-operating points, and convergence tolerances.  Each repetition has its own
-checkpoint directory; its physical records remain separate. The comparison
-uses the first actual repetition and reports timing statistics and finite-value
-disagreement evidence instead of aborting the remaining diagnostics.
-Only after all calculations finish is the expert Markdown/CSV report assembled.
+Рассчитать все профили `study.methods` на одной физической структуре,
+сетке, рабочих точках и допусках сходимости. Каждый повтор использует
+собственный каталог контрольных точек. Физические записи повторов хранятся
+раздельно. Для сравнения берётся первый выполненный повтор. В отчёт входят
+статистика времени и расхождения между конечными численными значениями.
+Такие расхождения не прерывают остальные проверки. По завершении всех
+расчётов формируется отчёт в Markdown и CSV.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function run_comparison_study(configuration_directory::AbstractString)
     study = load_run_configuration(configuration_directory)
@@ -1010,12 +1010,12 @@ end
 """
     run_convergence_study(configuration_directory)
 
-Run one-at-a-time ``N_z``, ``N_E``, ``N_k``, and ``N_\\varphi`` refinements with the
-declared reference profile and write full-precision pointwise errors plus a
-Markdown summary.  Empty axis lists are skipped.
+По очереди уточнить сетки по ``N_z``, ``N_E``, ``N_k`` и ``N_φ`` для
+заданного опорного профиля. Записать поточечные погрешности с полной
+точностью и сводку в Markdown. Оси с пустыми списками пропускаются.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow) and
-[Physics-first tests](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
+См. [подробное сравнение методов](@ref expert-comparison-workflow)
+и [физические проверки](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/12_validation.md).
 """
 function run_convergence_study(configuration_directory::AbstractString)
     study = load_run_configuration(configuration_directory)
@@ -1134,9 +1134,9 @@ function run_convergence_study(
     )
 end
 
-"""Run method comparison first, then the independent grid-convergence study.
+"""Сначала сравнить методы, затем выполнить независимое исследование сеточной сходимости.
 
-See [Expert comparison workflow](@ref expert-comparison-workflow).
+См. [подробное сравнение методов](@ref expert-comparison-workflow).
 """
 function run_production_study(configuration_directory::AbstractString)
     study = load_run_configuration(configuration_directory)

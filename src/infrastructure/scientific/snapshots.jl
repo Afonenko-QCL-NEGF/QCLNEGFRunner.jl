@@ -1,4 +1,4 @@
-"""Read a frozen plan without accessing its original definition files."""
+"""Читает зафиксированный план без обращения к исходным файлам постановки."""
 function load_scientific_plan(path::AbstractString)
     data=_mapping_input(YAML.load_file(path; dicttype = Dict{String,Any}), "plan")
     return load_scientific_plan(data)
@@ -227,13 +227,13 @@ function _result_path(root, path)
     return candidate
 end
 
-"""Write the public serialized plan contract to an IO stream."""
+"""Записывает сериализованный план в поток ввода-вывода по открытому контракту."""
 function write_scientific_plan(io::IO, plan::ScientificPlan)
     _light_json(io, scientific_plan_dict(plan))
     println(io)
     return nothing
 end
-"""Write a checked public result envelope; scientific status remains in its payload."""
+"""Записывает проверенный результат по открытому контракту с сохранением его научного статуса."""
 function write_scientific_result(io::IO, result::AbstractDict)
     get(result, "contract_set", nothing)=="qcl-negf.results.v1" &&
     get(result, "schema", nothing)=="qcl-negf-series-result-v3" ||

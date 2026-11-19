@@ -1,4 +1,4 @@
-"""Resource authority port. Standalone callers may supply an explicit envelope."""
+"""Интерфейс предоставления ресурсов. При самостоятельном запуске можно передать границы ресурсов явно."""
 default_execution_envelope() = nothing
 
 function _grant_integer(value, name; minimum = 1)
@@ -10,10 +10,11 @@ function _grant_integer(value, name; minimum = 1)
     return Int(value)
 end
 
-"""Disjoint numerical and runtime allowances supplied by an embedding caller.
+"""Раздельные ограничения численных операций и процесса, заданные вызывающей программой.
 
-The Julia thread pool is provisioned at launch. `cpu_ids` describes the current
-OS affinity grant, which may grow within that pool at safe phase boundaries.
+Пул потоков Julia выделяется при запуске. `cpu_ids` описывает процессоры,
+доступные по настройкам привязки ОС. Их набор может увеличиваться в границах
+пула при переходе между безопасными этапами.
 """
 struct ExecutionEnvelope
     token::String

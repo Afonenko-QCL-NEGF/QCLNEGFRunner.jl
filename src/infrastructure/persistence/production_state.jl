@@ -541,25 +541,27 @@ function _quarantine_production_restart(path::AbstractString)
 end
 
 """
-    load_production_restart(path, problem; incompatible=:error)
+    load_production_restart(path, problem; incompatible=:error,
+                            algorithms=nothing, solver_options=nothing)
 
-Load the full Green/self-energy state needed for a warm restart.  The caller
-must provide the already rebuilt problem; exact array shapes and mechanism
-names and saved histories are checked. Same-stage linear restart restores
-logical iteration counts and consumes only the remaining budget. Anderson state and residual histories are serialized at the accepted boundary;
-restart replays the next mixing step with the restored history.
+Загружает полное состояние функций Грина и самоэнергий для точного возобновления.
+Передайте заново собранную задачу `problem`. Загрузка проверяет размеры массивов,
+имена механизмов, полноту численного контракта и сохранённую историю. Если заданы
+`algorithms` или `solver_options`, сохранённые значения должны совпасть с ними.
+Возобновление на той же стадии линейного смешивания сохраняет логический счётчик
+итераций и продолжает расчёт в пределах оставшегося лимита. Для смешивания
+Андерсона сохраняются состояние и история невязок на принятой границе итерации.
+Следующий шаг использует восстановленную историю.
 
-`incompatible=:error` (the default) preserves strict loading and throws an
-`ArgumentError` for a metadata-incompatible checkpoint.  `:ignore` emits a
-warning and returns `nothing`.  `:quarantine` moves the incompatible file
-beside the original under a collision-safe `.incompatible.*` name, emits
-a warning containing both paths, and returns `nothing`.  Malformed HDF5,
-missing datasets, non-finite state arrays, and all other errors remain fatal in
-every mode; these indicate corruption or an implementation error rather than
-a reusable checkpoint from a different discretization.
+При несовместимости метаданных `incompatible=:error` (значение по умолчанию)
+вызывает `ArgumentError`. Режим `:ignore` сообщает о несовместимости и возвращает
+`nothing`. Режим `:quarantine` перемещает файл в том же каталоге под свободным
+именем `.incompatible.*`, указывает оба пути в предупреждении и возвращает
+`nothing`. Повреждённый HDF5, отсутствующие наборы данных, нечисловые или
+бесконечные значения состояния и другие ошибки прерывают загрузку во всех режимах.
 
-See [Production sweep and recovery](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md) and the
-[HDF5 checkpoint schema](@ref native-result-formats).
+См. [Серию производственных расчётов и возобновление](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md)
+и [схему контрольной точки HDF5](@ref native-result-formats).
 """
 function load_production_restart(
     path::AbstractString,
@@ -596,9 +598,9 @@ function _csv_field(value)
 end
 
 """
-Atomically write a language-neutral CSV sweep summary.
+Атомарно записывает переносимую сводку серии расчётов в CSV.
 
-See [Production plots and saved data](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
+См. [Графики производственного расчёта и сохранённые данные](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/blob/main/docs/src/theory/19_production.md).
 """
 function save_production_summary(path::AbstractString, result::ProductionSweepResult)
     directory = dirname(abspath(path))

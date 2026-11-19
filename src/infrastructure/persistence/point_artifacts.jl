@@ -63,7 +63,7 @@ function _physics_axes(path, rank)
     return join(["dimension_$(i)" for i = 1:rank], ",")
 end
 
-"""Native scientific storage and immutable publication. No display sampling occurs here."""
+"""Хранит научные данные на расчётной сетке и публикует неизменяемые артефакты."""
 const POINT_COMMIT_SCHEMA = "qcl-negf.artifact-commit.v2"
 
 function _resolved_configuration_envelope(configuration)
@@ -76,7 +76,7 @@ function _resolved_configuration_envelope(configuration)
     )
 end
 
-"""Read the versioned resolved-input envelope."""
+"""Читает запись разрешённых входных данных и проверяет идентификатор её схемы."""
 function load_resolved_configuration_envelope(path)
     envelope=YAML.load_file(path; dicttype = Dict{String,Any})
     get(envelope, "schema", nothing)=="qcl-negf-resolved-configuration-v3" &&
@@ -272,7 +272,7 @@ function _analysis_history!(file, solution)
     return diagnostic
 end
 
-"""Store native-grid observables sufficient for the declared analysis profile, without Green matrices."""
+"""Сохраняет на расчётной сетке наблюдаемые, необходимые для заявленного профиля анализа, без матриц Грина."""
 function save_analysis_physics(
     path::AbstractString,
     solution::NEGFSolution;
@@ -507,7 +507,7 @@ function _artifact_record(path, role, schema, identity; profile = "science")
     )
 end
 
-"""Commit a closed generation, then atomically replace a small pointer. Payloads are immutable."""
+"""Фиксирует полное неизменяемое поколение артефактов и атомарно заменяет указатель на него."""
 function commit_point_artifacts(
     directory::AbstractString,
     solution::NEGFSolution;
@@ -732,7 +732,7 @@ function commit_point_artifacts(
     end
 end
 
-"""Verify immutable artifact identities and format metadata without interpreting scientific acceptance."""
+"""Проверяет идентификаторы неизменяемых артефактов и метаданные формата. Научная приёмка оценивается отдельно."""
 function verify_point_artifacts(commit_path::AbstractString)
     commit=YAML.load_file(commit_path; dicttype = Dict{String,Any})
     get(commit, "schema", nothing)==POINT_COMMIT_SCHEMA ||
@@ -911,7 +911,7 @@ function save_optical_physics(path, response; source_sha256 = "")
     return path
 end
 
-"""Attach HDF5 dimension scales in external C/logical axis order, without a transpose heuristic."""
+"""Привязывает шкалы измерений HDF5 во внешнем логическом порядке осей C."""
 function _attach_native_dimensions!(file)
     backend=HDF5
     native=haskey(file, "axes")

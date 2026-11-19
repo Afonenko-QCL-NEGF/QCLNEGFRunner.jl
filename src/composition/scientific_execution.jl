@@ -208,11 +208,12 @@ function _scientific_memory_reservation(config, resource_plan)
     )
 end
 
-"""Record Hamiltonian coverage before allocating production iteration workspaces.
+"""Зафиксировать охват спектра гамильтониана до выделения рабочих массивов решателя.
 
-A diagnostic can deliberately expose an insufficient window; a stationary
-research admission must cover the declared bare spectrum and shift margins.
-This estimate is separate from the measured interacting tails in the final audit.
+Диагностика позволяет явно проверить слишком узкое окно. Для допуска
+стационарного исследования окно должно охватывать заданный спектр
+без взаимодействия с запасом для сдвигов. Эта оценка отличается от измерения
+хвостов спектра с взаимодействием при итоговой проверке.
 """
 function _scientific_representation_preflight(problem)
     c=representation_coverage(problem)
@@ -236,7 +237,7 @@ function _scientific_representation_preflight(problem)
     )
 end
 
-"""Publish comparable charge diagnostics without renormalizing any physical array."""
+"""Записать сопоставимые оценки заряда без перенормировки физических массивов."""
 function _scientific_charge_observables(solution)
     charge=get(solution.observables, :charge_constraint, Dict())
     fields=Dict{String,Any}()
@@ -320,11 +321,12 @@ function _scientific_progress(root, point, attempt, status, artifact_root; event
     end
 end
 
-"""Execute exactly the frozen Julia plan; one execution uses the shared machine budget.
+"""Запустить неизменяемый план Julia. Один запуск использует доступный общий бюджет машины.
 
-The stationary record and final projection are committed before optional optical
-analysis. A retry is a separate attempt. Only final point data are resumable;
-intermediate display projections never seed another physical operating point.
+Стационарный результат и итоговые данные фиксируются до необязательного
+оптического анализа. Повторный запуск оформляется как отдельная попытка.
+Возобновление использует полные состояния точек. Промежуточные данные
+для отображения не служат начальным приближением другой рабочей точки.
 """
 function execute_scientific_plan(
     plan::ScientificPlan,

@@ -129,11 +129,10 @@ end
 """
     probe_hardware(; ...)
 
-Observe the resource envelope visible to the current Julia process. On Linux
-the probe follows `/proc/self/cgroup` to the process' cgroup-v2 directory and
-combines every ancestor's memory and CPU bounds with process affinity. Keyword
-paths and capacity overrides exist so the parser can be tested without reading
-the test runner's real machine.
+Определяет ресурсы, доступные текущему процессу Julia. В Linux находит каталог
+cgroup v2 процесса через `/proc/self/cgroup`, объединяет ограничения памяти и
+CPU по всем уровням и учитывает привязку процесса к CPU. Ключевые параметры
+позволяют задать пути и доступную ёмкость для проверки на тестовых данных.
 """
 function probe_hardware(;
     proc_root::AbstractString = "/proc",

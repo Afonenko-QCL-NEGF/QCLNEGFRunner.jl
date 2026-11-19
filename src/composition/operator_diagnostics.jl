@@ -6,7 +6,7 @@ const OPERATOR_DIAGNOSTIC_FIXTURE = (
     occupation = 0.37,
 )
 
-"""Independent small exact/analytic oracles recorded as campaign results."""
+"""Небольшие независимые проверки по точным или аналитическим решениям. Результаты сохраняются вместе с исследованием."""
 function run_operator_diagnostics(
     operation::Symbol,
     configuration = nothing;

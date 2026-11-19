@@ -6,10 +6,10 @@ function file_sha256(path::AbstractString)
 end
 
 """
-Filesystem adapter for the application repository port. All mutable metadata
-is replaced atomically; events and checkpoint generations are append-only.
-One repository object is thread-safe. A given run directory remains a
-single-writer resource across processes/machines.
+Реализует хранилище приложения на файловой системе. Изменяемые метаданные
+заменяются атомарно. События и поколения контрольных точек только добавляются.
+Один объект хранилища допускает доступ из нескольких потоков. Из разных
+процессов или машин запись в один каталог запуска ведёт только один процесс.
 """
 mutable struct FilesystemRunRepository <: AbstractRunRepository
     root::String
@@ -97,9 +97,9 @@ function _immutable_yaml(path::AbstractString, value)
 end
 
 """
-Initialise or verify the content-addressed run directory. Returns `true` when
-the run already existed. Existing identity metadata must match byte-for-byte
-under canonical encoding.
+Создаёт или проверяет каталог запуска, адресуемый по содержимому.
+Возвращает `true`, если запуск уже существует. Метаданные идентификации
+в каноническом представлении должны совпадать побайтно.
 """
 function initialize_run!(repository::FilesystemRunRepository, definition::RunDefinition)
     directory = run_directory(repository, definition.identity.run_id)
@@ -308,7 +308,7 @@ function _next_event_sequence!(repository::FilesystemRunRepository, run_id::Stri
     end
 end
 
-"""Append one crash-independent YAML event and return its stored mapping."""
+"""Добавляет отдельную устойчивую к сбоям запись события в YAML и возвращает сохранённое отображение."""
 function append_event!(repository::FilesystemRunRepository, run_id::AbstractString, event)
     identifier = validate_content_identifier(run_id, "run id")
     mapping = _canonical_mapping(event)
@@ -337,7 +337,7 @@ function read_events(repository::FilesystemRunRepository, run_id::AbstractString
     return Dict{String,Any}[_load_yaml(path) for path in paths]
 end
 
-"""Small portable codec used by tests and lightweight solver states."""
+"""Компактный переносимый формат для тестов и небольших состояний решателя."""
 struct YamlCheckpointCodec <: AbstractCheckpointCodec end
 
 default_checkpoint_codec() = YamlCheckpointCodec()
@@ -503,8 +503,8 @@ function _validate_checkpoint_envelope(
 end
 
 """
-Write payload first and its immutable envelope last. A crash before the
-envelope leaves an ignored orphan, never a falsely valid restart.
+Сначала записывает данные, затем неизменяемую запись об их фиксации.
+При сбое до фиксации оставшиеся данные игнорируются при возобновлении.
 """
 function save_runtime_checkpoint!(
     repository::FilesystemRunRepository,
@@ -559,7 +559,7 @@ function save_runtime_checkpoint!(
     end
 end
 
-"""Load and checksum the newest committed checkpoint envelope."""
+"""Загружает запись последней зафиксированной контрольной точки и проверяет её контрольную сумму."""
 function load_latest_checkpoint(
     repository::FilesystemRunRepository,
     codec::AbstractCheckpointCodec,

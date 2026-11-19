@@ -1,38 +1,47 @@
-# [Run configurations](@id yaml-run-configurations)
+# [Конфигурация запуска](@id yaml-run-configurations)
 
-A run configuration is a YAML file with dimensional physical quantities, numerical
-grids, scattering models, convergence policy and output settings. Load one or more
-ordered files with `load_run_configuration`; later files override explicit fields.
-Runner's current schema is `schema/run.schema.json`. The checked example is
-`examples/config/reference-2019-70k.yaml`.
+Файл YAML задаёт размерные физические величины, численные сетки, модели
+рассеяния, условия сходимости и настройки вывода. Функция
+`load_run_configuration` загружает один или несколько файлов в указанном порядке.
+Значения из последующих файлов заменяют только явно заданные в них поля.
 
-## [Scientific plans](@id scientific-plans)
+Схема запуска `schema/run.schema.json` принадлежит Runner. Функция
+`default_configuration_schema()` возвращает путь к схеме установленного
+пакета. Проверенный пример находится в `examples/config/reference-2019-70k.yaml`.
+События отдельных итераций доступны в CSV и через функции обратного вызова
+для отслеживания хода расчёта.
 
-A `qcl-negf-study-v2` definition names configuration sources, variants and operating
-points. Temperature and voltage axes must be explicit; no device-specific operating point is assumed. `qcl-negf plan examples/config/operator-algebra.yaml` emits an immutable
-`qcl-negf-scientific-plan-v2` JSON plan. Keep this immutable plan with its results.
-`qcl-negf run-plan plan.json result --execution-id ID` runs one declared execution;
-ID must be an entry from `plan.executions`, never an unrelated process identifier.
-Continuation points within that execution remain sequential.
+## [Научные планы](@id scientific-plans)
 
-The CLI writes scientific result JSON to stdout and artifacts below the output
-directory. Exit code 0 means successful process completion. Inspect scientific
-status and point quality before treating a result as accepted. Invalid arguments
-and configuration errors produce exit code 2.
+Определение `qcl-negf-study-v2` задаёт источники конфигурации, варианты и рабочие
+точки. Явно укажите температуры и напряжения. Команда
+`qcl-negf plan examples/config/operator-algebra.yaml` создаёт неизменяемый план
+JSON формата `qcl-negf-scientific-plan-v2`. Храните план вместе с результатами.
 
+Команда `qcl-negf run-plan plan.json result --execution-id ID` запускает один
+объявленный расчёт. Возьмите `ID` из `plan.executions`. При продолжении расчёта
+по точкам одного запуска выполняйте их последовательно.
 
-Resource discovery and admission are described in [resource limits](@ref resource-planning).
-Numerical meaning, units and convergence criteria are documented by
-[QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/tree/main/docs/src).
+Интерфейс командной строки записывает научный результат в формате JSON в
+стандартный вывод, а файлы расчёта сохраняет в указанном каталоге. Код выхода 0
+сообщает об успешном завершении процесса. Для научной приёмки проверьте статус
+и качество каждой точки. Недопустимые аргументы и ошибки конфигурации приводят
+к выходу с кодом 2.
 
-## Node-local scratch
+Обнаружение ресурсов и проверка достаточности описаны в разделе
+[«Ограничения ресурсов»](@ref resource-planning). Численный смысл, единицы и
+критерии сходимости описаны в
+[документации QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl/tree/main/docs/src).
 
-`qcl-negf run-plan PLAN OUTPUT --scratch-root /absolute/local/scratch` runs in
-a unique local directory and copies a closed result tree to a fresh destination.
-Runner verifies copied bytes and native commit manifests, then publishes the
-destination directory. The destination must not already exist.
+## Временный каталог на вычислительном узле
 
-On computation or transfer failure, the local workspace is retained and its path is
-reported on stderr. This option starts a fresh execution; explicit restart uses the
-normal execution path and compatible checkpoint state. It does not merge results
-or turn an incomplete calculation into an accepted one.
+Команда `qcl-negf run-plan PLAN OUTPUT --scratch-root /absolute/local/scratch`
+запускает расчёт в отдельном временном каталоге на узле. По завершении записи
+Runner копирует дерево результатов, проверяет скопированные файлы и их
+манифесты, затем публикует каталог назначения. Укажите путь к каталогу, которого
+ещё нет.
+
+При сбое расчёта или переноса рабочий каталог сохраняется, а его путь выводится
+в стандартный поток ошибок. Этот параметр запускает новый расчёт. Для явного
+возобновления используйте обычный запуск с проверенной совместимой контрольной
+точкой. Перенос файлов сохраняет исходный статус расчёта.

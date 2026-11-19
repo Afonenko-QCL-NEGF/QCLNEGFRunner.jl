@@ -198,7 +198,7 @@ function _read_psd_history(parent, count)
     return result
 end
 
-"""Retain all scalar witnesses while copying available compact matrix payloads losslessly."""
+"""Сохраняет все скалярные свидетельства и копирует доступные компактные матричные данные без потерь."""
 function _consolidate_psd_history!(destination, source_paths)
     columns=Dict{String,Any}()
     column_attributes=Dict{String,Dict{String,Any}}()

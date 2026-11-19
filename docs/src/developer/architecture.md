@@ -1,36 +1,38 @@
-# [Architecture](@id developer-architecture)
+# [Архитектура](@id developer-architecture)
 
-QCLNEGFRunner depends on QCLNEGF. The core supplies dimensional types, reference
-and optimized operators, SCBA/Poisson iteration and observables. Runner supplies
-configuration, scientific plans, filesystem persistence, checkpoints and presentation.
+QCLNEGFRunner зависит от QCLNEGF. Ядро предоставляет типы физических величин,
+эталонные и оптимизированные операторы, итерации SCBA и Пуассона и расчёт
+наблюдаемых величин. Runner отвечает за конфигурацию, научные планы, хранение
+данных в файловой системе, контрольные точки и представление результатов.
 
-## [Source ownership](@id developer-source-map)
+## [Разделение ответственности в коде](@id developer-source-map)
 
-| Layer | Responsibility |
+| Слой | Обязанности |
 |---|---|
-| Application | Point-local execution, continuation and scientific plan handling |
-| Composition | Connect numerical callbacks to selected adapters |
-| Infrastructure | Validate YAML, inspect OS resource bounds and commit artifacts |
-| Presentation | Progress views, reports and optional CairoMakie plots |
+| Прикладной | Выполнение отдельной точки, продолжение расчёта и обработка научного плана |
+| Компоновка | Связь функций обратного вызова решателя с адаптерами |
+| Инфраструктура | Проверка YAML, определение ограничений ОС по ресурсам и фиксация файлов результатов |
+| Представление | Отображение хода расчёта, отчёты и необязательные графики через CairoMakie |
 
-## [Configuration contract](@id configuration-contract)
+## [Контракт конфигурации](@id configuration-contract)
 
-Every study declares `configuration.sources` and operating-point axes. Runner
-validates YAML against its `schema/run.schema.json`. The local schema hash and its
-upstream origin are recorded in `schema/PROVENANCE.json`. A frozen plan preserves
-the effective inputs and fingerprints. Unknown keys, invalid dimensions and
-inconsistent input fail before solving. Resource admission never reduces a grid or
-relaxes an acceptance threshold.
+В каждом исследовании заданы `configuration.sources` и оси рабочих точек.
+Runner проверяет YAML по схеме `schema/run.schema.json`. Контрольная сумма
+локальной схемы и её происхождение записаны в `schema/PROVENANCE.json`.
+Зафиксированный план сохраняет фактически применённые входные параметры и их
+контрольные суммы. Неизвестные ключи, неверные размерности и несогласованные
+данные отклоняются до запуска решателя. Проверка ресурсов опирается на заданные
+сетку и пороги приёмки.
 
-## External services
+## Внешние сервисы
 
-An external scheduler can provide an allocation. Runner performs one declared
-execution inside that allocation, checks process affinity and cgroup bounds, and
-writes results. NixOS deployment, service identity and CI installation are owned
-by qcl-negf-platform.
+Внешний планировщик может выделить ресурсы. Runner выполняет в этих пределах
+один расчёт из плана, проверяет привязку процесса к процессорам и ограничения
+cgroup и записывает результаты. За развёртывание на NixOS, идентификацию служб
+и установку среды интеграционных проверок отвечает qcl-negf-platform.
 
-The storage contract is [documented separately](@ref native-result-formats).
-The matrix audit computes spectral and phase-space diagnostics from the solution.
-The HDF5 adapter writes the measured values and their axis metadata.
-Python readers live in qcl-negf-results. No deployment controller or distributed
-queue service is embedded in this package.
+Форматы хранения [описаны отдельно](@ref native-result-formats). Проверка матриц
+вычисляет спектральные характеристики решения и диагностические величины в
+фазовом пространстве. Адаптер HDF5 записывает измеренные значения и метаданные
+их осей. Средства чтения на Python находятся в qcl-negf-results. Развёртыванием
+и обслуживанием распределённой очереди заданий занимаются внешние сервисы.

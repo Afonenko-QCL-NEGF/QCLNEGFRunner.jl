@@ -1,8 +1,8 @@
-"""Nonuniform three-point derivative; every sample remains tied to its own solution.
-
-Endpoints use a one-sided secant. Repeated voltage visits must be split into
-branches before differentiation. No solver, interpolation, or implicit averaging
-is involved.
+"""Трёхточечная производная на неравномерной сетке. Каждая выборка связана
+со своим решением. На концах используется односторонняя секущая.
+Повторные значения напряжения перед дифференцированием разносятся по ветвям.
+Производная вычисляется по сохранённым точкам без нового расчёта,
+интерполяции или усреднения.
 """
 function differential_conductance(voltage::Vector{Float64}, current::Vector{Float64})
     length(voltage)==length(current) ||

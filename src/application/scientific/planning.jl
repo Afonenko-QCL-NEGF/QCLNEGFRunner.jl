@@ -48,7 +48,7 @@ function _effective_scientific_inputs(configuration)
     )
 end
 
-"""Resolve physical axes into a point passport; execution templates may span a branch."""
+"""Собрать паспорт точки по физическим осям. Шаблон запуска может охватывать всю ветвь."""
 function _point_resolved_raw(configuration, point::ScientificPoint)
     raw=deepcopy(configuration.raw)
     physical=get!(raw, "physical", Dict{String,Any}())
@@ -196,11 +196,11 @@ function _validate_execution_nodes(nodes, executions)
     return nothing
 end
 
-"""Build immutable independent executions using repository/configuration ports.
-
-Repeated inclusions keep their own identity. Executions are shared only within this
-root, and only when complete resolved inputs, policies, outputs, initial state,
-point order and continuation dependencies coincide. Explicit repeats never share.
+"""Сформировать неизменяемые независимые запуски через интерфейсы репозитория
+и конфигураций. Повторные включения сохраняют собственные идентификаторы.
+Запуски объединяются в пределах одного корневого задания при совпадении
+итоговых входов, политик, вывода, начального состояния, порядка точек
+и зависимостей продолжения. Явно заданные повторы запускаются отдельно.
 """
 function resolve_scientific_plan(
     repository::AbstractScientificDefinitionRepository,
@@ -433,7 +433,7 @@ function _minimum_scientific_output_bytes(plan::ScientificPlan)
 end
 
 
-"""Stationary scientific identity excludes presentation, location and optical grids."""
+"""Идентификатор стационарной физической задачи определяется независимо от визуализации, расположения файлов и оптических сеток."""
 function _scientific_fingerprint(data::AbstractDict)
     executions=Any[]
     for execution in data["executions"]
