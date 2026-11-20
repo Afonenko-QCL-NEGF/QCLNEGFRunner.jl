@@ -1,3 +1,5 @@
+> **Переход QCL NEGF.** В приложении `qcl-negf` доступен раздел [Runner и командная строка](https://github.com/Afonenko-QCL-NEGF/qcl-negf/tree/main/runner/). Этот репозиторий хранит историю. [Исходная редакция README](https://github.com/Afonenko-QCL-NEGF/QCLNEGFRunner.jl/blob/02454ff0f6ae177ec80d6bfccf22d330369fc1c6/README.md).
+
 # QCLNEGFRunner.jl
 
 Запуск расчётов и хранение результатов [QCLNEGF.jl](https://github.com/Afonenko-QCL-NEGF/QCLNEGF.jl)
